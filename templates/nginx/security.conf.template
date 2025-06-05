@@ -1,0 +1,169 @@
+# Nginx Security Configuration for PolyServer Applications
+# This file contains application-agnostic security rules to block common attacks and sensitive file access
+
+# Hide nginx version information
+server_tokens off;
+
+# Block access to sensitive files and directories
+location ~ /\. {
+    # Block access to hidden files (.git, .env, .htaccess, etc.)
+    access_log off;
+    log_not_found off;
+    deny all;
+}
+
+location ~ ^/(\.well-known/acme-challenge/)(.*)$ {
+    # Allow Let's Encrypt ACME challenge (exception to hidden files rule)
+    allow all;
+}
+
+# Block access to common sensitive files
+location ~* \.(env|git|gitignore|gitmodules|htaccess|htpasswd|ini|log|sh|sql|conf|config|bak|backup|swp|tmp)$ {
+    access_log off;
+    log_not_found off;
+    deny all;
+}
+
+# Block access to README and documentation files
+location ~* ^/(readme|README|changelog|CHANGELOG|license|LICENSE|install|INSTALL|upgrade|UPGRADE|todo|TODO).*$ {
+    access_log off;
+    log_not_found off;
+    deny all;
+}
+
+# Block access to common admin paths (application-agnostic protection)
+location ~* ^/(admin|administrator|wp-admin|wp-login|wp-config|wp-content|wp-includes|wp-json|xmlrpc|phpmyadmin|pma|mysql|adminer|cpanel|plesk|webmail|roundcube|squirrelmail)(.*)$ {
+    access_log off;
+    log_not_found off;
+    return 444; # Close connection without response
+}
+
+# Block access to common CMS and framework paths
+location ~* ^/(drupal|joomla|wordpress|magento|prestashop|opencart|typo3|concrete5|modx|craft|laravel|symfony|codeigniter|cakephp|zend|yii)(.*)$ {
+    access_log off;
+    log_not_found off;
+    return 444;
+}
+
+# Block access to common development/testing paths
+location ~* ^/(test|tests|testing|dev|development|staging|demo|backup|backups|old|new|temp|tmp|cache|logs|vendor|node_modules|bower_components)(.*)$ {
+    access_log off;
+    log_not_found off;
+    return 444;
+}
+
+# Block access to common exploit paths
+location ~* ^/(shell|webshell|c99|c100|r57|r99|backdoor|hack|hacked|exploit|virus|trojan|worm|bot|zombie|scanner|scan|probe|brute|force|attack)(.*)$ {
+    access_log off;
+    log_not_found off;
+    return 444;
+}
+
+# Block requests for non-existent scripts that are commonly probed
+location ~* \.(asp|aspx|jsp|cgi|pl|py|rb|php|php3|php4|php5|phtml|shtml)$ {
+    access_log off;
+    log_not_found off;
+    return 444;
+}
+
+# Block common vulnerability scanners and bad user agents
+if ($http_user_agent ~* (nikto|sqlmap|fimap|nessus|openvas|nmap|masscan|zmap|zap|burp|netsparker|acunetix|appscan|webscarab|w3af|skipfish|wapiti|whatweb|gobuster|dirb|dirbuster|ffuf|feroxbuster|nuclei|httpx|subfinder)) {
+    access_log off;
+    return 444;
+}
+
+# Block empty user agents and common bot patterns
+if ($http_user_agent ~ ^$) {
+    access_log off;
+    return 444;
+}
+
+# Block suspicious referrers
+if ($http_referer ~* (babes|click|diamond|forsale|girl|jewelry|love|nudit|organic|poker|porn|sex|teen|video|webcam|zippo)) {
+    access_log off;
+    return 444;
+}
+
+# Block requests with suspicious query strings
+if ($args ~* (\.\./|<script|GLOBALS|globals|javascript:|vbscript:|onload|onerror|onclick)) {
+    access_log off;
+    return 444;
+}
+
+# Block SQL injection attempts in query strings
+if ($args ~* (union|select|insert|delete|update|drop|create|alter|exec|execute|script|javascript|vbscript)) {
+    access_log off;
+    return 444;
+}
+
+# Application-specific rate limiting templates (customize per application)
+# These are examples - uncomment and modify for your specific application
+
+# Rate limiting for authentication endpoints
+# location ~ ^/(auth|login|api/auth|api/session) {
+#     limit_req zone=login_limit burst=3 nodelay;
+#     limit_req_status 429;
+#     
+#     # Additional security headers for auth endpoints
+#     add_header X-Frame-Options "DENY" always;
+#     add_header X-Content-Type-Options "nosniff" always;
+#     
+#     # Pass to application backend
+#     proxy_pass http://{{APPLICATION_BACKEND}};
+#     include /etc/nginx/conf.d/proxy_params;
+# }
+
+# Rate limiting for API endpoints (more permissive than auth)
+# location ~ ^/api/ {
+#     limit_req zone=api_limit burst=20 nodelay;
+#     limit_req_status 429;
+#     
+#     # Pass to application backend
+#     proxy_pass http://{{APPLICATION_BACKEND}};
+#     include /etc/nginx/conf.d/proxy_params;
+# }
+
+# Rate limiting for static assets with caching
+location ~* \.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+    limit_req zone=static_limit burst=100 nodelay;
+    limit_req_status 429;
+    
+    # Cache static assets
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+    add_header X-Content-Type-Options "nosniff" always;
+    
+    # Pass to application backend (customize per application)
+    # proxy_pass http://{{APPLICATION_BACKEND}};
+    # include /etc/nginx/conf.d/proxy_params;
+}
+
+# Block access to common ports that might be exposed accidentally
+location ~ ^:(\d+) {
+    access_log off;
+    return 444;
+}
+
+# Block requests with malformed Host headers (customize with your domain)
+# if ($host !~* ^({{BASE_DOMAIN}}|{{APPLICATION_DOMAIN}}|localhost|127\.0\.0\.1)$) {
+#     access_log off;
+#     return 444;
+# }
+
+# Security headers (applied globally via add_header in main config)
+# These are defined here for reference but applied in the main server block
+
+# Prevent clickjacking
+# add_header X-Frame-Options "SAMEORIGIN" always;
+
+# Prevent MIME type sniffing
+# add_header X-Content-Type-Options "nosniff" always;
+
+# Enable XSS protection
+# add_header X-XSS-Protection "1; mode=block" always;
+
+# Control referrer information
+# add_header Referrer-Policy "no-referrer-when-downgrade" always;
+
+# Prevent search engine indexing of sensitive areas
+# add_header X-Robots-Tag "noindex, noarchive, nofollow" always;

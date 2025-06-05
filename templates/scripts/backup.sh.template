@@ -1,0 +1,118 @@
+#!/bin/bash
+# backup.sh - Application backup script template
+# This script creates backups and copies them to block storage
+# Customize this template for your specific application needs
+
+set -e
+
+# ========= Configuration =========
+# Source environment variables
+if [ -f {{DEPLOY_DIR}}/config/.env ]; then
+  source {{DEPLOY_DIR}}/config/.env
+fi
+
+# Local and remote backup directories
+LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-{{DEPLOY_DIR}}/backups}"
+REMOTE_BACKUP_DIR="${REMOTE_BACKUP_DIR:-{{BACKUP_MOUNT}}/backups}"
+DATA_DIR="${DATA_DIR:-{{DEPLOY_DIR}}/data}"
+APPLICATION_NAME="${APPLICATION_NAME:-application}"
+
+# Retention settings (days to keep backups)
+LOCAL_RETENTION="${LOCAL_RETENTION:-{{BACKUP_RETENTION_DAYS}}}"  # Keep local backups
+REMOTE_RETENTION="${REMOTE_RETENTION:-{{BACKUP_RETENTION_DAYS}}}"  # Keep remote backups
+
+# Timestamp format
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+BACKUP_NAME="${APPLICATION_NAME}_${TIMESTAMP}.tar.gz"
+LOG_FILE="${LOCAL_BACKUP_DIR}/backup_${TIMESTAMP}.log"
+
+# ========= Helper Functions =========
+log() {
+  echo "[$(date +"%Y-%m-%d %H:%M:%S")] $1" | tee -a "$LOG_FILE"
+}
+
+check_mounted() {
+  if ! mountpoint -q "$REMOTE_BACKUP_DIR"; then
+    log "ERROR: Remote backup directory is not mounted"
+    return 1
+  fi
+  return 0
+}
+
+# Create backup directories if they don't exist
+mkdir -p "$LOCAL_BACKUP_DIR"
+mkdir -p "$REMOTE_BACKUP_DIR" 2>/dev/null || true
+
+# Start logging
+log "===== Starting ${APPLICATION_NAME} backup ====="
+
+# ========= Application-Specific Backup Logic =========
+# CUSTOMIZE THIS SECTION FOR YOUR APPLICATION TYPE
+
+# Example for file-based applications:
+if [ -d "$DATA_DIR" ]; then
+  log "Creating data directory backup"
+  tar -czf "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" -C "$DATA_DIR" .
+else
+  log "WARNING: Data directory $DATA_DIR not found"
+fi
+
+# Example for database applications (uncomment and customize):
+# For PostgreSQL:
+# pg_dump -h localhost -U app_user app_database | gzip > "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
+
+# For MySQL:
+# mysqldump -u app_user -p app_database | gzip > "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
+
+# For SQLite:
+# sqlite3 "${DATA_DIR}/app.db" ".backup '${LOCAL_BACKUP_DIR}/${APPLICATION_NAME}_${TIMESTAMP}.db'"
+# gzip -f "${LOCAL_BACKUP_DIR}/${APPLICATION_NAME}_${TIMESTAMP}.db"
+
+# For containerized applications:
+# docker exec app_container backup_command
+
+# Report backup size
+BACKUP_SIZE=$(du -h "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" | cut -f1)
+log "Backup created: ${BACKUP_NAME} (${BACKUP_SIZE})"
+
+# ========= Copy to Remote Storage =========
+if [ "${BLOCK_STORAGE_ENABLED:-false}" = "true" ]; then
+  if check_mounted; then
+    log "Copying backup to Block Storage"
+    cp "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" "${REMOTE_BACKUP_DIR}/"
+    
+    if [ $? -eq 0 ]; then
+      log "Backup copied to Block Storage successfully"
+    else
+      log "ERROR: Failed to copy backup to Block Storage"
+    fi
+  else
+    log "WARN: Block Storage directory not mounted, skipping Block Storage copy"
+  fi
+else
+  log "INFO: Block Storage backup skipped (disabled)"
+fi
+
+# ========= Cleanup Old Backups =========
+# Local cleanup
+log "Cleaning up local backups older than ${LOCAL_RETENTION} days"
+find "${LOCAL_BACKUP_DIR}" -name "${APPLICATION_NAME}_*.tar.gz" -type f -mtime +${LOCAL_RETENTION} -delete
+find "${LOCAL_BACKUP_DIR}" -name "backup_*.log" -type f -mtime +${LOCAL_RETENTION} -delete
+
+# Remote cleanup (if enabled and mounted)
+if [ "${BLOCK_STORAGE_ENABLED:-false}" = "true" ] && check_mounted; then
+  log "Cleaning up Block Storage backups older than ${REMOTE_RETENTION} days"
+  find "${REMOTE_BACKUP_DIR}" -name "${APPLICATION_NAME}_*.tar.gz" -type f -mtime +${REMOTE_RETENTION} -delete
+fi
+
+# ========= Backup Verification =========
+# Count backups
+LOCAL_COUNT=$(find "${LOCAL_BACKUP_DIR}" -name "${APPLICATION_NAME}_*.tar.gz" | wc -l)
+log "Local backups available: ${LOCAL_COUNT}"
+
+if [ "${BLOCK_STORAGE_ENABLED:-false}" = "true" ] && check_mounted; then
+  REMOTE_COUNT=$(find "${REMOTE_BACKUP_DIR}" -name "${APPLICATION_NAME}_*.tar.gz" | wc -l)
+  log "Block Storage backups available: ${REMOTE_COUNT}"
+fi
+
+log "===== Backup completed successfully ====="

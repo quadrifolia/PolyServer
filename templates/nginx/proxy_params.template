@@ -1,0 +1,32 @@
+# Common proxy parameters for applications
+# This file contains reusable proxy settings
+
+# Timeout settings
+proxy_connect_timeout 90s;
+proxy_send_timeout 240s;
+proxy_read_timeout 240s;
+
+# Use HTTP/1.1 for proxying
+proxy_http_version 1.1;
+
+# Enable WebSockets support
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";
+
+# Pass important headers for proper operation
+proxy_set_header Host $http_host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header X-Forwarded-Host $http_host;
+proxy_set_header X-Forwarded-Port $server_port;
+
+# Performance optimizations
+proxy_buffering off;
+proxy_request_buffering off;
+proxy_cache_bypass $http_upgrade;
+proxy_redirect off;
+
+# Security settings
+proxy_hide_header X-Powered-By;
+proxy_hide_header Server;

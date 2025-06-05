@@ -1,0 +1,62 @@
+#!/bin/bash
+# DSGVO/GDPR Contact Information Configuration
+# Copy this template to /etc/dsgvo/contacts.conf and fill in your organization's details
+
+# Data Protection Officer (DPO) Information
+DPO_NAME="[First Last]"
+DPO_EMAIL="[dpo@organization.com]"
+DPO_PHONE="[+49 123 456789]"
+DPO_ADDRESS="[Full postal address]"
+
+# Alternate Contact (for when DPO is unavailable)
+ALT_DPO_NAME="[First Last]"
+ALT_DPO_EMAIL="[alt-dpo@organization.com]"
+ALT_DPO_PHONE="[+49 123 456789]"
+
+# IT Security Contact
+SECURITY_CONTACT_NAME="[First Last]"
+SECURITY_CONTACT_EMAIL="[security@organization.com]"
+SECURITY_CONTACT_PHONE="[+49 123 456789]"
+SECURITY_EMERGENCY_PHONE="[+49 123 456789]" # 24/7 emergency number
+
+# Legal Team Contact
+LEGAL_CONTACT_NAME="[First Last]"
+LEGAL_CONTACT_EMAIL="[legal@organization.com]"
+LEGAL_CONTACT_PHONE="[+49 123 456789]"
+
+# Communications Team Contact (for public breach notifications)
+COMMS_CONTACT_NAME="[First Last]"
+COMMS_CONTACT_EMAIL="[communications@organization.com]"
+COMMS_CONTACT_PHONE="[+49 123 456789]"
+
+# Supervisory Authority Information (Bremen, Germany)
+AUTHORITY_NAME="Die Landesbeauftragte für Datenschutz und Informationsfreiheit Bremen"
+AUTHORITY_EMAIL="office@datenschutz.bremen.de"
+AUTHORITY_PHONE="+49 421 361-2010"
+AUTHORITY_ADDRESS="Arndtstraße 1, 27570 Bremerhaven"
+AUTHORITY_WEBSITE="https://www.datenschutz.bremen.de"
+
+# Federal Authority (Germany)
+FEDERAL_AUTHORITY_NAME="Bundesbeauftragte für den Datenschutz und die Informationsfreiheit (BfDI)"
+FEDERAL_AUTHORITY_EMAIL="poststelle@bfdi.bund.de"
+FEDERAL_AUTHORITY_PHONE="+49 (0)228 997799 0"
+FEDERAL_AUTHORITY_WEBSITE="https://www.bfdi.bund.de/"
+
+# External Data Protection Consultant (if applicable)
+EXTERNAL_CONSULTANT_NAME="[First Last / Company]"
+EXTERNAL_CONSULTANT_EMAIL="[email@consultancy.com]"
+EXTERNAL_CONSULTANT_PHONE="[+49 123 456789]"
+
+# Cyber Insurance Provider (if applicable)
+INSURANCE_PROVIDER_NAME="[Company Name]"
+INSURANCE_POLICY_NUMBER="[Policy Reference]"
+INSURANCE_CONTACT_NAME="[First Last]"
+INSURANCE_CONTACT_EMAIL="[claims@insurance.com]"
+INSURANCE_CONTACT_PHONE="[+49 123 456789]"
+INSURANCE_EMERGENCY_PHONE="[+49 123 456789]" # 24/7 emergency claims line
+
+# IT Forensics Provider (for breach investigation assistance)
+FORENSICS_PROVIDER_NAME="[Company Name]"
+FORENSICS_CONTACT_EMAIL="[forensics@provider.com]"
+FORENSICS_CONTACT_PHONE="[+49 123 456789]"
+FORENSICS_EMERGENCY_PHONE="[+49 123 456789]" # 24/7 emergency assistance

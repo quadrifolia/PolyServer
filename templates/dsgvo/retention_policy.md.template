@@ -1,0 +1,131 @@
+# Data Retention Policy
+
+## Purpose
+
+This policy outlines the principles and guidelines for retaining and deleting personal data processed through our Application analytics platform, in compliance with the General Data Protection Regulation (GDPR/DSGVO). It establishes retention periods for different categories of data and defines procedures for secure deletion when those periods expire.
+
+## Scope
+
+This policy applies to all personal data accessed, processed, or visualized through our Application instance, including:
+- Application user account data
+- Personal data in connected databases and data sources
+- Query and dashboard results containing personal data
+- Audit logs and activity records
+
+## General Principles
+
+1. **Data Minimization**: We only collect and retain personal data that is necessary for the specified purposes.
+2. **Storage Limitation**: We keep personal data only for as long as necessary for the purposes for which it is processed.
+3. **Purpose Limitation**: We use personal data only for the purposes for which it was originally collected.
+4. **Security**: We ensure appropriate security for stored personal data throughout its lifecycle.
+5. **Accountability**: We document and justify all retention periods for personal data.
+
+## Retention Schedule
+
+### Application Application Data
+
+| Data Category | Retention Period | Justification | Deletion Method |
+|---------------|------------------|---------------|-----------------|
+| User accounts | Employment/contract duration + 1 year | IT security, account access auditing | Automatic database purge |
+| Activity logs | 12 months | Security monitoring, incident investigation | Automatic log rotation |
+| Saved queries | Active use + 6 months | Business continuity, audit capability | Manual review and deletion |
+| User-created dashboards | Active use + 6 months | Business continuity | Manual review and deletion |
+| Query results cache | 7 days | Performance optimization | Automatic cache clearing |
+| Application audit logs | 24 months | Security investigation, compliance verification | Automatic log rotation |
+
+### Connected Data Sources
+
+| Data Category | Retention Period | Justification | Deletion Method |
+|---------------|------------------|---------------|-----------------|
+| Customer data | 5 years from last transaction | Business analysis, legal requirements | Database archiving and purging |
+| Financial data | 10 years | Tax and accounting requirements | Database archiving and purging |
+| Marketing data | 3 years from collection | Marketing analysis, campaign optimization | Database archiving and purging |
+| Employee data | Employment duration + 3 years | HR management, legal requirements | Database archiving and purging |
+| Operational data | 3 years | Business operations analysis | Database archiving and purging |
+| Website analytics | 14 months | Long-term trend analysis | Automatic database purging |
+
+### Special Categories of Data
+
+| Data Category | Retention Period | Justification | Deletion Method |
+|---------------|------------------|---------------|-----------------|
+| Health data | [Duration] | [Justification] | [Method] |
+| [Other special categories] | [Duration] | [Justification] | [Method] |
+
+## Exceptions
+
+Retention periods may be extended in the following cases:
+1. **Legal Obligation**: Where required by applicable law
+2. **Legal Claims**: Where necessary for the establishment, exercise, or defense of legal claims
+3. **Research Purposes**: Where data is used solely for research purposes with appropriate safeguards
+4. **Legal Hold**: Where data is subject to a legal hold or preservation notice
+
+Any exception must be documented with:
+- Specific data affected
+- Reason for the exception
+- Expected duration
+- Approval by [specify role]
+
+## Roles and Responsibilities
+
+| Role | Responsibilities |
+|------|------------------|
+| Data Owner | Identify retention requirements for their data, authorize deletions |
+| IT Department | Implement technical measures for enforcing retention periods, execute deletions |
+| Data Protection Officer | Review and approve retention schedule, monitor compliance |
+| Department Managers | Ensure department compliance with retention policy |
+
+## Deletion Procedures
+
+### Manual Deletion Process
+
+1. **Identification**: Regularly identify data that has reached the end of its retention period
+2. **Approval**: Obtain deletion approval from the data owner
+3. **Documentation**: Document the deletion request and approval
+4. **Execution**: Perform the deletion according to the specified method
+5. **Verification**: Verify and document that deletion was successful
+6. **Record-Keeping**: Maintain a deletion log with dates and methods used
+
+### Automated Deletion Process
+
+1. **Implementation**: Configure automated retention rules in applicable systems
+2. **Verification**: Regularly verify that automation is functioning correctly
+3. **Monitoring**: Monitor automated deletion logs
+4. **Exception Handling**: Establish procedures for handling exceptions in automated processes
+
+## Data Deletion Methods
+
+| Method | Description | Use Cases |
+|--------|-------------|-----------|
+| Database Purging | Removing records from database tables | Structured database records |
+| Database Anonymization | Replacing personal identifiers with anonymous values | When aggregate data must be retained |
+| Log Rotation | Automatically overwriting logs after a specified period | System and application logs |
+| Secure File Deletion | Using specialized software to ensure deleted files cannot be recovered | File-based data storage |
+| Physical Destruction | Physical destruction of storage media | End-of-life hardware |
+
+## Documentation and Record-Keeping
+
+We maintain the following records related to data retention:
+1. Data inventory with retention periods
+2. Deletion logs
+3. Exception documentation
+4. Retention policy reviews and updates
+
+## Policy Review
+
+This policy will be reviewed:
+- Annually
+- When there are significant changes to data processing activities
+- When there are relevant changes to legal requirements
+- Following any data protection incidents related to retention
+
+## Approved By
+
+| Name | Position | Date |
+|------|----------|------|
+| [Name] | [Position] | [YYYY-MM-DD] |
+
+## Revision History
+
+| Version | Date | Author | Changes |
+|---------|------|--------|---------|
+| 1.0 | [YYYY-MM-DD] | [Name] | Initial policy |

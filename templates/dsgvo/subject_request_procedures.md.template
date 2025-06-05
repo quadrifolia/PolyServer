@@ -1,0 +1,381 @@
+# Data Subject Request Procedures
+
+This document outlines the procedures for handling data subject requests under the GDPR/DSGVO for our Application deployment. It covers the process for addressing rights to access, rectification, erasure, restriction of processing, data portability, and objection.
+
+## Table of Contents
+
+1. [General Principles](#general-principles)
+2. [Types of Data Subject Requests](#types-of-data-subject-requests)
+3. [Receiving and Recording Requests](#receiving-and-recording-requests)
+4. [Verification of Identity](#verification-of-identity)
+5. [Request Assessment](#request-assessment)
+6. [Request Handling Procedures](#request-handling-procedures)
+7. [Response Timeframes](#response-timeframes)
+8. [Documentation and Record-Keeping](#documentation-and-record-keeping)
+9. [Templates](#templates)
+
+## General Principles
+
+All data subject requests will be handled according to the following principles:
+
+1. **Transparency**: Clear communication about the process and outcomes
+2. **Timeliness**: Prompt handling within legal timeframes
+3. **Verification**: Proper verification of the requestor's identity
+4. **Proportionality**: Response proportionate to the request complexity
+5. **Documentation**: Complete record-keeping of all request stages
+6. **Non-discrimination**: Equal treatment of all requestors
+7. **Assistance**: Providing guidance to data subjects on exercising their rights
+
+## Types of Data Subject Requests
+
+We handle the following types of data subject requests:
+
+| Request Type | GDPR Article | Description |
+|--------------|--------------|-------------|
+| **Access** | Art. 15 | The right to obtain confirmation of processing and a copy of personal data |
+| **Rectification** | Art. 16 | The right to have inaccurate personal data corrected |
+| **Erasure** | Art. 17 | The right to have personal data erased ("right to be forgotten") |
+| **Restriction** | Art. 18 | The right to restrict how personal data is processed |
+| **Portability** | Art. 20 | The right to receive personal data in a structured, common format |
+| **Objection** | Art. 21 | The right to object to certain types of processing |
+| **Automated Decision** | Art. 22 | The right to not be subject to decisions based solely on automated processing |
+
+## Receiving and Recording Requests
+
+### Request Channels
+
+Data subjects can submit requests through the following channels:
+
+- Email to [data-protection@example.com]
+- Web form at [https://example.com/data-request]
+- Written request to [postal address]
+- In person at [office location] (with appointment)
+
+### Initial Processing
+
+Upon receiving a request:
+
+1. **Log the request** in the data subject request register
+2. **Acknowledge receipt** within 2 business days
+3. **Assign a reference number** in format "DSR-YYYY-MM-DD-XX"
+4. **Assign a request handler** from the data protection team
+5. **Initiate the verification process**
+
+## Verification of Identity
+
+Before processing any request, we must verify the identity of the requestor:
+
+### Standard Verification Process
+
+1. **Request identification** - at least two of:
+   - Copy of government-issued ID
+   - Email from registered email account
+   - Account login verification
+   - Company ID for employees
+
+2. **Additional verification** for high-risk requests:
+   - Security questions based on information we hold
+   - Verification code sent to registered contact method
+   - Video call verification for complex cases
+
+### Third-Party Requests
+
+For requests made by a third party on behalf of a data subject:
+
+1. **Verify the identity** of the data subject
+2. **Verify the authority** of the third party:
+   - Written authorization from the data subject
+   - Power of attorney
+   - Legal guardianship documentation
+
+## Request Assessment
+
+Each request must be assessed for:
+
+1. **Validity**: Is this a valid GDPR request?
+2. **Clarity**: Is the scope of the request clear?
+3. **Proportionality**: Is the request proportionate or excessive?
+4. **Exemptions**: Do any exemptions apply?
+5. **Complexity**: Will an extension be required?
+
+### Grounds for Refusal
+
+Requests may be refused on the following grounds:
+
+- Identity verification failure
+- Manifestly unfounded or excessive requests
+- Legal exemptions apply
+- Impossible to fulfill or requires disproportionate effort
+- Adversely affects the rights of others
+
+## Request Handling Procedures
+
+### Right of Access (Art. 15)
+
+1. **Identify all systems** containing the data subject's personal data:
+   - Application user database
+   - Connected data sources
+   - Log files
+   - Backups (if reasonably accessible)
+
+2. **Compile the personal data** in a structured format:
+   - Run database queries to extract relevant data
+   - Export from Application in appropriate format
+   - Document data categories and purposes
+
+3. **Prepare additional required information**:
+   - Purposes of processing
+   - Categories of data
+   - Recipients of data
+   - Retention period
+   - Source of data (if not collected directly)
+   - Information on automated decision-making (if applicable)
+   - Information on safeguards for transfers (if applicable)
+
+4. **Review the compiled information** for:
+   - Completeness
+   - Third-party data that should be redacted
+   - Confidential business information to be protected
+
+5. **Prepare and deliver the response**
+
+### Right to Rectification (Art. 16)
+
+1. **Identify all instances** of the incorrect data:
+   - In Application database
+   - In connected data sources
+   - In derived reports/dashboards
+
+2. **Verify the correct data** provided by the data subject
+
+3. **Update all instances** of the data:
+   - Execute database updates
+   - Update caches and reports
+   - Document all changes made
+
+4. **Verify the updates** have been successfully applied
+
+5. **Notify third parties** who have received the incorrect data (if applicable)
+
+### Right to Erasure (Art. 17)
+
+1. **Determine if erasure grounds apply**:
+   - Purpose no longer applies
+   - Consent withdrawn
+   - Successful objection
+   - Unlawful processing
+   - Legal obligation
+   - Child's data
+
+2. **Check for exemptions**:
+   - Legal obligation to retain
+   - Public interest
+   - Legal claims
+   - Freedom of expression and information
+   - Scientific/historical research
+
+3. **If erasure is required**:
+   - Follow the [Data Deletion Procedures](/etc/dsgvo/deletion_procedures.md)
+   - Document all deletion steps
+   - Verify successful deletion
+
+4. **Notify third parties** of the erasure (if applicable)
+
+### Right to Restriction (Art. 18)
+
+1. **Determine if restriction grounds apply**:
+   - Data accuracy contested
+   - Processing is unlawful but erasure not requested
+   - Data no longer needed but subject requires it for legal claims
+   - Objection pending verification
+
+2. **Implement technical restrictions**:
+   - Move data to separate restricted storage
+   - Block access to the data in databases
+   - Exclude from queries and reports
+   - Mark as restricted in metadata
+
+3. **Document the restriction** and notify relevant staff
+
+4. **Notify the data subject** prior to lifting any restriction
+
+### Right to Data Portability (Art. 20)
+
+1. **Determine if portability applies**:
+   - Processing based on consent or contract
+   - Processing carried out by automated means
+   - Data provided by the subject
+
+2. **Extract the data** in a structured, machine-readable format:
+   - JSON or CSV format
+   - With descriptive field names
+   - Well-structured hierarchy
+
+3. **Review the extracted data** for completeness and accuracy
+
+4. **Provide the data** to the subject or transmit directly to another controller if requested and technically feasible
+
+### Right to Object (Art. 21)
+
+1. **Determine if objection applies**:
+   - Processing based on legitimate interest or public interest
+   - Processing for direct marketing
+   - Processing for scientific/historical research
+
+2. **Assess compelling legitimate grounds** (not applicable for direct marketing):
+   - Document the assessment
+   - Consult legal team if necessary
+
+3. **If objection upheld**:
+   - Stop the relevant processing
+   - Update systems to respect the objection
+   - Document the changes made
+
+## Response Timeframes
+
+| Action | Timeframe |
+|--------|-----------|
+| **Acknowledge receipt** | Within 2 business days |
+| **Complete identity verification** | Within 5 business days |
+| **Provide initial assessment** | Within 10 business days |
+| **Complete simple requests** | Within 30 calendar days of receipt |
+| **Complete complex requests** | Within 90 calendar days (with extension notification) |
+| **Respond to clarification request** | Clock paused until response received |
+
+## Documentation and Record-Keeping
+
+For each request, maintain a comprehensive record including:
+
+1. **Request details**:
+   - Reference number
+   - Date received
+   - Type of request
+   - Description of request
+   - Request channel
+
+2. **Identity verification**:
+   - Verification method
+   - Date verified
+   - Verification outcome
+   - Supporting documentation (securely stored)
+
+3. **Assessment**:
+   - Validity assessment
+   - Complexity determination
+   - Exemption analysis
+   - Extensions applied (with justification)
+
+4. **Processing details**:
+   - Actions taken
+   - Systems accessed
+   - Changes made
+   - Date completed
+   - Staff involved
+
+5. **Response**:
+   - Date of response
+   - Response channel
+   - Summary of response
+   - Attachments/data provided
+   - Delivery confirmation
+
+All documentation should be retained for [5] years from request completion.
+
+## Templates
+
+### Request Acknowledgment
+
+```
+SUBJECT: Data Subject Request Acknowledgment [Reference: DSR-YYYY-MM-DD-XX]
+
+Dear [Data Subject Name],
+
+We are writing to acknowledge receipt of your data subject request received on [Date].
+
+Your request has been registered with reference number [DSR-YYYY-MM-DD-XX]. 
+To proceed with your request, we need to verify your identity.
+
+Please provide the following:
+[List of required identification documents]
+
+We aim to respond to your request within 30 calendar days of receiving your verification documents. This period may be extended by up to two additional months in case of complex requests, in which case we will inform you of the extension.
+
+If you have any questions about this process, please contact us at [Contact Email].
+
+Kind regards,
+[Name]
+[Position]
+[Organization]
+```
+
+### Request for Clarification
+
+```
+SUBJECT: Request for Clarification - Data Subject Request [Reference: DSR-YYYY-MM-DD-XX]
+
+Dear [Data Subject Name],
+
+We are processing your data subject request (reference: [DSR-YYYY-MM-DD-XX]), but we need additional information to fulfill your request correctly.
+
+Specifically, we need clarification on:
+[List specific points requiring clarification]
+
+Please note that the 30-day response period will be paused until we receive this information from you.
+
+You can provide this information by replying to this email or contacting us at [Contact Details].
+
+Kind regards,
+[Name]
+[Position]
+[Organization]
+```
+
+### Extension Notification
+
+```
+SUBJECT: Extension of Response Period - Data Subject Request [Reference: DSR-YYYY-MM-DD-XX]
+
+Dear [Data Subject Name],
+
+We are writing regarding your data subject request (reference: [DSR-YYYY-MM-DD-XX]) received on [Date].
+
+Due to the [complexity/volume] of your request, we need to extend the response period by [Number] additional days. We now expect to provide our full response by [New Deadline Date].
+
+This extension is in accordance with Article 12(3) of the GDPR, which allows for an extension of up to two additional months for complex requests.
+
+We apologize for any inconvenience this may cause. If you have any questions, please contact us at [Contact Email].
+
+Kind regards,
+[Name]
+[Position]
+[Organization]
+```
+
+### Refusal Notification
+
+```
+SUBJECT: Response to Data Subject Request [Reference: DSR-YYYY-MM-DD-XX]
+
+Dear [Data Subject Name],
+
+We have carefully considered your data subject request (reference: [DSR-YYYY-MM-DD-XX]) received on [Date].
+
+After assessment, we regret to inform you that we are unable to fulfill your request for the following reason(s):
+[Detailed explanation of reason for refusal]
+
+This decision is based on [Legal basis or GDPR Article reference].
+
+You have the right to:
+1. Lodge a complaint with a supervisory authority (contact information below)
+2. Seek a judicial remedy against our decision
+
+Supervisory Authority: [Authority Name]
+Contact: [Authority Contact Information]
+
+If you have any questions or would like to discuss this further, please contact our Data Protection Officer at [DPO Email].
+
+Kind regards,
+[Name]
+[Position]
+[Organization]
+```

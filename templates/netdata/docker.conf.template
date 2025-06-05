@@ -1,0 +1,21 @@
+jobs:
+  # Basic Docker instance monitoring
+  - name: local
+    address: 'unix:///var/run/docker.sock'
+    include:
+      containers:
+        # Customize container names for your specific applications
+        # Examples:
+        # - app_frontend
+        # - app_backend
+        # - app_database
+        # - nginx_proxy
+        # - certbot
+    charts:
+      dimensions:
+        memory_usage: 'memory_usage'
+        memory_limit: 'memory_limit'
+        cpu_used: 'cpu_used'
+        cpu_limit: 'cpu_limit'
+        network_rx: 'network_rx'
+        network_tx: 'network_tx'

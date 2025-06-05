@@ -1,0 +1,37 @@
+server:
+    # Bind to localhost only for security
+    interface: 127.0.0.1
+    access-control: 127.0.0.1 allow
+    
+    # Verbosity level (0-5, 0 means only errors)
+    verbosity: ${UNBOUND_VERBOSITY:-1}
+    
+    # Performance optimizations
+    prefetch: yes
+    cache-min-ttl: ${UNBOUND_CACHE_MIN_TTL:-3600}     # Cache results for at least 1 hour
+    cache-max-ttl: ${UNBOUND_CACHE_MAX_TTL:-86400}    # Maximum cache time = 1 day
+    msg-cache-size: ${UNBOUND_MSG_CACHE_SIZE:-128m}   # Increase cache size for faster responses
+    rrset-cache-size: ${UNBOUND_RRSET_CACHE_SIZE:-256m} # Cache DNS record sets
+    neg-cache-size: ${UNBOUND_NEG_CACHE_SIZE:-64m}    # Cache negative responses
+    
+    # Security settings
+    hide-identity: yes
+    hide-version: yes
+    use-caps-for-id: yes
+    qname-minimisation: yes
+    
+    # Logging settings (can be disabled in production)
+    log-queries: ${UNBOUND_LOG_QUERIES:-no}
+    log-replies: ${UNBOUND_LOG_REPLIES:-no}
+    log-servfail: ${UNBOUND_LOG_SERVFAIL:-yes}
+    logfile: "${UNBOUND_LOGFILE:-/var/log/unbound.log}"
+    
+    # DNSSEC validation
+    auto-trust-anchor-file: "/var/lib/unbound/root.key"
+    val-clean-additional: yes
+
+# Forward queries to upstream DNS providers
+forward-zone:
+    name: "."
+    forward-addr: ${UNBOUND_DNS_PRIMARY:-8.8.8.8}     # Primary DNS (default: Google)
+    forward-addr: ${UNBOUND_DNS_SECONDARY:-1.1.1.1}   # Secondary DNS (default: Cloudflare)

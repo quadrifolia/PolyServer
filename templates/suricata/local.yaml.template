@@ -1,0 +1,145 @@
+# Suricata configuration template for Application deployment
+
+%YAML 1.1
+---
+
+# This configuration is optimized for a Application server
+
+# Number of packets allowed to be processed simultaneously
+max-pending-packets: 1024
+
+# Number of kilobytes of memory to allocate per packet capture thread
+default-packet-size: 1500
+
+# Max size of raw packet data to store with a signature match (in bytes)
+max-pcap-log-size: 1000000
+
+# Number of packets to preallocate per packet capture thread
+max-pcap-packet-pool: 1000
+
+# Stream engine settings
+stream:
+  memcap: 64mb
+  checksum-validation: yes
+  inline: auto
+  reassembly:
+    memcap: 256mb
+    depth: 1mb
+    toserver-chunk-size: 2560
+    toclient-chunk-size: 2560
+
+# Host table settings
+host:
+  hash-size: 4096
+  prealloc: 1000
+  memcap: 32mb
+
+# Flow/stream handling
+flow:
+  memcap: 128mb
+  hash-size: 65536
+  prealloc: 10000
+  emergency-recovery: 30
+
+# Detection engine settings
+detect:
+  profile: medium
+  custom-values:
+    toclient-groups: 3
+    toserver-groups: 25
+  sgh-mpm-context: auto
+  inspection-recursion-limit: 3000
+
+# Advanced memory options
+advanced-memory:
+  memcap: 2gb
+  memcap-kernel: 0
+  memcap-user: 0
+
+# App Layer settings for server environment
+app-layer:
+  protocols:
+    tls:
+      enabled: yes
+      detection-ports:
+        dp: 443
+    http:
+      enabled: yes
+      libhtp:
+        default-config:
+          personality: IDS
+          request-body-limit: 100kb
+          response-body-limit: 100kb
+          double-decode-path: no
+          double-decode-query: no
+
+# Default logging directory
+default-log-dir: /var/log/suricata/
+
+# Configure specific outputs
+outputs:
+  # Extensible Event Format (the output unified2 has been removed)
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: eve.json
+      types:
+        - alert:
+            payload: yes
+            payload-buffer-size: 4kb
+            payload-printable: yes
+            packet: yes
+            http-body: yes
+            http-body-printable: yes
+            metadata: yes
+            tagged-packets: yes
+        - http:
+            extended: yes
+        - dns
+        - tls:
+            extended: yes
+        - files:
+            force-magic: no
+        - drop
+        - ssh
+        - flow
+
+# Set log level - change to info for more verbosity
+logging:
+  default-log-level: notice
+  outputs:
+    - console:
+        enabled: yes
+    - file:
+        enabled: yes
+        filename: /var/log/suricata/suricata.log
+        level: info
+
+# Set default rule path
+default-rule-path: /etc/suricata/rules
+
+# Load custom rules
+rule-files:
+  - suricata.rules
+  - application-custom.rules
+
+# Additional custom rules for Application server security
+# Rules will be written to application-custom.rules
+custom-rules: |
+  # Alert on potential SQL injection attempts to Application
+  alert http $EXTERNAL_NET any -> $HOME_NET any (msg:"APPLICATION SQL Injection Attempt"; flow:established,to_server; http.method; content:"POST"; http.uri; content:"/api/dataset"; nocase; pcre:"/(\%27)|(\')|(\-\-)|(%23)|(#)/i"; classtype:web-application-attack; sid:3000001; rev:1;)
+  
+  # Alert on possible brute force attempts against Application
+  alert http $EXTERNAL_NET any -> $HOME_NET any (msg:"APPLICATION Authentication Brute Force Attempt"; flow:established,to_server; http.method; content:"POST"; http.uri; content:"/api/session"; threshold:type threshold, track by_src, count 5, seconds 60; classtype:attempted-admin; sid:3000002; rev:1;)
+  
+  # Alert on unauthorized API access attempts
+  alert http $EXTERNAL_NET any -> $HOME_NET any (msg:"APPLICATION Unauthorized API Access Attempt"; flow:established,to_server; http.method; content:"GET"; http.uri; content:"/api/"; http.response.status:401; threshold:type threshold, track by_src, count 3, seconds 60; classtype:attempted-recon; sid:3000003; rev:1;)
+  
+  # Alert on file download activity (potential data exfiltration)
+  alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"APPLICATION Data Export"; flow:established,to_client; http.method; content:"GET"; http.uri; content:"/api/card/"; content:"/query/csv"; distance:0; classtype:policy-violation; sid:3000004; rev:1;)
+  
+  # Alert on database connection attempts from unexpected sources
+  alert tcp $EXTERNAL_NET any -> $SQL_SERVERS $DB_PORTS (msg:"APPLICATION Unauthorized Database Connection Attempt"; flow:established,to_server; threshold:type threshold, track by_src, count 5, seconds 60; classtype:attempted-admin; sid:3000005; rev:1;)
+  
+  # Alert on port scans against server
+  alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"APPLICATION Port Scan Detected"; flow:established; flags:S; threshold:type threshold, track by_src, count 5, seconds 10; classtype:attempted-recon; sid:3000006; rev:1;)

@@ -1,0 +1,59 @@
+###############################################################################
+# Netdata cgroups.conf for Docker containers
+#
+# This file contains the health configuration for Docker containers managed by cgroups
+# Customize the container-specific alerts for your applications
+###############################################################################
+
+# Application-specific container alerts (uncomment and customize for your applications)
+
+# Example for application containers:
+# template: docker_app_container_memory_usage
+#      on: cgroup_{{APPLICATION_NAME}}.mem_usage
+#   every: 1m
+#    warn: $used > 1024 * 1024 * 750
+#    crit: $used > 1024 * 1024 * 950
+#   units: MB
+#    info: Memory usage of the {{APPLICATION_NAME}} container
+#      to: sysadmin
+
+# template: docker_app_container_cpu_usage
+#      on: cgroup_{{APPLICATION_NAME}}.cpu
+#   every: 1m
+#    warn: $user > 80
+#    crit: $user > 95
+#   units: %
+#    info: CPU usage of the {{APPLICATION_NAME}} container
+#      to: sysadmin
+
+# Nginx container alerts (if using nginx proxy)
+# template: docker_nginx_container_cpu_usage
+#      on: cgroup_nginx.cpu
+#   every: 1m
+#    warn: $user > 80
+#    crit: $user > 95
+#   units: %
+#    info: CPU usage of the Nginx container
+#      to: sysadmin
+
+# Generic container alerts for all Docker containers
+
+template: docker_container_ram_usage
+     on: cgroup.mem_usage
+families: !_.slice
+  every: 1m
+   warn: $used > (($max > 0) ? ($max * 0.8) : (1024 * 1024 * 400))
+   crit: $used > (($max > 0) ? ($max * 0.9) : (1024 * 1024 * 500))
+  units: GB
+   info: Memory usage of a Docker container
+     to: sysadmin
+
+template: docker_container_cpu_usage
+     on: cgroup.cpu
+families: !_.slice
+  every: 1m
+   warn: $user > 80
+   crit: $user > 95
+  units: %
+   info: CPU usage of a Docker container
+     to: sysadmin
