@@ -1,0 +1,1759 @@
+#!/bin/bash
+# server_setup.sh - Secure Debian 12 server setup for PolyServer applications
+# Run as root after fresh Debian 12 (bookworm) instance creation
+
+set -e
+
+# ========= Variables =========
+USERNAME="deploy"          # Non-root user to create
+HOSTNAME="polyserver"      # Server hostname
+SSH_PORT="2222"            # Custom SSH port (more secure than default 22)
+BLOCK_DEVICE="/dev/sdb"    # Block storage device (adjust if needed)
+BACKUP_MOUNT="/mnt/backup" # Backup mount point
+LOGWATCH_EMAIL="${LOGWATCH_EMAIL:-root}"  # Logwatch notification email (set before running)
+
+# Check if running in Docker testing mode
+if [ "$TESTING_MODE" = "true" ]; then
+    echo "🐳 Running in Docker testing mode - skipping some services that don't work in containers"
+    DOCKER_MODE=true
+else
+    DOCKER_MODE=false
+fi
+
+# Helper function for systemctl commands in Docker mode
+docker_systemctl() {
+    if [ "$DOCKER_MODE" = "false" ]; then
+        systemctl "$@"
+    else
+        echo "🐳 Docker mode: skipping systemctl $*"
+        return 0
+    fi
+}
+
+# ========= Basic server hardening =========
+echo "===== 1. Updating system packages ====="
+apt-get update && apt-get upgrade -y
+
+echo "===== 2. Setting hostname ====="
+if [ "$DOCKER_MODE" = "false" ]; then
+    hostnamectl set-hostname "$HOSTNAME"
+else
+    echo "🐳 Skipping hostname setup in Docker mode"
+fi
+
+echo "===== 3. Creating non-root user ====="
+if ! id "$USERNAME" &>/dev/null; then
+  if [ "$DOCKER_MODE" = "true" ]; then
+    # Non-interactive user creation for Docker
+    useradd -m -s /bin/bash "$USERNAME"
+    echo "$USERNAME:$USERNAME" | chpasswd
+  else
+    adduser --gecos "" "$USERNAME"
+  fi
+  usermod -aG sudo "$USERNAME"
+  
+  # Create SSH directory for the new user
+  mkdir -p /home/$USERNAME/.ssh
+  cp ~/.ssh/authorized_keys /home/$USERNAME/.ssh/ 2>/dev/null || echo "No SSH keys to copy"
+  chown -R $USERNAME:$USERNAME /home/$USERNAME/.ssh
+  chmod 700 /home/$USERNAME/.ssh
+  chmod 600 /home/$USERNAME/.ssh/authorized_keys 2>/dev/null || true
+fi
+
+echo "===== 4. Securing SSH ====="
+if [ "$DOCKER_MODE" = "false" ]; then
+    # Backup original SSH config
+    cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
+    
+    # Configure SSH
+    cat > /etc/ssh/sshd_config << EOF
+# Secure SSH Configuration
+Port $SSH_PORT
+Protocol 2
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_rsa_key
+
+# Authentication
+LoginGraceTime 30
+PermitRootLogin no
+StrictModes yes
+MaxAuthTries 3
+MaxSessions 5
+PubkeyAuthentication yes
+PasswordAuthentication no
+PermitEmptyPasswords no
+ChallengeResponseAuthentication no
+UsePAM yes
+
+# Forwarding / Tunneling
+X11Forwarding no
+AllowTcpForwarding no
+AllowAgentForwarding no
+PermitTunnel no
+
+# Features
+PrintMotd no
+AcceptEnv LANG LC_*
+Subsystem sftp /usr/lib/openssh/sftp-server
+
+# Security
+IgnoreRhosts yes
+HostbasedAuthentication no
+KexAlgorithms curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512
+Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
+MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+
+# Allow users
+AllowUsers $USERNAME
+EOF
+else
+    echo "🐳 Skipping SSH configuration in Docker mode"
+fi
+
+# Don't restart SSH yet - will do at the end to avoid disconnecting mid-setup
+
+echo "===== 5. Setting up firewall ====="
+if [ "$DOCKER_MODE" = "false" ]; then
+    apt install -y ufw
+    # Set default policies - deny incoming, allow outgoing
+    ufw default deny incoming
+    ufw default allow outgoing
+    # Allow only necessary ports
+    ufw allow $SSH_PORT/tcp comment "SSH"
+    ufw allow 80/tcp comment "HTTP"
+    ufw allow 443/tcp comment "HTTPS"
+    # Application direct ports removed for security (using Nginx proxy instead)
+    # Enable the firewall non-interactively
+    echo "y" | ufw enable
+    # Show the status of the firewall
+    ufw status verbose
+else
+    echo "🐳 Skipping firewall setup in Docker mode"
+fi
+
+echo "===== 6. Installing security packages ====="
+if [ "$DOCKER_MODE" = "true" ]; then
+    # Docker-compatible package list (excluding packages that don't work in containers)
+    apt-get install -y unattended-upgrades apt-listchanges \
+        gnupg-agent \
+        logwatch clamav clamav-daemon lm-sensors \
+        rkhunter chkrootkit apparmor apparmor-utils \
+        nginx-extras git awscli
+else
+    # Full package list for production servers
+    apt-get install -y fail2ban unattended-upgrades apt-listchanges \
+        gnupg-agent \
+        logwatch clamav clamav-daemon lm-sensors hddtemp \
+        rkhunter chkrootkit unbound apparmor apparmor-utils \
+        nginx-extras suricata git awscli
+fi
+
+echo "===== 6.1 Installing incident response and monitoring tools ====="
+# System monitoring
+apt-get install -y htop iotop sysstat atop bmon
+
+# Network monitoring
+apt-get install -y iftop nethogs tcpdump ethtool iperf3 netcat-openbsd
+
+# Network diagnostics
+apt-get install -y mtr-tiny arp-scan dnsutils net-tools traceroute whois
+
+# File integrity
+apt-get install -y debsums aide
+
+# Log monitoring
+apt-get install -y logcheck logcheck-database
+
+# Audit framework
+apt-get install -y auditd audispd-plugins
+
+# Enhanced shell environment
+echo "===== 6.2 Installing enhanced shell environment ====="
+apt-get install -y zsh vim git curl locales
+
+# Configure locale to avoid character encoding issues
+sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen
+locale-gen
+
+# Install Oh My Zsh for deploy user
+if id "$USERNAME" &>/dev/null; then
+    echo "Installing Oh My Zsh for $USERNAME..."
+    sudo -u $USERNAME sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+    
+    # Configure Oh My Zsh with useful plugins
+    sudo -u $USERNAME sed -i 's/plugins=(git)/plugins=(git docker sudo systemd colored-man-pages)/' /home/$USERNAME/.zshrc
+fi
+
+# Install Oh My Zsh for root user as well
+echo "Installing Oh My Zsh for root..."
+sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+sed -i 's/plugins=(git)/plugins=(git docker sudo systemd colored-man-pages)/' /root/.zshrc
+
+# Configure vim globally with enhanced settings for server administration
+cat > /etc/vim/vimrc.local << EOF
+" PolyServer Enhanced Vim Configuration
+" Optimized for server administration and configuration editing
+
+" Basic settings
+syntax on
+set number
+set ruler
+set showcmd
+set showmatch
+set incsearch
+set hlsearch
+set ignorecase
+set smartcase
+
+" Indentation and formatting
+set tabstop=4
+set shiftwidth=4
+set expandtab
+set autoindent
+set smartindent
+
+" Interface enhancements
+set laststatus=2
+set wildmenu
+set wildmode=longest:full,full
+set scrolloff=3
+set sidescrolloff=5
+
+" File handling
+set nobackup
+set noswapfile
+set autoread
+set encoding=utf-8
+
+" Mouse and clipboard (disabled for server use)
+set mouse=
+set clipboard=
+
+" Security (disable modelines for security)
+set nomodeline
+set modelines=0
+
+" Color scheme
+colorscheme default
+
+" Status line
+set statusline=%F%m%r%h%w\ [FORMAT=%{&ff}]\ [TYPE=%Y]\ [POS=%l,%v][%p%%]\ %{strftime(\"%d/%m/%y\ -\ %H:%M\")}
+
+" Useful key mappings for server configuration files
+" Clear search highlighting
+nnoremap <silent> <C-l> :nohlsearch<CR><C-l>
+
+" Quick save
+nnoremap <C-s> :w<CR>
+inoremap <C-s> <Esc>:w<CR>a
+
+" File type specific settings
+augroup ServerConfigs
+    autocmd!
+    " Nginx configuration files
+    autocmd BufRead,BufNewFile *.conf setlocal filetype=nginx
+    autocmd BufRead,BufNewFile nginx.conf setlocal filetype=nginx
+    autocmd BufRead,BufNewFile */nginx/* setlocal filetype=nginx
+    
+    " Shell scripts
+    autocmd BufRead,BufNewFile *.sh setlocal filetype=sh
+    autocmd FileType sh setlocal tabstop=2 shiftwidth=2
+    
+    " YAML files (Docker Compose, etc.)
+    autocmd BufRead,BufNewFile *.yml,*.yaml setlocal filetype=yaml
+    autocmd FileType yaml setlocal tabstop=2 shiftwidth=2
+    
+    " JSON files
+    autocmd BufRead,BufNewFile *.json setlocal filetype=json
+    autocmd FileType json setlocal tabstop=2 shiftwidth=2
+    
+    " Environment files
+    autocmd BufRead,BufNewFile .env*,*.env setlocal filetype=sh
+    
+    " Log files (read-only, no line numbers for better readability)
+    autocmd BufRead,BufNewFile *.log setlocal readonly nonumber nowrap
+augroup END
+
+" Highlight trailing whitespace
+highlight ExtraWhitespace ctermbg=red guibg=red
+match ExtraWhitespace /\s\+$/
+
+" Show tabs and trailing spaces
+set listchars=tab:>-,trail:·,extends:>,precedes:<
+set list
+EOF
+
+# Source the vim config in the main vimrc
+echo 'source /etc/vim/vimrc.local' >> /etc/vim/vimrc
+
+# Create a vim configuration info file for reference
+cat > /etc/vim/polyserver-vim-help.txt << EOF
+PolyServer Vim Configuration - Quick Reference
+=============================================
+
+Key Features:
+- Syntax highlighting enabled
+- Line numbers and ruler
+- Smart indentation (4 spaces, expanded tabs)
+- Case-insensitive search with smart case
+- No mouse support (server-optimized)
+- No backup/swap files for cleaner filesystem
+- Security hardened (modelines disabled)
+
+File Type Support:
+- Nginx configuration files (.conf, nginx.conf)
+- Shell scripts (.sh) - 2-space indentation
+- YAML files (.yml, .yaml) - 2-space indentation  
+- JSON files (.json) - 2-space indentation
+- Environment files (.env, .env.*) 
+- Log files - read-only mode, no line numbers
+
+Quick Keys:
+- Ctrl+L: Clear search highlighting
+- Ctrl+S: Quick save
+
+Visual Aids:
+- Trailing whitespace highlighted in red
+- Tabs and spaces visible
+- Status line shows file info and timestamp
+
+To view this help: cat /etc/vim/polyserver-vim-help.txt
+EOF
+
+echo "Enhanced vim configuration installed with server administration optimizations"
+
+# Create global aliases for all users
+cat > /etc/profile.d/polyserver-aliases.sh << EOF
+#!/bin/bash
+alias ll="ls -la"
+alias la="ls -A"
+alias l="ls -CF"
+alias grep="grep --color=auto"
+alias fgrep="fgrep --color=auto"
+alias egrep="egrep --color=auto"
+EOF
+chmod +x /etc/profile.d/polyserver-aliases.sh
+
+# Create executable commands for non-interactive shells
+cat > /usr/local/bin/ll << EOF
+#!/bin/bash
+ls -la "\$@"
+EOF
+chmod +x /usr/local/bin/ll
+
+cat > /usr/local/bin/la << EOF
+#!/bin/bash
+ls -A "\$@"
+EOF
+chmod +x /usr/local/bin/la
+
+# Add aliases to both users' shell configs
+if id "$USERNAME" &>/dev/null; then
+    echo 'source /etc/profile.d/polyserver-aliases.sh 2>/dev/null || true' >> /home/$USERNAME/.zshrc
+fi
+echo 'source /etc/profile.d/polyserver-aliases.sh 2>/dev/null || true' >> /root/.zshrc
+
+echo "Enhanced shell environment configured with zsh, Oh My Zsh, vim enhancements, and useful aliases"
+
+# Configure automatic security updates (enabled by default)
+cat > /etc/apt/apt.conf.d/20auto-upgrades << EOF
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
+EOF
+
+# Configure unattended-upgrades for security patches only
+cat > /etc/apt/apt.conf.d/50unattended-upgrades << EOF
+Unattended-Upgrade::Allowed-Origins {
+    "\${distro_id}:\${distro_codename}-security";
+};
+
+// Automatically reboot if required (at 2 AM)
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "02:00";
+
+// Send email to admin if there are problems
+Unattended-Upgrade::Mail "root";
+Unattended-Upgrade::MailReport "only-on-error";
+
+// Remove unused dependencies
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+
+// Allow package downgrade if needed for security
+Unattended-Upgrade::Allow-downgrade "true";
+EOF
+
+# Configure fail2ban for SSH
+if [ "$DOCKER_MODE" = "false" ]; then
+    cat > /etc/fail2ban/jail.local << EOF
+[sshd]
+enabled = true
+port = $SSH_PORT
+filter = sshd
+logpath = /var/log/auth.log
+maxretry = 3
+bantime = 3600
+EOF
+    docker_systemctl restart fail2ban
+else
+    echo "🐳 Skipping fail2ban configuration in Docker mode"
+fi
+
+# Configure hardware sensors
+echo "===== 7. Configuring hardware monitoring ====="
+if [ "$DOCKER_MODE" = "false" ]; then
+    # Detect and configure sensors automatically
+    yes | sensors-detect
+else
+    echo "🐳 Skipping hardware sensor detection in Docker mode"
+fi
+
+# Configure ClamAV
+echo "===== 8. Configuring ClamAV ====="
+docker_systemctl enable clamav-freshclam
+docker_systemctl start clamav-freshclam
+docker_systemctl enable clamav-daemon
+docker_systemctl start clamav-daemon
+
+# Install Linux Malware Detect (maldet)
+echo "===== 8.1 Installing Linux Malware Detect (maldet) ====="
+# Create temporary directory for installation
+mkdir -p /tmp/maldet
+cd /tmp/maldet
+
+# Download the latest version
+wget http://www.rfxn.com/downloads/maldetect-current.tar.gz
+
+# Extract and install
+tar -xzf maldetect-current.tar.gz
+MALDET_DIR=$(tar -tzf maldetect-current.tar.gz | head -1 | cut -f1 -d"/")
+cd "$MALDET_DIR"
+./install.sh
+
+# Configure maldet with secure settings
+cat > /usr/local/maldetect/conf.maldet << EOC
+# Linux Malware Detect v1.6.x
+# Configuration File
+
+# Enable Email Alerting (1 = enabled, 0 = disabled)
+email_alert="1"
+
+# Email Address in which you want to receive scan reports and alerts
+# Separate multiple email addresses with a space: "user@domain.com user2@domain.com"
+email_addr="${LOGWATCH_EMAIL:-root}"
+
+# Use with ClamAV (1 = enabled, 0 = disabled)
+clamav_scan="1"
+
+# Quarantine malicious files (1 = enabled, 0 = disabled)
+quarantine_hits="1"
+
+# Clean/Delete malicious files (1 = enabled, 0 = disabled)
+quarantine_clean="0"
+
+# Clean/Delete suspicious files (1 = enabled, 0 = disabled)
+quarantine_suspend_user="0"
+
+# Minimum userid value that can be suspended
+quarantine_suspend_user_minuid="500"
+
+# Enable Email Alerting for all scan users (1 = enabled, 0 = disabled)
+email_subj="[MALWARE] ${HOSTNAME}: Linux Malware Detection on \\\${domain_count} domains"
+
+# Use path names relative to a domain for cleaner reports
+email_ignore_clean="1"
+
+# Allow clean/delete operation to use signatures with HEX string matches below this value
+quar_hex_min_suspect="70"
+
+# The default find command to use, use of 'xargs' is required
+# for 'find -exec' to queue and optimize processing of find matches
+find_cmd="find \\\${scan_location} -type f -not -path '/proc/*' -not -path '/sys/*' -print0 | xargs -0 -P 10 -n 100"
+
+# The default basis for determining file system ownership of a file
+# should always be the username:group of the file/directory
+file_owner_lookup="1"
+
+# Size limit on files being scanned (in KB)
+max_filesize="10240"
+
+# When using the -r scan operation to scan root directory & user paths, the max directory depth
+# that will be scanned, beyond that will be ignored.
+maxdepth="15"
+
+# The maximum amount of file download attempts that will be made before giving up
+url_max_dl="3"
+
+# The curl command line that handles all remote file transfers,
+# adjust timeout and max-time to meet connectivity requirements.
+curl_timeout="30"
+curl_max_time="60"
+
+# The maximum number of child processes that maldet should fork to handle scan operations,
+# by default we fork one scan thread per available CPU.
+scan_max_process="5"
+
+# The maximum number of process operations that maldet should fork per signature in hex scan operations,
+# limit this to 2 to reduce CPU load at expense of scan speed.
+scan_max_process_hex="2"
+
+# Additional paths for daily cron scan
+scan_paths="/home /opt/polyserver /var/www"
+
+# Do not scan mounts/paths defined here
+scan_ignore_paths="/proc /sys /dev"
+
+# Total CPU usage threshold (percentage) at which scanning will be suspended until usage drops
+scan_cpumax="75"
+
+# Allow maldet to download and install updated signatures from rfxn.com
+autoupdate="1"
+
+# Daily automatic updates of malware signatures
+autoupdate_signatures="1"
+
+# Daily automatic updates of maldet
+autoupdate_version="1"
+
+# When defined, the update process will source this external file from
+# rfxn.com following the update if it exists. This is used to deploy
+# critical configuration settings to all installations.
+autoupdate_version_hashed="1"
+
+# Run weekly cronjob at specific day and time
+cron_weekly_day="2"  # 0 = Sunday, 1 = Monday, 2 = Tuesday, etc.
+cron_weekly_hour="3" # Hour in 24h format
+cron_daily_hour="3"  # Hour in 24h format
+EOC
+
+# Create maldet daily scan script with notifications
+cat > /etc/cron.daily/maldet-scan << 'EOF'
+#!/bin/bash
+# Daily maldet scan script
+
+# Log file
+LOGFILE="/var/log/maldet/daily_scan.log"
+
+# Make sure log directory exists
+mkdir -p /var/log/maldet
+
+# Start the log
+echo "Linux Malware Detect daily scan started at $(date)" > $LOGFILE
+
+# Run scan on important directories
+/usr/local/sbin/maldet --scan-all /home /opt/polyserver /var/www >> $LOGFILE 2>&1
+
+# Finish log
+echo "Linux Malware Detect daily scan completed at $(date)" >> $LOGFILE
+
+# Check for detections
+if grep -q "malware hits" $LOGFILE; then
+    HITS=$(grep "malware hits" $LOGFILE | grep -o '[0-9]\+')
+    if [ "$HITS" -gt 0 ]; then
+        # Send email alert if malware found
+        cat $LOGFILE | mail -s "⚠️ MALWARE WARNING: $HITS malware hits found on $(hostname)" root
+    fi
+fi
+EOF
+
+# Make scan script executable
+chmod 755 /etc/cron.daily/maldet-scan
+
+# Force initial maldet signature update
+/usr/local/sbin/maldet --update-sigs
+
+# Clean up
+cd /
+rm -rf /tmp/maldet
+
+# Create daily scan script
+cat > /etc/cron.daily/clamscan << 'EOF'
+#!/bin/bash
+LOGFILE="/var/log/clamav/daily_scan.log"
+DIRTOSCAN="/home /opt/polyserver /var/www"
+
+# Create log directory if it doesn't exist
+mkdir -p /var/log/clamav
+
+# Remove old logfile
+rm -f $LOGFILE
+
+# Start scanning
+echo "ClamAV daily scan started at $(date)" >> $LOGFILE
+clamscan -r -i $DIRTOSCAN >> $LOGFILE
+echo "ClamAV daily scan completed at $(date)" >> $LOGFILE
+
+# Send notification if viruses were found
+if grep -q "Infected files: [1-9]" $LOGFILE; then
+    VIRUS_COUNT=$(grep "Infected files:" $LOGFILE | cut -d: -f2 | tr -d ' ')
+    echo "WARNING - $VIRUS_COUNT VIRUS(ES) FOUND ON $(hostname)" | mail -s "VIRUS ALERT on $(hostname)" root
+fi
+EOF
+chmod 755 /etc/cron.daily/clamscan
+
+# Configure Logcheck
+echo "===== 9. Configuring Logcheck ====="
+# Set logcheck to use server level
+sed -i 's/^REPORTLEVEL=.*/REPORTLEVEL="server"/' /etc/logcheck/logcheck.conf
+
+# Set logcheck email recipient (same as logwatch)
+sed -i "s/^SENDMAILTO=.*/SENDMAILTO=\"${LOGWATCH_EMAIL:-root}\"/" /etc/logcheck/logcheck.conf
+
+# Set running frequency to daily (default is hourly)
+sed -i 's/^CRON_DAILY_RUN=.*/CRON_DAILY_RUN="true"/' /etc/logcheck/logcheck.conf
+sed -i 's/^CRON_HOURLY_RUN=.*/CRON_HOURLY_RUN="false"/' /etc/logcheck/logcheck.conf
+
+# Initialize AIDE (Advanced Intrusion Detection Environment)
+if [ "$DOCKER_MODE" = "false" ]; then
+    echo "Initializing AIDE database - this will take some time..."
+    aideinit
+else
+    echo "🐳 Skipping AIDE initialization in Docker mode"
+fi
+
+# Configure Audit Framework (auditd)
+echo "===== 10.1 Configuring Audit Framework ====="
+# Configure audit daemon
+cat > /etc/audit/auditd.conf << EOF
+#
+# This file controls the configuration of the audit daemon
+#
+
+local_events = yes
+write_logs = yes
+log_file = /var/log/audit/audit.log
+log_group = adm
+log_format = ENRICHED
+flush = INCREMENTAL_ASYNC
+freq = 50
+max_log_file = 8
+num_logs = 5
+priority_boost = 4
+disp_qos = lossy
+dispatcher = /sbin/audispd
+name_format = HOSTNAME
+##name = mydomain
+max_log_file_action = ROTATE
+space_left = 75
+space_left_action = SYSLOG
+verify_email = yes
+action_mail_acct = root
+admin_space_left = 50
+admin_space_left_action = SUSPEND
+disk_full_action = SUSPEND
+disk_error_action = SUSPEND
+use_libwrap = yes
+##tcp_listen_port = 60
+tcp_listen_queue = 5
+tcp_max_per_addr = 1
+##tcp_client_ports = 1024-65535
+tcp_client_max_idle = 0
+enable_krb5 = no
+krb5_principal = auditd
+##krb5_key_file = /etc/audit/audit.key
+distribute_network = no
+EOF
+
+# Configure audit rules
+cat > /etc/audit/rules.d/audit.rules << 'EOF'
+## auditd rules for enhanced security monitoring
+
+## First rule - delete all
+-D
+
+## Increase the buffers to survive stress events
+## Adjust buffer size based on system activity
+-b 8192
+
+## This determines how long to wait in burst of events
+--backlog_wait_time 0
+
+## Set failure mode to syslog
+-f 1
+
+# DNS lookup monitoring
+-w /etc/resolv.conf -p r -k dns_lookup
+-a always,exit -F arch=b64 -S connect -F a1=0x2 -F key=dns_lookup
+-a always,exit -F arch=b64 -S connect -F a1=0xA -F key=dns_lookup
+-a always,exit -F arch=b64 -S sendto -F a1=0x2 -F key=dns_lookup
+-a always,exit -F arch=b64 -S sendto -F a1=0xA -F key=dns_lookup
+-a always,exit -F arch=b64 -S execve -F exe=/usr/bin/dig -F key=dns_lookup
+-a always,exit -F arch=b64 -S execve -F exe=/usr/bin/nslookup -F key=dns_lookup
+-a always,exit -F arch=b64 -S execve -F exe=/usr/bin/getent -F key=dns_lookup
+
+## File System monitoring
+-w /etc/fstab -p wa -k filesystem_modifications
+-w /etc/group -p wa -k user_group_modifications
+-w /etc/shadow -p wa -k password_modifications
+-w /etc/security/opasswd -p wa -k password_modifications
+-w /etc/sudoers -p wa -k sudoers_modifications
+-w /etc/sudoers.d -p wa -k sudoers_modifications
+
+## Login monitoring
+-w /var/log/faillog -p wa -k login_failures
+-w /var/log/lastlog -p wa -k login_activity
+-w /var/run/faillock -p wa -k login_failures
+
+## Process and system activity
+-w /sbin/insmod -p x -k module_insertion
+-w /sbin/rmmod -p x -k module_removal
+-w /sbin/modprobe -p x -k module_insertion
+-a always,exit -F arch=b64 -S mount -k mount_operations
+-a always,exit -F arch=b32 -S mount -k mount_operations
+
+## System startup scripts
+-w /etc/init.d -p wa -k init_modifications
+-w /etc/systemd -p wa -k systemd_modifications
+
+## SSH configuration
+-w /etc/ssh/sshd_config -p wa -k sshd_config_modifications
+-w /etc/ssh/sshd_config.d -p wa -k sshd_config_modifications
+
+## Network configuration
+-w /etc/hosts -p wa -k hosts_file_modifications
+-w /etc/network/interfaces -p wa -k network_modifications
+
+## Web server (nginx)
+-w /etc/nginx/nginx.conf -p wa -k nginx_config
+-w /etc/nginx/conf.d -p wa -k nginx_config
+
+## Docker configuration monitoring
+-w /etc/docker/daemon.json -p wa -k docker_config
+-w /etc/docker -p wa -k docker_config
+
+## Application directories monitoring
+-w /opt/polyserver/config -p wa -k application_config_changes
+-w /opt/polyserver/scripts -p x -k application_script_execution
+
+## Critical command executions
+-a always,exit -F path=/usr/bin/curl -F perm=x -F key=data_exfiltration
+-a always,exit -F path=/usr/bin/wget -F perm=x -F key=data_exfiltration
+-a always,exit -F path=/usr/bin/base64 -F perm=x -F key=data_exfiltration
+-a always,exit -F path=/bin/nc -F perm=x -F key=data_exfiltration
+-a always,exit -F path=/bin/netcat -F perm=x -F key=data_exfiltration
+-a always,exit -F path=/usr/bin/ssh -F perm=x -F key=outbound_ssh
+-a always,exit -F path=/usr/bin/scp -F perm=x -F key=data_exfiltration
+-a always,exit -F path=/usr/bin/sftp -F perm=x -F key=data_exfiltration
+
+## AppArmor (Debian's default MAC system)
+-w /etc/apparmor -p wa -k apparmor_modifications
+-w /etc/apparmor.d -p wa -k apparmor_modifications
+
+## Cron jobs
+-w /etc/cron.allow -p wa -k cron_modifications
+-w /etc/cron.deny -p wa -k cron_modifications
+-w /etc/cron.d -p wa -k cron_modifications
+-w /etc/cron.daily -p wa -k cron_modifications
+-w /etc/cron.hourly -p wa -k cron_modifications
+-w /etc/cron.monthly -p wa -k cron_modifications
+-w /etc/cron.weekly -p wa -k cron_modifications
+-w /etc/crontab -p wa -k cron_modifications
+
+## Security tools configuration
+-w /usr/local/maldetect/conf.maldet -p wa -k security_tool_config
+-w /etc/rkhunter.conf -p wa -k security_tool_config
+-w /etc/default/clamav-daemon -p wa -k security_tool_config
+-w /etc/clamav/clamd.conf -p wa -k security_tool_config
+
+# User modifications monitoring
+-w /etc/passwd -p wa -k user_modify
+
+# Time change monitoring
+-a always,exit -F arch=b64 -S clock_settime -F key=changetime
+-a always,exit -F arch=b32 -S clock_settime -F key=changetime
+
+## Monitor Docker socket for access
+-w /var/run/docker.sock -p rwa -k docker_socket_access
+
+## Monitor for privilege escalation
+-a always,exit -F arch=b64 -S setuid -S setgid -F exit=0 -k privilege_escalation
+-a always,exit -F arch=b32 -S setuid -S setgid -F exit=0 -k privilege_escalation
+
+## Detect unauthorized attempts to access restricted directories
+-a always,exit -F dir=/root -F perm=r -F auid>=1000 -F key=unauthorized_access
+-a always,exit -F dir=/etc/ssl/private -F perm=r -F auid>=1000 -F key=unauthorized_access
+
+## Detect changes to backup scripts
+-w /mnt/backup/backups -p wa -k backup_changes
+
+## File integrity for binaries (limited to critical ones to reduce noise)
+-w /usr/bin/sudo -p wa -k binary_modifications
+-w /usr/bin/docker -p wa -k binary_modifications
+-w /usr/bin/ssh -p wa -k binary_modifications
+-w /usr/bin/nginx -p wa -k binary_modifications
+-w /usr/bin/maldet -p wa -k binary_modifications
+
+## Detect attempts to alter logs
+-w /var/log -p wa -k log_tampering
+
+## Make the configuration immutable until next reboot (uncomment if needed)
+## WARNING: You will need to reboot to make changes after enabling this option
+#-e 2
+EOF
+
+# Create daily audit report script
+cat > /etc/cron.daily/audit-report << 'EOF'
+#!/bin/bash
+# Daily audit report script
+
+# Set variables
+DATE=$(date +%Y-%m-%d)
+REPORT_DIR="/var/log/audit/reports"
+LOG_FILE="/var/log/audit/audit.log"
+MAIL_RECIPIENT="root"
+HOSTNAME=$(hostname)
+
+# Create report directory if it doesn't exist
+mkdir -p $REPORT_DIR
+
+# Generate report filename
+REPORT_FILE="${REPORT_DIR}/audit-report-${DATE}.txt"
+
+# Start report
+echo "===============================================================" > $REPORT_FILE
+echo "Audit Report for $HOSTNAME on $DATE" >> $REPORT_FILE
+echo "===============================================================" >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+
+# System Summary
+echo "SYSTEM SUMMARY" >> $REPORT_FILE
+echo "===============" >> $REPORT_FILE
+uname -a >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+echo "Uptime: $(uptime)" >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+
+# General Summary Report
+echo "GENERAL SUMMARY" >> $REPORT_FILE
+echo "===============" >> $REPORT_FILE
+ausearch --start today --end now | aureport --summary -i >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+
+# Authentication Report
+echo "AUTHENTICATION EVENTS" >> $REPORT_FILE
+echo "====================" >> $REPORT_FILE
+ausearch --start today --end now | aureport --auth --summary -i >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+
+# User Modification Events
+echo "USER MODIFICATION EVENTS" >> $REPORT_FILE
+echo "=======================" >> $REPORT_FILE
+ausearch -k user_modify --start today --end now -i >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+
+# Executable Summary
+echo "EXECUTABLE SUMMARY" >> $REPORT_FILE
+echo "=================" >> $REPORT_FILE
+ausearch --start today --end now | aureport --executable --summary -i >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+
+# Suspicious Command Executions
+echo "SUSPICIOUS COMMAND EXECUTIONS" >> $REPORT_FILE
+echo "============================" >> $REPORT_FILE
+ausearch -k data_exfiltration --start today --end now -i >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+
+# File Modification Events
+echo "CONFIG FILE MODIFICATION EVENTS" >> $REPORT_FILE
+echo "=============================" >> $REPORT_FILE
+ausearch -k sshd_config_modifications --start today --end now -i >> $REPORT_FILE
+ausearch -k nginx_config --start today --end now -i >> $REPORT_FILE
+ausearch -k docker_config --start today --end now -i >> $REPORT_FILE
+ausearch -k application_config_changes --start today --end now -i >> $REPORT_FILE
+ausearch -k security_tool_config --start today --end now -i >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+
+# Privilege Escalation
+echo "PRIVILEGE ESCALATION EVENTS" >> $REPORT_FILE
+echo "=========================" >> $REPORT_FILE
+ausearch -k privilege_escalation --start today --end now -i >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+
+# Unauthorized Access Attempts
+echo "UNAUTHORIZED ACCESS ATTEMPTS" >> $REPORT_FILE
+echo "==========================" >> $REPORT_FILE
+ausearch -k unauthorized_access --start today --end now -i >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+
+# Binary Modifications
+echo "BINARY MODIFICATION EVENTS" >> $REPORT_FILE
+echo "=========================" >> $REPORT_FILE
+ausearch -k binary_modifications --start today --end now -i >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+
+# Docker Socket Access
+echo "DOCKER SOCKET ACCESS" >> $REPORT_FILE
+echo "===================" >> $REPORT_FILE
+ausearch -k docker_socket_access --start today --end now -i >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+
+# Audit System Status
+echo "AUDIT SYSTEM STATUS" >> $REPORT_FILE
+echo "==================" >> $REPORT_FILE
+auditctl -s >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+auditctl -l >> $REPORT_FILE
+echo "" >> $REPORT_FILE
+
+# Check for empty report (only headings) and add note if so
+if [ $(grep -v "^$\|^=\|^[A-Z]" $REPORT_FILE | wc -l) -eq 0 ]; then
+    echo "No significant audit events recorded for this period." >> $REPORT_FILE
+fi
+
+# Email report if there are significant events
+if grep -q "type=\|command=\|success=\|.*=yes\|modified\|executed" $REPORT_FILE; then
+    cat $REPORT_FILE | mail -s "Audit Report for $HOSTNAME - $DATE" $MAIL_RECIPIENT
+fi
+
+# Cleanup old reports (keep 30 days)
+find $REPORT_DIR -name "audit-report-*.txt" -mtime +30 -delete
+
+exit 0
+EOF
+
+chmod 750 /etc/cron.daily/audit-report
+
+# Enable and start auditd
+docker_systemctl enable auditd
+docker_systemctl restart auditd
+
+# Initial audit test
+if [ "$DOCKER_MODE" = "false" ]; then
+    echo "Testing audit system..."
+    auditctl -l
+else
+    echo "🐳 Skipping audit system test in Docker mode"
+fi
+
+# Create audit log rotation configuration
+cat > /etc/logrotate.d/auditd << EOF
+/var/log/audit/audit.log {
+    rotate 10
+    weekly
+    size 50M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    postrotate
+        docker_systemctl reload auditd > /dev/null 2>&1 || true
+    endscript
+}
+EOF
+
+# Configure ModSecurity WAF
+echo "===== 10.2 Configuring ModSecurity Web Application Firewall ====="
+if [ "$DOCKER_MODE" = "false" ]; then
+    # Install libmodsecurity3 for Debian
+    apt-get install -y libmodsecurity3 libmodsecurity-dev
+
+    # Enable ModSecurity in Nginx
+    mkdir -p /etc/nginx/modsec
+    cat > /etc/nginx/modsec/main.conf << EOF
+# Include the recommended configuration
+Include /etc/nginx/modsec/modsecurity.conf
+
+# Include OWASP Core Rule Set (CRS)
+Include /etc/nginx/modsec/owasp-crs/crs-setup.conf
+Include /etc/nginx/modsec/owasp-crs/rules/*.conf
+EOF
+
+    # Download OWASP CRS
+    mkdir -p /etc/nginx/modsec/owasp-crs
+    rm -rf /etc/nginx/modsec/owasp-crs
+    git clone https://github.com/coreruleset/coreruleset.git /etc/nginx/modsec/owasp-crs
+    cp /etc/nginx/modsec/owasp-crs/crs-setup.conf.example /etc/nginx/modsec/owasp-crs/crs-setup.conf
+
+    # Create application-agnostic ModSecurity configuration
+    cat > /etc/nginx/modsec/modsecurity.conf << EOF
+# ModSecurity configuration for PolyServer applications
+
+# -- Rule engine initialization ----------------------------------------------
+SecRuleEngine On
+
+# -- Request body handling ---------------------------------------------------
+SecRequestBodyAccess On
+SecRequestBodyLimit 13107200
+SecRequestBodyNoFilesLimit 131072
+SecRequestBodyInMemoryLimit 131072
+
+# Buffer response bodies
+SecResponseBodyAccess On
+SecResponseBodyMimeType text/plain text/html text/xml application/json
+SecResponseBodyLimit 1048576
+
+# -- Filesystem configuration ------------------------------------------------
+SecTmpDir /tmp/
+SecDataDir /tmp/
+
+# -- Audit log configuration -------------------------------------------------
+SecAuditEngine RelevantOnly
+SecAuditLogRelevantStatus "^(?:5|4(?!04))"
+SecAuditLogParts ABIJDEFHZ
+SecAuditLogType Serial
+SecAuditLog /var/log/nginx/modsec_audit.log
+
+# -- Debug log configuration -------------------------------------------------
+SecDebugLog /var/log/nginx/modsec_debug.log
+SecDebugLogLevel 1
+
+# -- Application specific exceptions ----------------------------------------
+# Add custom rules here for your specific applications
+# Examples:
+# SecRule REQUEST_URI "@beginsWith /api/" "id:1000,phase:1,pass,nolog,ctl:ruleRemoveById=942100"
+# SecRule REQUEST_URI "@beginsWith /admin/" "id:1001,phase:1,pass,nolog,ctl:ruleRemoveById=942100"
+EOF
+
+    # Configure Nginx to use ModSecurity
+    cat > /etc/nginx/conf.d/modsecurity.conf << EOF
+modsecurity on;
+modsecurity_rules_file /etc/nginx/modsec/main.conf;
+EOF
+else
+    echo "🐳 Skipping ModSecurity configuration in Docker mode (module not available)"
+fi
+
+# Install comprehensive nginx security configuration
+echo "===== 10.2.1 Installing Nginx Security Configuration ====="
+
+# Create security configuration for blocking common attacks
+cat > /etc/nginx/conf.d/security.conf << 'EOF'
+# Nginx Security Configuration for PolyServer Applications
+# This file contains security rules to block common attacks and sensitive file access
+
+# Hide nginx version information
+server_tokens off;
+
+# Block access to sensitive files and directories
+location ~ /\. {
+    # Block access to hidden files (.git, .env, .htaccess, etc.)
+    access_log off;
+    log_not_found off;
+    deny all;
+}
+
+location ~ ^/(\.well-known/acme-challenge/)(.*)$ {
+    # Allow Let's Encrypt ACME challenge (exception to hidden files rule)
+    allow all;
+}
+
+# Block access to common sensitive files
+location ~* \.(env|git|gitignore|gitmodules|htaccess|htpasswd|ini|log|sh|sql|conf|config|bak|backup|swp|tmp)$ {
+    access_log off;
+    log_not_found off;
+    deny all;
+}
+
+# Block access to README and documentation files
+location ~* ^/(readme|README|changelog|CHANGELOG|license|LICENSE|install|INSTALL|upgrade|UPGRADE|todo|TODO).*$ {
+    access_log off;
+    log_not_found off;
+    deny all;
+}
+
+# Block access to common admin paths (application-agnostic protection)
+location ~* ^/(admin|administrator|wp-admin|wp-login|wp-config|wp-content|wp-includes|wp-json|xmlrpc|phpmyadmin|pma|mysql|adminer|cpanel|plesk|webmail|roundcube|squirrelmail)(.*)$ {
+    access_log off;
+    log_not_found off;
+    return 444; # Close connection without response
+}
+
+# Block access to common CMS and framework paths
+location ~* ^/(drupal|joomla|wordpress|magento|prestashop|opencart|typo3|concrete5|modx|craft|laravel|symfony|codeigniter|cakephp|zend|yii)(.*)$ {
+    access_log off;
+    log_not_found off;
+    return 444;
+}
+
+# Block access to common development/testing paths
+location ~* ^/(test|tests|testing|dev|development|staging|demo|backup|backups|old|new|temp|tmp|cache|logs|vendor|node_modules|bower_components)(.*)$ {
+    access_log off;
+    log_not_found off;
+    return 444;
+}
+
+# Block access to common exploit paths
+location ~* ^/(shell|webshell|c99|c100|r57|r99|backdoor|hack|hacked|exploit|virus|trojan|worm|bot|zombie|scanner|scan|probe|brute|force|attack)(.*)$ {
+    access_log off;
+    log_not_found off;
+    return 444;
+}
+
+# Block requests for non-existent scripts that are commonly probed
+location ~* \.(asp|aspx|jsp|cgi|pl|py|rb|php|php3|php4|php5|phtml|shtml)$ {
+    access_log off;
+    log_not_found off;
+    return 444;
+}
+
+# Block common vulnerability scanners and bad user agents
+if ($http_user_agent ~* (nikto|sqlmap|fimap|nessus|openvas|nmap|masscan|zmap|zap|burp|netsparker|acunetix|appscan|webscarab|w3af|skipfish|wapiti|whatweb|gobuster|dirb|dirbuster|ffuf|feroxbuster|nuclei|httpx|subfinder)) {
+    access_log off;
+    return 444;
+}
+
+# Block empty user agents and common bot patterns
+if ($http_user_agent ~ ^$) {
+    access_log off;
+    return 444;
+}
+
+# Block suspicious referrers
+if ($http_referer ~* (babes|click|diamond|forsale|girl|jewelry|love|nudit|organic|poker|porn|sex|teen|video|webcam|zippo)) {
+    access_log off;
+    return 444;
+}
+
+# Block requests with suspicious query strings
+if ($args ~* (\.\./|<script|GLOBALS|globals|javascript:|vbscript:|onload|onerror|onclick)) {
+    access_log off;
+    return 444;
+}
+
+# Block SQL injection attempts in query strings
+if ($args ~* (union|select|insert|delete|update|drop|create|alter|exec|execute|script|javascript|vbscript)) {
+    access_log off;
+    return 444;
+}
+EOF
+
+# Create proxy parameters file for reusable proxy settings
+cat > /etc/nginx/conf.d/proxy_params << 'EOF'
+# Common proxy parameters for applications
+# This file contains reusable proxy settings
+
+# Timeout settings
+proxy_connect_timeout 90s;
+proxy_send_timeout 240s;
+proxy_read_timeout 240s;
+
+# Use HTTP/1.1 for proxying
+proxy_http_version 1.1;
+
+# Enable WebSockets support
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";
+
+# Pass important headers for proper operation
+proxy_set_header Host $http_host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header X-Forwarded-Host $http_host;
+proxy_set_header X-Forwarded-Port $server_port;
+
+# Performance optimizations
+proxy_buffering off;
+proxy_request_buffering off;
+proxy_cache_bypass $http_upgrade;
+proxy_redirect off;
+
+# Security settings
+proxy_hide_header X-Powered-By;
+proxy_hide_header Server;
+EOF
+
+# Set proper permissions
+chmod 644 /etc/nginx/conf.d/security.conf
+chmod 644 /etc/nginx/conf.d/proxy_params
+
+echo "Nginx security configuration installed"
+
+# Configure AppArmor for applications
+echo "===== 10.3 Setting up AppArmor for applications ====="
+echo "AppArmor profile templates are available in /etc/apparmor.d/"
+echo "Customize application-specific profiles as needed for your deployments"
+
+# Configure Suricata IDS
+echo "===== 10.4 Setting up Suricata Network IDS ====="
+if [ "$DOCKER_MODE" = "false" ]; then
+    # Configure network interface
+    INTERFACE=$(ip -o -4 route show to default | awk '{print $5}')
+
+    # Basic Suricata configuration 
+    cat > /etc/suricata/suricata.yaml << EOF
+%YAML 1.1
+---
+# Suricata configuration for PolyServer applications
+vars:
+  address-groups:
+    HOME_NET: "[192.168.0.0/16,10.0.0.0/8,172.16.0.0/12]"
+    EXTERNAL_NET: "!$HOME_NET"
+    
+  port-groups:
+    HTTP_PORTS: "80"
+    HTTPS_PORTS: "443"
+    DB_PORTS: "3306,5432,1521,1433,27017"
+    
+default-rule-path: /etc/suricata/rules
+rule-files:
+  - suricata.rules
+  - application-custom.rules
+
+af-packet:
+  - interface: $INTERFACE
+    cluster-id: 99
+    cluster-type: cluster_flow
+    defrag: yes
+    use-mmap: yes
+    tpacket-v3: yes
+    
+# Enable basic alerts
+detect-engine:
+  profile: medium
+  sgh-mpm-context: auto
+  inspection-recursion-limit: 3000
+  
+# Log configuration
+outputs:
+  - fast:
+      enabled: yes
+      filename: fast.log
+      
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: eve.json
+      types:
+        - alert
+        - http
+        - dns
+        - tls
+        - flow
+EOF
+
+# Create custom rules template for applications
+cat > /etc/suricata/rules/application-custom.rules << EOF
+# Custom application-specific rules
+# Add your application-specific Suricata rules here
+
+# Example: Alert on potential SQL injection attempts
+# alert http \$EXTERNAL_NET any -> \$HOME_NET any (msg:"APP SQL Injection Attempt"; flow:established,to_server; http.uri; content:"/api/"; nocase; pcre:"/(\%27)|(\')|(\-\-)|(%23)|(#)/i"; classtype:web-application-attack; sid:3000001; rev:1;)
+
+# Example: Alert on brute force attempts 
+# alert http \$EXTERNAL_NET any -> \$HOME_NET any (msg:"APP Authentication Brute Force Attempt"; flow:established,to_server; http.uri; content:"/login"; threshold:type threshold, track by_src, count 5, seconds 60; classtype:attempted-admin; sid:3000002; rev:1;)
+EOF
+
+# Set up Suricata log rotation
+cat > /etc/logrotate.d/suricata << EOF
+/var/log/suricata/*.log /var/log/suricata/*.json {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+    postrotate
+        systemctl restart suricata
+    endscript
+}
+EOF
+
+# Install Trivy for container scanning
+curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+# Create directory for security logs
+mkdir -p /var/log/security/trivy
+
+# Create cron job for daily container scanning
+cat > /etc/cron.daily/trivy-scan << 'EOF'
+#!/bin/bash
+# Daily container vulnerability scanning
+
+REPORT_DIR="/var/log/security/trivy"
+DATE=$(date +%Y-%m-%d)
+MAIL_RECIPIENT="root"
+HOSTNAME=$(hostname)
+TRIVYLOG="${REPORT_DIR}/trivy-${DATE}.log"
+
+# Create report directory if it doesn't exist
+mkdir -p $REPORT_DIR
+
+# Update Trivy vulnerability database
+/usr/local/bin/trivy image --download-db-only > /dev/null 2>&1
+
+# Start log file
+echo "===== Container Vulnerability Scan Report: $DATE =====" > $TRIVYLOG
+
+# Scan running containers
+CONTAINERS=$(docker ps --format "{{.Image}}")
+for IMAGE in $CONTAINERS; do
+    echo "Scanning image: $IMAGE" >> $TRIVYLOG
+    /usr/local/bin/trivy image --no-progress --severity HIGH,CRITICAL $IMAGE >> $TRIVYLOG
+    echo "-----------------------------------------" >> $TRIVYLOG
+done
+
+# Email report if vulnerabilities found
+if grep -q "CRITICAL\|HIGH" $TRIVYLOG; then
+    cat $TRIVYLOG | mail -s "⚠️ CONTAINER VULNERABILITIES: Found on $HOSTNAME" $MAIL_RECIPIENT
+fi
+
+# Cleanup old reports
+find $REPORT_DIR -name "trivy-*.log" -mtime +30 -delete
+EOF
+
+chmod 755 /etc/cron.daily/trivy-scan
+
+    # Enable and start Suricata
+    systemctl enable suricata
+    systemctl start suricata
+else
+    echo "🐳 Skipping Suricata configuration in Docker mode"
+fi
+
+# Configure Logwatch
+echo "===== 10. Configuring Logwatch ====="
+mkdir -p /var/cache/logwatch
+
+# Create Logwatch configuration
+cat > /etc/logwatch/conf/logwatch.conf << EOF
+# Logwatch Configuration
+
+# Default logwatch output format
+Output = mail
+
+# Default person to mail reports to
+MailTo = ${LOGWATCH_EMAIL:-root}
+
+# Default logwatch format
+Format = html
+
+# Default range
+Range = yesterday
+
+# Default detail level
+Detail = Med
+
+# Include hardware sensors in output
+Service = zz-lm_sensors
+
+# Support for lm_sensors data
+Service = zz-disk_space
+
+# Always show empty sections
+Show_Empty_Sections = yes
+EOF
+
+# Create custom service for lm_sensors
+mkdir -p /etc/logwatch/scripts/services
+cat > /etc/logwatch/scripts/services/zz-lm_sensors << 'EOF'
+#!/bin/bash
+echo "Hardware Sensor Information:"
+echo ""
+sensors | grep -v "Adapter:" | grep -v "^$" | sed -e 's/^/   /'
+echo ""
+echo "Disk Temperature:"
+echo ""
+hddtemp /dev/sd? 2>/dev/null | sed -e 's/^/   /' || echo "   No disk temperature data available"
+EOF
+chmod 755 /etc/logwatch/scripts/services/zz-lm_sensors
+
+# Create service definition
+mkdir -p /etc/logwatch/conf/services
+cat > /etc/logwatch/conf/services/zz-lm_sensors.conf << EOF
+# Logwatch configuration file for lm_sensors
+
+Title = "Hardware Sensors"
+EOF
+
+# Configure RKHunter
+echo "===== 10. Configuring RKHunter ====="
+if [ "$DOCKER_MODE" = "false" ]; then
+    # Update rkhunter database
+    rkhunter --update
+
+    # Set up RKHunter properties
+    cat > /etc/rkhunter.conf.local << EOF
+# RKHunter configuration overrides
+
+# Update database on a daily basis
+UPDATE_MIRRORS=1
+MIRRORS_MODE=0
+UPDATE_MIRRORS=1
+WEB_CMD="DISABLED"
+
+# Mail options - same email as logwatch
+MAIL-ON-WARNING=${LOGWATCH_EMAIL:-root}
+COPY_LOG_ON_ERROR=1
+
+# Scan options
+SCAN_DEV_DIR=1
+SCAN_WORLD_WRITABLE=1
+ALLOW_SSH_ROOT_USER=no
+XINETD_ALLOWED_SVC=
+DISABLE_CHECK_PORTS=0
+
+# Allow certain whitelisted files
+#ALLOWHIDDENDIR=/dev/.udev
+#ALLOWHIDDENFILE=/dev/.blkid.tab
+EOF
+
+# Create RKHunter scan script
+cat > /etc/cron.daily/rkhunter-scan << 'EOF'
+#!/bin/bash
+# Run a daily RKHunter scan
+
+# Log file
+LOGFILE="/var/log/rkhunter/daily_scan.log"
+
+# Create log directory if it doesn't exist
+mkdir -p /var/log/rkhunter
+
+# Clear previous log
+echo "RKHunter daily scan started at $(date)" > $LOGFILE
+
+# Run the scan
+rkhunter --check --skip-keypress --report-warnings-only >> $LOGFILE 2>&1
+
+# Add completion time
+echo "RKHunter daily scan completed at $(date)" >> $LOGFILE
+
+# Check for warnings and alert if found
+if grep -q "Warning:" $LOGFILE; then
+    WARNING_COUNT=$(grep -c "Warning:" $LOGFILE)
+    ADMIN_EMAIL=$(grep "^MAIL-ON-WARNING=" /etc/rkhunter.conf.local | cut -d= -f2)
+    # If no email is set, use root
+    if [ -z "$ADMIN_EMAIL" ]; then
+        ADMIN_EMAIL="root"
+    fi
+    
+    # Send email alert
+    cat $LOGFILE | mail -s "⚠️ ROOTKIT WARNING: ${WARNING_COUNT} suspicious items found on $(hostname)" "$ADMIN_EMAIL"
+fi
+EOF
+chmod 755 /etc/cron.daily/rkhunter-scan
+
+    # Run initial scan to establish baseline
+    echo "Running initial RKHunter scan to create baseline..."
+    rkhunter --propupd
+    rkhunter --check --skip-keypress --report-warnings-only
+else
+    echo "🐳 Skipping RKHunter configuration in Docker mode"
+fi
+
+# Configure chkrootkit daily scan
+cat > /etc/cron.daily/chkrootkit-scan << 'EOF'
+#!/bin/bash
+# Run a daily chkrootkit scan
+
+# Log file
+LOGFILE="/var/log/chkrootkit/daily_scan.log"
+
+# Create log directory if it doesn't exist
+mkdir -p /var/log/chkrootkit
+
+# Clear previous log
+echo "chkrootkit daily scan started at $(date)" > $LOGFILE
+
+# Run the scan
+chkrootkit -q >> $LOGFILE 2>&1
+
+# Add completion time
+echo "chkrootkit daily scan completed at $(date)" >> $LOGFILE
+
+# Check for warnings and alert if found (chkrootkit outputs "INFECTED" when it finds something)
+if grep -q "INFECTED" $LOGFILE; then
+    ADMIN_EMAIL=$(grep "^MAIL-ON-WARNING=" /etc/rkhunter.conf.local | cut -d= -f2)
+    # If no email is set, use root
+    if [ -z "$ADMIN_EMAIL" ]; then
+        ADMIN_EMAIL="root"
+    fi
+    
+    # Send email alert
+    cat $LOGFILE | mail -s "⚠️ ROOTKIT WARNING: Possible rootkit found on $(hostname)" "$ADMIN_EMAIL"
+fi
+EOF
+chmod 755 /etc/cron.daily/chkrootkit-scan
+
+# ========= Block Storage Setup =========
+echo "===== 7. Setting up block storage for backups ====="
+if [ -e "$BLOCK_DEVICE" ]; then
+  mkdir -p $BACKUP_MOUNT
+  
+  # Check if the device is already formatted
+  if ! blkid $BLOCK_DEVICE &>/dev/null; then
+    echo "Formatting block storage device"
+    mkfs.ext4 $BLOCK_DEVICE
+  fi
+  
+  # Add to fstab for auto-mounting
+  if ! grep -q "$BACKUP_MOUNT" /etc/fstab; then
+    echo "$BLOCK_DEVICE $BACKUP_MOUNT ext4 defaults,noatime 0 2" >> /etc/fstab
+  fi
+  
+  # Mount the device
+  mount $BACKUP_MOUNT || true
+  
+  # Create backup directories
+  mkdir -p $BACKUP_MOUNT/backups
+  chmod 750 $BACKUP_MOUNT/backups
+fi
+
+# ========= Docker Installation =========
+echo "===== 8. Installing Docker and Docker Compose ====="
+if [ "$DOCKER_MODE" = "false" ]; then
+    apt-get install -y apt-transport-https ca-certificates curl software-properties-common gnupg lsb-release
+
+    # Add Docker repository for Debian
+    curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+    apt-get update
+    apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+    # Start Docker
+    docker_systemctl enable docker
+    docker_systemctl start docker
+
+    # Add user to Docker group
+    usermod -aG docker $USERNAME
+
+    # Docker security hardening
+    cat > /etc/docker/daemon.json << EOF
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  },
+  "live-restore": true,
+  "userland-proxy": false,
+  "no-new-privileges": true,
+  "icc": false
+}
+EOF
+
+    docker_systemctl restart docker
+else
+    echo "🐳 Skipping Docker installation in Docker mode"
+fi
+
+# ========= Install Netdata Monitoring =========
+echo "===== 8.1 Installing Netdata monitoring ====="
+if [ "$DOCKER_MODE" = "false" ]; then
+    # Install Netdata using the official installation script
+    bash <(curl -Ss https://my-netdata.io/kickstart.sh) --dont-wait --non-interactive
+
+    # Configure Netdata
+    cat > /etc/netdata/netdata.conf << 'EOF'
+[global]
+    # Bind to localhost only for security (access via SSH tunnel or Nginx proxy)
+    bind socket to IP = 127.0.0.1
+    default port = 19999
+    
+    # Set timezone
+    timezone = Europe/Berlin
+    
+    # Security settings
+    run as user = netdata
+    
+    # Performance settings  
+    page cache size = 32
+    dbengine multihost disk space = 256
+    
+[web]
+    # Disable web GUI authentication (since we bind to localhost only)
+    web files owner = root
+    web files group = netdata
+    
+[plugins]
+    # Enable useful plugins
+    cgroups = yes
+    tc = no
+    idlejitter = no
+    
+EOF
+
+    # Enable and start Netdata
+    docker_systemctl enable netdata
+    docker_systemctl start netdata
+
+    # Create Netdata log rotation
+    cat > /etc/logrotate.d/netdata << 'EOF'
+/var/log/netdata/*.log {
+    daily
+    rotate 14
+    missingok
+    notifempty
+    compress
+    delaycompress
+    postrotate
+        systemctl reload netdata > /dev/null 2>&1 || true
+    endscript
+}
+EOF
+
+    echo "Netdata monitoring installed and configured"
+else
+    echo "🐳 Skipping Netdata configuration in Docker mode"
+fi
+
+# ========= Setup Directories =========
+echo "===== 9. Setting up PolyServer directories ====="
+mkdir -p /opt/polyserver/{data,backups,config,scripts}
+chown -R $USERNAME:$USERNAME /opt/polyserver
+chmod -R 750 /opt/polyserver
+
+# ========= Setup Unbound DNS Cache =========
+echo "===== 10. Setting up Unbound DNS cache ====="
+if [ "$DOCKER_MODE" = "false" ]; then
+    # Enable and start Unbound service
+    docker_systemctl enable unbound
+    docker_systemctl start unbound
+
+    # Configure DHCP client to preserve DNS settings
+    cat > /etc/dhcp/dhclient.conf << EOF
+# dhclient.conf - Configuration for DHCP client
+# This configuration preserves the DNS settings across DHCP renewals
+
+# Don't override the nameserver with the one provided by DHCP
+supersede domain-name-servers 127.0.0.1;
+
+# Request basic network configuration from DHCP server
+request subnet-mask, broadcast-address, time-offset, routers,
+        domain-name, domain-name-servers, domain-name-search,
+        host-name, netbios-name-servers, netbios-scope, interface-mtu,
+        ntp-servers;
+
+# Timeout settings
+timeout 60;
+retry 60;
+reboot 10;
+select-timeout 5;
+initial-interval 2;
+EOF
+
+# Update resolv.conf right now
+echo "nameserver 127.0.0.1" > /etc/resolv.conf
+
+# Configure system to use our DNS resolver (Debian networking)
+# Debian uses traditional /etc/network/interfaces or systemd-resolved
+# Make resolv.conf immutable to prevent DHCP from overwriting it
+chattr +i /etc/resolv.conf
+
+# Configure systemd-resolved to use our local DNS
+if systemctl is-active --quiet systemd-resolved; then
+  mkdir -p /etc/systemd/resolved.conf.d
+  cat > /etc/systemd/resolved.conf.d/local-dns.conf << EOF
+[Resolve]
+DNS=127.0.0.1
+FallbackDNS=8.8.8.8 1.1.1.1
+DNSSEC=yes
+DNSOverTLS=opportunistic
+Cache=yes
+EOF
+  systemctl restart systemd-resolved
+fi
+
+# Configure Unbound
+cat > /etc/unbound/unbound.conf.d/local.conf << EOF
+server:
+    # Bind to localhost only for security
+    interface: 127.0.0.1
+    access-control: 127.0.0.1 allow
+    
+    # Verbosity level (1 is standard)
+    verbosity: 1
+    
+    # Performance optimizations
+    prefetch: yes
+    cache-min-ttl: 3600      # Cache results for at least 1 hour
+    cache-max-ttl: 86400     # Maximum cache time = 1 day
+    msg-cache-size: 128m     # Increase cache size for faster responses
+    rrset-cache-size: 256m   # Cache DNS record sets
+    neg-cache-size: 64m      # Cache negative responses
+    
+    # Security settings
+    hide-identity: yes
+    hide-version: yes
+    use-caps-for-id: yes
+    qname-minimisation: yes
+    
+    # Logging settings
+    log-queries: no
+    log-replies: no
+    log-servfail: yes
+    logfile: "/var/log/unbound.log"
+    
+    # DNSSEC validation
+    auto-trust-anchor-file: "/var/lib/unbound/root.key"
+    val-clean-additional: yes
+
+# Forward queries to upstream DNS providers
+forward-zone:
+    name: "."
+    forward-addr: 8.8.8.8    # Google DNS
+    forward-addr: 1.1.1.1    # Cloudflare DNS
+EOF
+
+    # Restart Unbound service to apply changes
+    docker_systemctl restart unbound
+
+    # Create log file with proper permissions
+    touch /var/log/unbound.log
+    chmod 640 /var/log/unbound.log
+    chown unbound:adm /var/log/unbound.log
+
+    # Add log rotation configuration
+    cat > /etc/logrotate.d/unbound << EOF
+/var/log/unbound.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 640 unbound adm
+    postrotate
+        service unbound restart > /dev/null
+    endscript
+}
+EOF
+
+    # Test DNS resolution
+    echo "Testing DNS resolution through Unbound..."
+    dig @127.0.0.1 google.com | grep -A2 "ANSWER SECTION"
+else
+    echo "🐳 Skipping Unbound DNS cache setup in Docker mode"
+fi
+
+# ========= Now restart SSH with new configuration =========
+echo "===== 11. Restarting SSH to apply security settings ====="
+docker_systemctl restart sshd
+
+echo "===== 12. Optional DSGVO/GDPR Compliance Setup ====="
+echo "Setting up DSGVO/GDPR compliance framework..."
+
+# Copy DSGVO setup script to the scripts directory first
+mkdir -p /opt/polyserver/scripts
+if [ -f "/opt/polyserver/scripts/setup-dsgvo.sh" ]; then
+    DSGVO_SETUP_SCRIPT="/opt/polyserver/scripts/setup-dsgvo.sh"
+else
+    # Look for the script in the current directory structure
+    CURRENT_DIR=$(dirname "${BASH_SOURCE[0]}")
+    if [ -f "$CURRENT_DIR/setup-dsgvo.sh" ]; then
+        cp "$CURRENT_DIR/setup-dsgvo.sh" "/opt/polyserver/scripts/"
+        DSGVO_SETUP_SCRIPT="/opt/polyserver/scripts/setup-dsgvo.sh"
+        chmod +x "$DSGVO_SETUP_SCRIPT"
+    fi
+fi
+
+if [ -f "$DSGVO_SETUP_SCRIPT" ]; then
+    echo "Running DSGVO compliance setup..."
+    # Run non-interactively by providing default answers
+    echo "y" | bash "$DSGVO_SETUP_SCRIPT" || echo "DSGVO setup completed with warnings"
+else
+    echo "DSGVO setup script not found. You can run it later manually."
+    echo "Make sure to install DSGVO compliance files before running compliance checks."
+fi
+
+echo "===== 13. Setup complete! ====="
+echo "Server has been secured and Docker installed."
+echo "IMPORTANT: SSH is now running on port $SSH_PORT"
+echo "Use the following command to connect: ssh -p $SSH_PORT $USERNAME@your-server-ip"
+echo ""
+echo "Next steps:"
+echo "1. Edit /etc/dsgvo/contacts.conf to add your DPO contact information"
+echo "2. Complete /etc/dsgvo/data_inventory.json with your actual data"
+echo "3. Run compliance check: /opt/polyserver/scripts/dsgvo-compliance-check.sh"
+echo "4. Deploy your applications using the PolyServer foundation"

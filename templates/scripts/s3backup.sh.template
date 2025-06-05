@@ -1,0 +1,158 @@
+#!/bin/bash
+# s3backup.sh - Application backup script with S3 Object Storage upload
+# This script creates local backups and uploads them to S3-compatible storage
+
+set -e
+
+# ========= Configuration =========
+# Source environment variables
+if [ -f {{DEPLOY_DIR}}/config/.env ]; then
+  source {{DEPLOY_DIR}}/config/.env
+fi
+
+# Local backup directory
+LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-{{DEPLOY_DIR}}/backups}"
+DATA_DIR="${DATA_DIR:-{{DEPLOY_DIR}}/data}"
+APPLICATION_NAME="${APPLICATION_NAME:-application}"
+
+# S3 settings
+S3_BUCKET="${S3_BUCKET:-{{S3_BUCKET}}}"
+S3_PREFIX="${S3_PREFIX:-{{S3_PREFIX}}}"
+S3_ENDPOINT="${S3_ENDPOINT:-https://s3.{{S3_REGION}}.cloud.ovh.net}"
+S3_REGION="${S3_REGION:-{{S3_REGION}}}"
+
+# Retention settings (days to keep backups)
+LOCAL_RETENTION="${LOCAL_RETENTION:-{{BACKUP_RETENTION_DAYS}}}"
+S3_RETENTION="${S3_RETENTION:-{{BACKUP_RETENTION_DAYS}}}"
+
+# Timestamp format
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+BACKUP_NAME="${APPLICATION_NAME}_${TIMESTAMP}.tar.gz"
+LOG_FILE="${LOCAL_BACKUP_DIR}/backup_${TIMESTAMP}.log"
+
+# ========= Helper Functions =========
+log() {
+  echo "[$(date +"%Y-%m-%d %H:%M:%S")] $1" | tee -a "$LOG_FILE"
+}
+
+check_s3_configured() {
+  if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+    log "ERROR: AWS credentials not configured. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in your environment"
+    return 1
+  fi
+  
+  # Check if AWS CLI is installed
+  if ! command -v aws &> /dev/null; then
+    log "ERROR: AWS CLI not installed. Please install with: apt-get install -y awscli"
+    return 1
+  fi
+  
+  return 0
+}
+
+# Create backup directory if it doesn't exist
+mkdir -p "$LOCAL_BACKUP_DIR"
+
+# Start logging
+log "===== Starting ${APPLICATION_NAME} backup with S3 upload ====="
+
+# ========= Application-Specific Backup Logic =========
+# CUSTOMIZE THIS SECTION FOR YOUR APPLICATION TYPE
+
+# Example for file-based applications:
+if [ -d "$DATA_DIR" ]; then
+  log "Creating data directory backup"
+  tar -czf "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" -C "$DATA_DIR" .
+else
+  log "WARNING: Data directory $DATA_DIR not found"
+fi
+
+# Example for database applications (uncomment and customize):
+# For PostgreSQL:
+# pg_dump -h localhost -U app_user app_database | gzip > "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
+
+# For MySQL:
+# mysqldump -u app_user -p app_database | gzip > "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
+
+# For SQLite:
+# sqlite3 "${DATA_DIR}/app.db" ".backup '${LOCAL_BACKUP_DIR}/${APPLICATION_NAME}_${TIMESTAMP}.db'"
+# gzip -f "${LOCAL_BACKUP_DIR}/${APPLICATION_NAME}_${TIMESTAMP}.db"
+
+# For containerized applications:
+# docker exec app_container backup_command
+
+# Encrypt the backup if encryption key is available
+if [ -n "${BACKUP_ENCRYPTION_KEY:-}" ]; then
+  log "Encrypting backup"
+  openssl enc -aes-256-cbc -salt -in "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" \
+    -out "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}.enc" -pass "pass:${BACKUP_ENCRYPTION_KEY}"
+  # Replace original with encrypted version
+  mv "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}.enc" "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
+  log "Backup encrypted with AES-256-CBC"
+fi
+
+# Report backup size
+BACKUP_SIZE=$(du -h "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" | cut -f1)
+log "Backup created: ${BACKUP_NAME} (${BACKUP_SIZE})"
+
+# ========= Upload to S3 Object Storage =========
+if check_s3_configured; then
+  log "Uploading backup to OVH Object Storage"
+  
+  # Set S3 endpoint for OVH
+  aws configure set default.s3.endpoint_url "${S3_ENDPOINT}"
+  
+  # Check if bucket exists, create if it doesn't
+  if ! aws s3 ls "s3://${S3_BUCKET}" --region "${S3_REGION}" &>/dev/null; then
+    log "Creating S3 bucket: ${S3_BUCKET}"
+    aws s3 mb "s3://${S3_BUCKET}" --region "${S3_REGION}"
+  fi
+  
+  # Upload backup file
+  aws s3 cp "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" "s3://${S3_BUCKET}/${S3_PREFIX}/${BACKUP_NAME}" \
+    --region "${S3_REGION}"
+  
+  if [ $? -eq 0 ]; then
+    log "Backup uploaded to s3://${S3_BUCKET}/${S3_PREFIX}/${BACKUP_NAME}"
+  else
+    log "ERROR: Failed to upload backup to S3"
+  fi
+  
+  # Cleanup old backups in S3
+  if [ -n "$S3_RETENTION" ] && [ "$S3_RETENTION" -gt 0 ]; then
+    log "Cleaning up S3 backups older than ${S3_RETENTION} days"
+    
+    # Get list of backups older than retention period
+    RETENTION_DATE=$(date -d "-${S3_RETENTION} days" +"%Y-%m-%d")
+    
+    # List objects and filter by date
+    aws s3api list-objects-v2 --bucket "${S3_BUCKET}" --prefix "${S3_PREFIX}/" \
+      --region "${S3_REGION}" --query "Contents[?LastModified<='${RETENTION_DATE}'].Key" \
+      --output text | while read -r KEY; do
+      
+      if [ -n "$KEY" ]; then
+        log "Deleting old S3 backup: ${KEY}"
+        aws s3 rm "s3://${S3_BUCKET}/${KEY}" --region "${S3_REGION}"
+      fi
+    done
+  fi
+  
+  # Count S3 backups
+  S3_COUNT=$(aws s3 ls "s3://${S3_BUCKET}/${S3_PREFIX}/" --region "${S3_REGION}" | wc -l)
+  log "S3 backups available: ${S3_COUNT}"
+else
+  log "WARN: S3 not configured or AWS CLI not installed, skipping S3 upload"
+fi
+
+# ========= Cleanup Old Local Backups =========
+# Local cleanup
+log "Cleaning up local backups older than ${LOCAL_RETENTION} days"
+find "${LOCAL_BACKUP_DIR}" -name "${APPLICATION_NAME}_*.tar.gz" -type f -mtime +${LOCAL_RETENTION} -delete
+find "${LOCAL_BACKUP_DIR}" -name "backup_*.log" -type f -mtime +${LOCAL_RETENTION} -delete
+
+# ========= Backup Verification =========
+# Count backups
+LOCAL_COUNT=$(find "${LOCAL_BACKUP_DIR}" -name "${APPLICATION_NAME}_*.tar.gz" | wc -l)
+log "Local backups available: ${LOCAL_COUNT}"
+
+log "===== Backup completed successfully ====="

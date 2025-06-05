@@ -1,0 +1,45 @@
+###############################################################################
+# Netdata alarm notification configuration
+
+# Note: This file is monitored by Netdata and will be reloaded automatically when changed.
+
+# Enable/disable sending discord notifications
+SEND_DISCORD="{{DISCORD_ENABLED}}"
+DISCORD_WEBHOOK_URL="{{DISCORD_WEBHOOK_URL}}"
+
+# Enable/disable sending slack notifications
+SEND_SLACK="{{SLACK_ENABLED}}"
+SLACK_WEBHOOK_URL="{{SLACK_WEBHOOK_URL}}"
+DEFAULT_RECIPIENT_SLACK="#monitoring"
+
+# Enable/disable sending telegram notifications
+SEND_TELEGRAM="{{TELEGRAM_ENABLED}}"
+TELEGRAM_BOT_TOKEN="{{TELEGRAM_BOT_TOKEN}}"
+TELEGRAM_CHAT_ID="{{TELEGRAM_CHAT_ID}}"
+
+# Enable/disable sending email notifications
+SEND_EMAIL="{{EMAIL_NOTIFICATION}}"
+# if a role has no recipients, an email will be sent to:
+DEFAULT_RECIPIENT_EMAIL="{{EMAIL_RECIPIENT}}"
+# email notifications require a configured SMTP server in the system
+# or a sendmail-like command (system specific)
+EMAIL_SENDER="{{EMAIL_SENDER}}"
+EMAIL_SERVER="{{EMAIL_SERVER}}"
+EMAIL_PORT="{{EMAIL_PORT}}"
+EMAIL_USERNAME="{{EMAIL_USERNAME}}"
+EMAIL_PASSWORD="{{EMAIL_PASSWORD}}"
+EMAIL_SSL="{{EMAIL_SSL}}"
+
+###############################################################################
+# Alarm roles
+# This section defines the alarm roles. Roles are used to group multiple
+# recipients for receiving notifications about specific alarms.
+# Each notification source can be configured to use a different role.
+
+# The default role for all alarms is 'sysadmin'.
+# If you don't define a DEFAULT_ROLES, the role 'sysadmin' will be used.
+DEFAULT_ROLES=(sysadmin)
+
+# Docker container alerts role
+role_docker_containers_state=(sysadmin)
+role_docker_container_unhealthy=(sysadmin)

@@ -1,0 +1,245 @@
+{
+  "metadata": {
+    "organization": "[Your Organization Name]",
+    "last_updated": "YYYY-MM-DD",
+    "updated_by": "[Name and Role]",
+    "version": "1.0",
+    "review_schedule": "Quarterly"
+  },
+  "data_categories": [
+    {
+      "id": "user_accounts",
+      "name": "Application User Accounts",
+      "description": "Personal data of users with access to applications",
+      "data_elements": [
+        {
+          "name": "Full name",
+          "purpose": "User identification",
+          "sensitivity": "personal",
+          "retention_period": "Duration of employment plus 1 year",
+          "location": "Application database",
+          "access_restrictions": "Admin users only"
+        },
+        {
+          "name": "Email address",
+          "purpose": "Authentication and notifications",
+          "sensitivity": "personal",
+          "retention_period": "Duration of employment plus 1 year",
+          "location": "Application database",
+          "access_restrictions": "Admin users only"
+        },
+        {
+          "name": "Password hash",
+          "purpose": "Authentication",
+          "sensitivity": "personal",
+          "retention_period": "Duration of employment plus 1 year",
+          "location": "Application database",
+          "access_restrictions": "Not directly accessible"
+        },
+        {
+          "name": "User activity logs",
+          "purpose": "Security and auditing",
+          "sensitivity": "personal",
+          "retention_period": "12 months",
+          "location": "Application logs",
+          "access_restrictions": "Admin users only"
+        }
+      ],
+      "legal_basis": "Legitimate interest (IT security)",
+      "data_subjects": "Employees, contractors"
+    },
+    {
+      "id": "customer_data",
+      "name": "Customer Information",
+      "description": "Personal data of customers accessible through application dashboards and reports",
+      "data_elements": [
+        {
+          "name": "Customer name",
+          "purpose": "Business relationship management",
+          "sensitivity": "personal",
+          "retention_period": "5 years after last transaction",
+          "location": "Connected database (specify)",
+          "access_restrictions": "Sales and marketing teams"
+        },
+        {
+          "name": "Contact information",
+          "purpose": "Business communications",
+          "sensitivity": "personal",
+          "retention_period": "5 years after last transaction",
+          "location": "Connected database (specify)",
+          "access_restrictions": "Sales and marketing teams"
+        },
+        {
+          "name": "Purchase history",
+          "purpose": "Business analytics",
+          "sensitivity": "personal",
+          "retention_period": "7 years (financial records)",
+          "location": "Connected database (specify)",
+          "access_restrictions": "Finance and sales teams"
+        }
+      ],
+      "legal_basis": "Contract fulfillment, legitimate interest",
+      "data_subjects": "Customers",
+      "special_categories": false
+    },
+    {
+      "id": "employee_data",
+      "name": "Employee Information",
+      "description": "Personal data of employees accessible through application HR dashboards",
+      "data_elements": [
+        {
+          "name": "Employee ID",
+          "purpose": "Employee identification",
+          "sensitivity": "personal",
+          "retention_period": "Duration of employment plus 3 years",
+          "location": "HR database",
+          "access_restrictions": "HR team and management"
+        },
+        {
+          "name": "Salary information",
+          "purpose": "Compensation management",
+          "sensitivity": "confidential",
+          "retention_period": "Duration of employment plus 10 years",
+          "location": "HR database",
+          "access_restrictions": "HR executives and finance only"
+        }
+      ],
+      "legal_basis": "Contract fulfillment, legal obligation",
+      "data_subjects": "Employees",
+      "special_categories": false
+    },
+    {
+      "id": "marketing_data",
+      "name": "Marketing Analytics Data",
+      "description": "Data about marketing campaign performance and customer segmentation",
+      "data_elements": [
+        {
+          "name": "Customer segments",
+          "purpose": "Marketing targeting",
+          "sensitivity": "business confidential",
+          "retention_period": "3 years",
+          "location": "Marketing database",
+          "access_restrictions": "Marketing team"
+        },
+        {
+          "name": "Campaign response data",
+          "purpose": "Marketing effectiveness analysis",
+          "sensitivity": "personal",
+          "retention_period": "2 years",
+          "location": "Marketing database",
+          "access_restrictions": "Marketing team"
+        }
+      ],
+      "legal_basis": "Legitimate interest, consent",
+      "data_subjects": "Customers, prospects",
+      "special_categories": false
+    }
+  ],
+  "third_party_recipients": [
+    {
+      "name": "[Backup Service Provider]",
+      "purpose": "Secure off-site backups",
+      "data_categories": ["user_accounts"],
+      "data_transfer_mechanism": "EU Standard Contractual Clauses",
+      "country": "Germany",
+      "security_measures": "Encryption at rest and in transit, access controls",
+      "dpa_date": "YYYY-MM-DD"
+    },
+    {
+      "name": "[Email Service Provider]",
+      "purpose": "Sending alert notifications",
+      "data_categories": ["user_accounts"],
+      "data_transfer_mechanism": "EU Standard Contractual Clauses",
+      "country": "Ireland",
+      "security_measures": "Encryption, access controls",
+      "dpa_date": "YYYY-MM-DD"
+    }
+  ],
+  "data_sources": [
+    {
+      "name": "CRM System",
+      "description": "Customer relationship management database",
+      "connection_details": "PostgreSQL database via JDBC connection",
+      "data_categories": ["customer_data"],
+      "refresh_frequency": "Daily",
+      "contains_personal_data": true
+    },
+    {
+      "name": "HR System",
+      "description": "Human resources database",
+      "connection_details": "MySQL database via JDBC connection",
+      "data_categories": ["employee_data"],
+      "refresh_frequency": "Daily",
+      "contains_personal_data": true
+    },
+    {
+      "name": "Marketing Platform",
+      "description": "Marketing analytics and campaign data",
+      "connection_details": "API integration",
+      "data_categories": ["marketing_data"],
+      "refresh_frequency": "Daily",
+      "contains_personal_data": true
+    }
+  ],
+  "retention_policies": [
+    {
+      "data_category": "user_accounts",
+      "retention_period": "Duration of employment plus 1 year",
+      "justification": "IT security and audit requirements",
+      "deletion_method": "Automated database purge",
+      "exceptions": "Legal holds"
+    },
+    {
+      "data_category": "customer_data",
+      "retention_period": "5-7 years depending on data type",
+      "justification": "Business and financial record requirements",
+      "deletion_method": "Automated database purge",
+      "exceptions": "Ongoing business relationship, legal claims"
+    }
+  ],
+  "access_controls": [
+    {
+      "group_name": "Administrators",
+      "description": "Full system access",
+      "accessible_data": ["All"],
+      "number_of_users": 2,
+      "review_frequency": "Quarterly"
+    },
+    {
+      "group_name": "Sales Team",
+      "description": "Access to sales and customer data",
+      "accessible_data": ["customer_data", "marketing_data"],
+      "number_of_users": 10,
+      "review_frequency": "Quarterly"
+    },
+    {
+      "group_name": "HR Team",
+      "description": "Access to HR analytics",
+      "accessible_data": ["employee_data"],
+      "number_of_users": 3,
+      "review_frequency": "Quarterly"
+    }
+  ],
+  "security_measures": [
+    {
+      "name": "Data encryption",
+      "description": "All data encrypted at rest and in transit",
+      "implementation_details": "AES-256 encryption, TLS 1.2+"
+    },
+    {
+      "name": "Access controls",
+      "description": "Role-based access with least privilege principle",
+      "implementation_details": "Application permissions system and database connection permissions"
+    },
+    {
+      "name": "Authentication",
+      "description": "Secure authentication for all users",
+      "implementation_details": "SSO integration with company directory, MFA enabled"
+    },
+    {
+      "name": "Auditing",
+      "description": "Comprehensive audit logging",
+      "implementation_details": "All data access and system changes logged"
+    }
+  ]
+}

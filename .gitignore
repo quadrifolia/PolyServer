@@ -1,0 +1,34 @@
+# Generated configuration files
+/config/
+/scripts/backup.sh
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+temp/
+tmp/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Development files
+/.idea
+
+# Claude Code files
+.claude/
+.claude.md
+
+# Local testing files
+/local-config
+/local-backup.sql
+/local-backup.db
+/local-backup.mv.db
+/nginx-conf

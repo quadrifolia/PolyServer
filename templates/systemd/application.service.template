@@ -1,0 +1,65 @@
+[Unit]
+Description={{APPLICATION_NAME}} Service
+Documentation={{APPLICATION_DOCS_URL}}
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{APPLICATION_USER}}
+Group={{APPLICATION_GROUP}}
+WorkingDirectory={{DEPLOY_DIR}}
+
+# Application-specific environment variables (customize per application)
+Environment="NODE_ENV={{NODE_ENV:-production}}"
+Environment="PORT={{APPLICATION_PORT:-3000}}"
+Environment="HOST={{APPLICATION_HOST:-127.0.0.1}}"
+
+# Common environment variables
+Environment="TZ={{TIMEZONE}}"
+
+# Service execution (customize command per application type)
+# Examples:
+# For Node.js: ExecStart=/usr/bin/node app.js
+# For PHP: ExecStart=/usr/bin/php-fpm
+# For Python: ExecStart=/usr/bin/python app.py
+ExecStart={{APPLICATION_EXEC_START}}
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Security hardening (application-agnostic)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths={{DEPLOY_DIR}}/data {{DEPLOY_DIR}}/logs {{DEPLOY_DIR}}/tmp
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete
+SystemCallArchitectures=native
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+PrivateDevices=true
+
+# Resource limits (adjust per application needs)
+LimitNOFILE=65536
+MemoryMax={{APPLICATION_MEMORY_MAX:-2G}}
+CPUQuota={{APPLICATION_CPU_QUOTA:-100%}}
+
+# Restart policy
+Restart=always
+RestartSec=30
+TimeoutStartSec=300
+TimeoutStopSec=30
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier={{APPLICATION_NAME}}
+
+[Install]
+WantedBy=multi-user.target

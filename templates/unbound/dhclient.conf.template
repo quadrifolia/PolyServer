@@ -1,0 +1,18 @@
+# dhclient.conf - Configuration for DHCP client
+# This configuration preserves the DNS settings across DHCP renewals
+
+# Don't override the nameserver with the one provided by DHCP
+supersede domain-name-servers 127.0.0.1;
+
+# Request basic network configuration from DHCP server
+request subnet-mask, broadcast-address, time-offset, routers,
+        domain-name, domain-name-servers, domain-search,
+        host-name, netbios-name-servers, netbios-scope, interface-mtu,
+        ntp-servers;
+
+# Timeout settings
+timeout 60;
+retry 60;
+reboot 10;
+select-timeout 5;
+initial-interval 2;

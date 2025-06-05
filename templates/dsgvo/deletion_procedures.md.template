@@ -1,0 +1,229 @@
+# Data Deletion Procedures
+
+This document outlines the procedures for securely deleting personal data from our Application deployment and connected data sources, in compliance with GDPR/DSGVO requirements.
+
+## Table of Contents
+
+1. [General Principles](#general-principles)
+2. [Deletion Scenarios](#deletion-scenarios)
+3. [Deletion Methods](#deletion-methods)
+4. [Roles and Responsibilities](#roles-and-responsibilities)
+5. [Deletion Procedures by Data Type](#deletion-procedures-by-data-type)
+6. [Verification Procedures](#verification-procedures)
+7. [Documentation Requirements](#documentation-requirements)
+8. [Handling Special Cases](#handling-special-cases)
+
+## General Principles
+
+Our data deletion procedures adhere to the following principles:
+
+1. **Completeness**: Ensure all instances of the data are deleted (including backups and cached copies)
+2. **Irreversibility**: Use methods that prevent recovery of deleted data
+3. **Verification**: Confirm successful deletion through appropriate checks
+4. **Documentation**: Maintain complete records of all deletion activities
+5. **Proportionality**: Use deletion methods appropriate to the sensitivity of the data
+6. **Minimal Disruption**: Execute deletions with minimal impact on business operations
+
+## Deletion Scenarios
+
+We execute data deletions in the following scenarios:
+
+1. **End of Retention Period**: When data reaches the end of its defined retention period
+2. **Data Subject Request**: When a data subject exercises their right to erasure
+3. **End of Purpose**: When the purpose for which the data was collected no longer applies
+4. **Contract Termination**: When a contractual basis for processing ends
+5. **Consent Withdrawal**: When a data subject withdraws consent
+6. **Legal Obligation**: When required by law or court order
+
+## Deletion Methods
+
+Depending on the data type and storage medium, we use the following deletion methods:
+
+| Method | Description | Use Case | Security Level |
+|--------|-------------|----------|---------------|
+| **Database Record Deletion** | SQL DELETE operations | Structured database data | Standard |
+| **Anonymization** | Replacing identifiers with anonymous values | When aggregate data must be retained | Standard |
+| **Truncation** | Removing portions of data | Partial data deletion | Standard |
+| **Secure Overwriting** | Overwriting data multiple times | File storage, sensitive data | High |
+| **Encryption Key Destruction** | Destroying encryption keys for encrypted data | Encrypted storage | Very High |
+| **Physical Destruction** | Physical destruction of storage media | End-of-life hardware | Very High |
+
+## Roles and Responsibilities
+
+| Role | Responsibilities |
+|------|------------------|
+| **Data Protection Officer** | Approving deletion procedures, ensuring compliance |
+| **IT Administrator** | Executing technical deletion procedures |
+| **Database Administrator** | Performing database deletions, configuring automated purging |
+| **Data Owner** | Authorizing deletions, confirming completion |
+| **Department Manager** | Ensuring proper implementation within department |
+
+## Deletion Procedures by Data Type
+
+### Application User Data
+
+1. **Identify the user account** in the Application application database
+2. **Document current access rights and group memberships**
+3. **Delete or anonymize the user record** in the Application database
+4. **Remove the user from all groups**
+5. **Delete associated activity logs** or replace user identifier with anonymized value
+6. **Verify deletion** by confirming the user no longer appears in the system
+
+```sql
+-- Example SQL for anonymizing a user in Application database
+UPDATE core_user
+SET first_name = 'Deleted',
+    last_name = 'User',
+    email = concat('deleted-', id, '@example.com'),
+    login_attributes = NULL,
+    updated_at = now()
+WHERE id = [user_id];
+```
+
+### Personal Data in Connected Databases
+
+1. **Identify all tables containing the data subject's information**
+2. **Document the current state** before deletion
+3. **Execute appropriate SQL statements** to delete or anonymize the data
+4. **Verify deletion** by running queries to confirm data removal
+5. **Document the deletion process** and results
+
+```sql
+-- Example SQL for anonymizing customer data
+UPDATE customers
+SET name = concat('Anonymized-', id),
+    email = concat('anonymous-', id, '@example.com'),
+    phone = NULL,
+    address = NULL
+WHERE customer_id = [customer_id];
+```
+
+### Saved Queries and Dashboards
+
+1. **Identify all saved queries and dashboards containing personal data**
+2. **Evaluate if modification or deletion is necessary**
+3. **Modify queries** to exclude personal data or use anonymized data
+4. **Delete queries** that cannot be modified appropriately
+5. **Update all associated dashboards**
+6. **Clear result caches**
+
+### Application Logs and Cache
+
+1. **Identify log files containing personal data**
+2. **Extract necessary information** for record-keeping (if applicable)
+3. **Delete or anonymize log entries**
+4. **Clear query result cache**
+5. **Verify logs no longer contain personal identifiers**
+
+### Backup Data
+
+1. **Identify all backups containing the data to be deleted**
+2. **Determine if selective deletion is possible**
+3. **If selective deletion is possible:**
+   - Restore backup to temporary environment
+   - Delete specific data
+   - Create new backup
+   - Replace old backup
+4. **If selective deletion is not possible:**
+   - Document justification for retention
+   - Ensure appropriate security measures
+   - Update deletion schedule for these backups
+
+## Verification Procedures
+
+After executing deletions, verification procedures must be performed:
+
+1. **Database Verification**: Run queries to confirm records no longer exist
+2. **User Interface Verification**: Check through Application UI that data is not accessible
+3. **Log Verification**: Examine logs to ensure personal identifiers are removed
+4. **Documentation**: Create verification reports with timestamps and methods used
+
+## Documentation Requirements
+
+For each deletion operation, document the following:
+
+1. **Deletion Request**: Origin, date, and scope of the deletion request
+2. **Approval**: Who authorized the deletion
+3. **Execution Details**: Date, time, method, and person responsible
+4. **Scope**: Specific data deleted and systems affected
+5. **Verification**: Confirmation of successful deletion and verification method
+6. **Exceptions**: Any data that could not be deleted and justification
+
+### Deletion Log Template
+
+```
+DELETION LOG
+============
+
+REFERENCE NUMBER: [DEL-YYYY-MM-DD-XX]
+DATE OF DELETION: [YYYY-MM-DD]
+EXECUTED BY: [Name and Role]
+APPROVED BY: [Name and Role]
+
+REQUEST DETAILS
+--------------
+Request type: [End of retention/Data subject request/etc.]
+Request date: [YYYY-MM-DD]
+Data subject: [Identifier or "Multiple" for batch deletions]
+Request reference: [If applicable]
+
+DELETED DATA
+-----------
+Data categories: [List of data categories]
+Systems affected: [List of systems]
+Deletion method(s): [Methods used]
+
+VERIFICATION
+-----------
+Verification method: [Methods used]
+Verification date: [YYYY-MM-DD]
+Verified by: [Name and Role]
+Results: [Success/Partial success with issues]
+
+EXCEPTIONS
+---------
+Data not deleted: [Description of exceptions]
+Reason: [Justification]
+Alternative measures: [What was done instead]
+Retention period: [How long the excepted data will be kept]
+
+NOTES
+-----
+[Any additional relevant information]
+```
+
+## Handling Special Cases
+
+### Technical Limitations
+
+When complete deletion is technically impossible:
+1. Document the limitation
+2. Implement best available alternative (e.g., anonymization)
+3. Implement compensating controls to protect the data
+4. Set future review date to check if new technical solutions become available
+
+### Legal Holds
+
+When data is subject to legal hold:
+1. Document the legal requirement
+2. Isolate the data to prevent normal processing
+3. Apply strict access controls
+4. Set review date aligned with legal requirement
+5. Resume normal deletion procedure when legal hold expires
+
+### Partial Deletions
+
+When only specific data elements must be deleted:
+1. Clearly identify the specific elements to delete
+2. Use targeted SQL queries or data manipulation to remove only these elements
+3. Verify that only the specified elements were deleted
+4. Document the partial deletion process
+
+### Archived Data
+
+For data in archives and cold storage:
+1. Document the location of archived data
+2. Assess the feasibility of selective deletion
+3. If selective deletion is not feasible, document full retention plan
+4. Ensure archived data has appropriate security controls
+5. Set review date for re-evaluation
