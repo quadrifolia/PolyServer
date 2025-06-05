@@ -48,16 +48,25 @@ cat > test-config/.env << EOF
 DEPLOY_USER=testuser
 DEPLOY_DIR=/opt/polyserver
 BASE_DOMAIN=localhost
-DEPLOY_HOST=localhost
+HOSTNAME=polyserver-test
 SSH_PORT=2222
 SSL_EMAIL=test@example.com
 LOGWATCH_EMAIL=admin@example.com
+
+# Deployment mode for testing (change to "docker" to test Docker mode)
+DEPLOYMENT_MODE=baremetal
+
+# Docker-specific settings
+DOCKER_NETWORK=polyserver-network
+BACKEND_HOST=127.0.0.1
+BACKEND_PORT=3000
 
 # Security settings
 BACKUP_RETENTION_DAYS=7
 ENABLE_FAIL2BAN=true
 ENABLE_MODSECURITY=true
 ENABLE_SURICATA=true
+RATE_LIMIT=10
 
 # Testing mode
 TESTING_MODE=true

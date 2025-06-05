@@ -1491,8 +1491,12 @@ if [ -e "$BLOCK_DEVICE" ]; then
 fi
 
 # ========= Docker Installation =========
-echo "===== 8. Installing Docker and Docker Compose ====="
-if [ "$DOCKER_MODE" = "false" ]; then
+# Check if we need Docker (deployment mode is "docker" or just always install for flexibility)
+DEPLOYMENT_MODE="{{DEPLOYMENT_MODE}}"
+if [ "$DEPLOYMENT_MODE" = "docker" ] || [ "$DOCKER_MODE" = "false" ]; then
+    echo "===== 8. Installing Docker and Docker Compose ====="
+    echo "Installing Docker for deployment mode: $DEPLOYMENT_MODE"
+    
     apt-get install -y apt-transport-https ca-certificates curl software-properties-common gnupg lsb-release
 
     # Add Docker repository for Debian
@@ -1524,8 +1528,19 @@ if [ "$DOCKER_MODE" = "false" ]; then
 EOF
 
     docker_systemctl restart docker
+    
+    if [ "$DEPLOYMENT_MODE" = "docker" ]; then
+        echo "Docker mode: Container orchestration ready for applications"
+        
+        # Create Docker networks for applications
+        docker network create polyserver-network 2>/dev/null || echo "Network polyserver-network already exists"
+        
+        # Create directories for Docker-managed volumes
+        mkdir -p /opt/polyserver/docker/{volumes,compose}
+        chown -R $USERNAME:$USERNAME /opt/polyserver/docker
+    fi
 else
-    echo "🐳 Skipping Docker installation in Docker mode"
+    echo "🐳 Skipping Docker installation (testing mode)"
 fi
 
 # ========= Install Netdata Monitoring =========
