@@ -38,7 +38,7 @@ mkdir -p "${OUTPUT_DIR}/unbound"
 source "$ENV_FILE"
 
 # Check deployment mode
-DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-docker}"
+DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-baremetal}"
 echo "Deployment mode: $DEPLOYMENT_MODE"
 
 # Function to replace variables in a template
@@ -84,14 +84,26 @@ fi
 # Generate base nginx configurations
 mkdir -p "${OUTPUT_DIR}/nginx/conf.d"
 
-# Generate main nginx configuration
-if [ -f "${TEMPLATE_DIR}/nginx/nginx.conf.template" ]; then
-  render_template "${TEMPLATE_DIR}/nginx/nginx.conf.template" "${OUTPUT_DIR}/nginx/nginx.conf"
-fi
-
-# Generate default site configuration
-if [ -f "${TEMPLATE_DIR}/nginx/default.conf.template" ]; then
-  render_template "${TEMPLATE_DIR}/nginx/default.conf.template" "${OUTPUT_DIR}/nginx/conf.d/default.conf"
+# Generate main nginx configuration based on deployment mode
+if [ "$DEPLOYMENT_MODE" = "docker" ]; then
+  if [ -f "${TEMPLATE_DIR}/nginx/nginx-docker.conf.template" ]; then
+    render_template "${TEMPLATE_DIR}/nginx/nginx-docker.conf.template" "${OUTPUT_DIR}/nginx/nginx.conf"
+  fi
+  
+  # Generate default site configuration for Docker mode (reverse proxy)
+  if [ -f "${TEMPLATE_DIR}/nginx/default-docker.conf.template" ]; then
+    render_template "${TEMPLATE_DIR}/nginx/default-docker.conf.template" "${OUTPUT_DIR}/nginx/conf.d/default.conf"
+  fi
+else
+  # Bare metal mode
+  if [ -f "${TEMPLATE_DIR}/nginx/nginx-baremetal.conf.template" ]; then
+    render_template "${TEMPLATE_DIR}/nginx/nginx-baremetal.conf.template" "${OUTPUT_DIR}/nginx/nginx.conf"
+  fi
+  
+  # Generate default site configuration for bare metal mode (direct serving)
+  if [ -f "${TEMPLATE_DIR}/nginx/default-baremetal.conf.template" ]; then
+    render_template "${TEMPLATE_DIR}/nginx/default-baremetal.conf.template" "${OUTPUT_DIR}/nginx/conf.d/default.conf"
+  fi
 fi
 
 # Generate nginx security configuration
@@ -127,25 +139,20 @@ if [ -f "${TEMPLATE_DIR}/server-setup.sh.template" ]; then
   chmod +x "${OUTPUT_DIR}/server-setup.sh"
 fi
 
-# Generate monitoring configuration if templates exist and in Docker mode
-if [ "$DEPLOYMENT_MODE" = "docker" ] && [ -f "${TEMPLATE_DIR}/docker/docker-compose.monitoring.yml.template" ]; then
+# Generate monitoring configuration if templates exist
+if [ -f "${TEMPLATE_DIR}/netdata/health_alarm_notify.conf.template" ]; then
+  mkdir -p "${OUTPUT_DIR}/monitoring/netdata"
+  render_template "${TEMPLATE_DIR}/netdata/health_alarm_notify.conf.template" "${OUTPUT_DIR}/monitoring/netdata/health_alarm_notify.conf"
+fi
+
+if [ -f "${TEMPLATE_DIR}/netdata/docker.conf.template" ]; then
+  mkdir -p "${OUTPUT_DIR}/monitoring/netdata/go.d"
+  render_template "${TEMPLATE_DIR}/netdata/docker.conf.template" "${OUTPUT_DIR}/monitoring/netdata/go.d/docker.conf"
+fi
+
+if [ -f "${TEMPLATE_DIR}/netdata/health.d/cgroups.conf.template" ]; then
   mkdir -p "${OUTPUT_DIR}/monitoring/netdata/health.d"
-  render_template "${TEMPLATE_DIR}/docker/docker-compose.monitoring.yml.template" "${OUTPUT_DIR}/monitoring/docker-compose.yml"
-  
-  # Generate Netdata configuration files
-  if [ -f "${TEMPLATE_DIR}/netdata/health_alarm_notify.conf.template" ]; then
-    render_template "${TEMPLATE_DIR}/netdata/health_alarm_notify.conf.template" "${OUTPUT_DIR}/monitoring/netdata/health_alarm_notify.conf"
-  fi
-  
-  if [ -f "${TEMPLATE_DIR}/netdata/docker.conf.template" ]; then
-    mkdir -p "${OUTPUT_DIR}/monitoring/netdata/go.d"
-    render_template "${TEMPLATE_DIR}/netdata/docker.conf.template" "${OUTPUT_DIR}/monitoring/netdata/go.d/docker.conf"
-  fi
-  
-  if [ -f "${TEMPLATE_DIR}/netdata/health.d/cgroups.conf.template" ]; then
-    mkdir -p "${OUTPUT_DIR}/monitoring/netdata/health.d"
-    render_template "${TEMPLATE_DIR}/netdata/health.d/cgroups.conf.template" "${OUTPUT_DIR}/monitoring/netdata/health.d/cgroups.conf"
-  fi
+  render_template "${TEMPLATE_DIR}/netdata/health.d/cgroups.conf.template" "${OUTPUT_DIR}/monitoring/netdata/health.d/cgroups.conf"
 fi
 
 # Generate Unbound configuration if enabled

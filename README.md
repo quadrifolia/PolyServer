@@ -9,12 +9,14 @@ This repository provides a comprehensive, security-hardened Debian server founda
 - [Overview](#overview)
 - [Repository Structure](#repository-structure)
 - [Base Server Setup Process](#base-server-setup-process)
-  - [Step 1: Customize Base Configuration](#step-1-customize-base-configuration-optional)
+  - [Step 1: Local Setup and Configuration](#step-1-local-setup-and-configuration)
   - [Step 2: Server Provisioning](#step-2-server-provisioning)
-  - [Step 3: Initial Server Hardening](#step-3-initial-server-hardening)
+  - [Step 3: Deploy and Run Server Hardening](#step-3-deploy-and-run-server-hardening)
   - [Step 4: Deploy Base Configuration](#step-4-deploy-base-configuration)
 - [Application Deployment](#application-deployment)
+  - [Deployment Modes](#deployment-modes)
   - [Supported Applications](#supported-applications)
+  - [Deployment Examples](#deployment-examples)
   - [Next Steps](#next-steps)
 - [DSGVO/GDPR Compliance](#dsgvogdpr-compliance)
   - [Compliance Documentation](#compliance-documentation)
@@ -26,12 +28,13 @@ This repository provides a comprehensive, security-hardened Debian server founda
   - [Update Schedule Recommendations](#update-schedule-recommendations)
   - [Updating Applications](#updating-applications)
   - [Updating Debian Server](#updating-debian-server)
-  - [Updating Security Tools](#updating-security-tools)
+  - [Updating Nginx](#updating-nginx)
+  - [Updating Netdata Monitoring](#updating-netdata-monitoring)
   - [Update Verification](#update-verification)
 - [SSL Certificate Management](#ssl-certificate-management)
 - [Backup Strategy](#backup-strategy)
-  - [S3-Compatible Object Storage](#s3-compatible-object-storage)
-  - [Block Storage](#block-storage)
+  - [Primary: OVH Object Storage for Backups](#primary-ovh-object-storage-for-backups)
+  - [Optional: Block Storage for Local Backups](#optional-block-storage-for-local-backups)
 - [Server Monitoring and Security](#server-monitoring-and-security)
   - [Firewall Configuration](#firewall-configuration)
   - [Web Application Firewall (ModSecurity)](#web-application-firewall-modsecurity)
@@ -90,7 +93,6 @@ PolyServer provides a **foundational layer** for secure Debian server deployment
 ```
 polyserver/
 ├── scripts/                             # Deployment and administration scripts
-│   ├── server-setup.sh                  # Primary server hardening script
 │   ├── deploy-unified.sh                # Base configuration deployment script
 │   ├── generate-configs.sh              # Configuration generation from templates
 │   ├── audit-report.sh                  # Security audit reporting
@@ -103,6 +105,7 @@ polyserver/
 │   └── trivy-scan.sh                    # Security vulnerability scanning
 ├── templates/                           # Template files for configuration
 │   ├── defaults.env                     # Base system configuration variables
+│   ├── server-setup.sh.template         # Server hardening script template
 │   ├── apparmor/                        # AppArmor security profiles
 │   │   └── application-profile.template
 │   ├── audit/                           # Audit system templates
@@ -122,10 +125,12 @@ polyserver/
 │   │   ├── health_alarm_notify.conf.template
 │   │   └── health.d/
 │   │       └── cgroups.conf.template
-│   ├── nginx/                           # Web server security templates
-│   │   ├── default.conf.template
+│   ├── nginx/                           # Web server templates (mode-specific)
+│   │   ├── nginx-baremetal.conf.template    # Nginx config for bare metal mode
+│   │   ├── nginx-docker.conf.template       # Nginx config for Docker mode (reverse proxy)
+│   │   ├── default-baremetal.conf.template  # Default site for bare metal mode
+│   │   ├── default-docker.conf.template     # Default site for Docker mode (reverse proxy)
 │   │   ├── index.html.template
-│   │   ├── nginx.conf.template
 │   │   ├── proxy_params.template
 │   │   └── security.conf.template
 │   ├── scripts/                         # Script templates
@@ -171,10 +176,12 @@ polyserver/
    - `SSL_EMAIL=your-email@example.com` (for Let's Encrypt certificates)
    - `BASE_DOMAIN=your-domain.com` (your actual domain)
    - `TIMEZONE=Your/Timezone` (e.g., America/New_York)
+   - `DEPLOYMENT_MODE=baremetal` or `docker` (choose your deployment strategy)
 
    **Optional changes:**
    - `HOSTNAME=polyserver` (safe to change to your preferred hostname)
    - `SSH_PORT=2222` (custom SSH port for security)
+   - `BACKEND_HOST=127.0.0.1` and `BACKEND_PORT=3000` (for Docker mode)
    - Other security and monitoring settings
 
 3. **Generate configuration files:**
@@ -235,56 +242,108 @@ Deploy the generated configuration to your hardened server:
 
 ## Application Deployment
 
-After setting up the hardened base server, you can deploy various applications using additional deployment scripts and configurations.
+After setting up the hardened base server, you can deploy various applications using either deployment mode. Your choice of `DEPLOYMENT_MODE` in `defaults.env` determines how applications are deployed and managed.
+
+### Deployment Modes
+
+#### 🐳 **Docker Mode** (`DEPLOYMENT_MODE=docker`)
+- Applications run in containers with Docker/Docker Compose
+- Nginx configured as reverse proxy to containers
+- Easy scaling, isolation, and management
+- Perfect for modern microservices architectures
+
+#### 🔧 **Bare Metal Mode** (`DEPLOYMENT_MODE=baremetal`)  
+- Applications run directly on the server
+- Nginx serves static files and proxies to local services
+- Maximum performance with minimal overhead
+- Ideal for single applications or legacy systems
 
 ### Supported Applications
 
 The PolyServer foundation supports deployment of:
 
 #### 🌐 **Frontend Applications**
-- **React/Next.js with PM2**: High-performance frontend applications with process management
-- **Static Sites**: Nginx-served static content with security optimizations
+- **Docker Mode**: React/Next.js in containers, nginx reverse proxy
+- **Bare Metal Mode**: React/Next.js with PM2, nginx serves static files
+- **Static Sites**: Optimized nginx serving in both modes
 
 #### 🔧 **Backend Services** 
-- **PHP Applications**: PHP-FPM backend services with security hardening
-- **Node.js Applications**: Express/Fastify backends with PM2 process management
-- **API Services**: RESTful and GraphQL API deployments
+- **Docker Mode**: Containerized PHP, Node.js, Python applications
+- **Bare Metal Mode**: PHP-FPM, Node.js with PM2, direct service management
+- **API Services**: RESTful and GraphQL APIs in containers or direct deployment
 
 #### 📊 **Analytics & Monitoring**
-- **Business Intelligence**: Analytics and dashboard platforms like Metabase, Superset, or Grafana
-- **Matomo**: Privacy-focused web analytics
-- **Custom Analytics**: Application-specific analytics solutions
+- **Docker Mode**: Metabase, Superset, Grafana as containers
+- **Bare Metal Mode**: Direct installation with systemd services
+- **Matomo**: Privacy-focused web analytics in either mode
 
 #### 🗄️ **Database Systems**
-- **PostgreSQL**: Production database deployments
-- **MySQL/MariaDB**: Alternative database options
-- **Redis**: Caching and session storage
+- **Docker Mode**: PostgreSQL, MySQL, Redis containers with persistent volumes
+- **Bare Metal Mode**: Native database installations with full performance
+- **Backup Integration**: S3 backups work seamlessly in both modes
+
+### Deployment Examples
+
+#### Docker Mode Example: Containerized React App
+
+```bash
+# 1. Set Docker mode in configuration
+echo "DEPLOYMENT_MODE=docker" >> templates/defaults.env
+
+# 2. Generate Docker-optimized configs
+./scripts/generate-configs.sh
+
+# 3. Deploy hardened server with Docker support
+./scripts/deploy-unified.sh templates/defaults.env deploy server.example.com 2222
+
+# 4. Create application Docker Compose file
+cat > docker-compose.yml << EOF
+version: '3.8'
+services:
+  app:
+    image: my-react-app:latest
+    container_name: react-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    networks:
+      - polyserver-network
+    environment:
+      - NODE_ENV=production
+
+networks:
+  polyserver-network:
+    external: true
+EOF
+
+# 5. Deploy application
+docker compose up -d
+```
+
+#### Bare Metal Mode Example: PM2 React App
+
+```bash
+# 1. Set bare metal mode in configuration  
+echo "DEPLOYMENT_MODE=baremetal" >> templates/defaults.env
+
+# 2. Generate bare metal optimized configs
+./scripts/generate-configs.sh
+
+# 3. Deploy hardened server
+./scripts/deploy-unified.sh templates/defaults.env deploy server.example.com 2222
+
+# 4. Deploy React application directly
+npm run build
+pm2 start ecosystem.config.js
+```
 
 ### Next Steps
 
-1. **Choose Your Application**: Select the application type you want to deploy
-2. **Create Application-Specific Configuration**: Extend the base templates with application-specific settings
-3. **Develop Deployment Scripts**: Create deployment automation for your chosen application
-4. **Set Up Monitoring**: Configure the base monitoring and security tools for your application
-5. **Monitor and Maintain**: Use the base monitoring tools to track application performance
-
-### Example: Deploying a React Frontend
-
-```bash
-# Example deployment for React/Next.js application
-# 1. Extend base configuration
-cp templates/defaults.env templates/frontend.env
-# Edit frontend.env with React-specific settings
-
-# 2. Create application-specific templates
-mkdir -p templates/frontend/
-# Add Nginx virtual host template for React app
-# Add PM2 ecosystem template for process management
-
-# 3. Generate and deploy
-./scripts/generate-configs.sh templates/frontend.env config/frontend/
-./scripts/deploy-frontend.sh config/frontend/ username server.example.com 2222
-```
+1. **Choose Deployment Mode**: Decide between Docker or bare metal based on your needs
+2. **Configure Application**: Set up application-specific configuration files
+3. **Deploy Foundation**: Use the generated configs to deploy the hardened server
+4. **Deploy Application**: Follow mode-specific deployment patterns
+5. **Monitor and Maintain**: Use built-in monitoring tools regardless of deployment mode
 
 ## DSGVO/GDPR Compliance
 
@@ -399,6 +458,8 @@ Regular updates are crucial for security and functionality. This section provide
 | Component | Automatic Updates | Manual Update Frequency | Priority | Guidance |
 |-----------|-------------------|----------------------|----------|----------|
 | Applications | No | As needed | High | Follow application release notes, test in staging first |
+| Docker Engine | No | Quarterly | High | `apt upgrade docker-ce` (Docker mode only) |
+| Container Images | No | Weekly | High | `docker compose pull && docker compose up -d` (Docker mode only) |
 | Debian OS (Security) | Yes | - | High | Auto-applied nightly, check logs weekly |
 | Debian OS (Full) | No | Monthly | Medium | Apply during maintenance window |
 | Nginx | No | Semi-annually | Medium | Only when security updates are available |
@@ -417,15 +478,56 @@ Regular updates are crucial for security and functionality. This section provide
 
 ### Updating Applications
 
-To update your deployed applications:
+The update process depends on your deployment mode:
 
-1. Check for new versions in your application's release documentation
-2. Update through your application's specific deployment method:
-   - Follow your application's standard update procedures
-   - Use containerized deployments with version tags
-   - Apply updates through configuration management tools
+#### Docker Mode Updates
 
-3. Verify the update succeeded by checking the logs and accessing the application interface
+For containerized applications:
+
+```bash
+# 1. Pull new container image
+docker pull my-app:latest
+
+# 2. Update using Docker Compose
+docker compose pull
+docker compose up -d
+
+# 3. Verify deployment
+docker compose ps
+docker compose logs app
+```
+
+#### Bare Metal Mode Updates
+
+For directly deployed applications:
+
+```bash
+# 1. Stop application gracefully
+pm2 stop my-app  # For Node.js apps
+systemctl stop my-app  # For systemd services
+
+# 2. Update application code
+git pull origin main
+npm install --production  # For Node.js
+composer install --no-dev  # For PHP
+
+# 3. Restart application
+pm2 restart my-app
+systemctl start my-app
+
+# 4. Verify application is running
+pm2 status
+systemctl status my-app
+```
+
+#### General Update Verification
+
+Regardless of deployment mode:
+
+1. Check application web interface accessibility
+2. Verify application logs for errors
+3. Test core functionality
+4. Monitor system resources during and after updates
 
 ### Updating Debian Server
 
@@ -1371,11 +1473,20 @@ In case of a suspected security incident:
 ## Maintenance and Monitoring
 
 ### Log Locations
+
+#### Common Logs (Both Modes)
 - Server logs: `/opt/polyserver/logs`
 - Backup logs: `/opt/polyserver/backups/backup_*.log`
-- Container logs: Access with `docker logs app`
-- Nginx access logs: `/var/log/nginx/app_access.log`
-- Nginx error logs: `/var/log/nginx/app_error.log`
+- Nginx access logs: `/var/log/nginx/access.log`
+- Nginx error logs: `/var/log/nginx/error.log`
+
+#### Docker Mode Specific
+- Container logs: `docker compose logs` or `docker logs <container-name>`
+- Application logs: Available through Docker logging drivers
+
+#### Bare Metal Mode Specific  
+- PM2 logs: `pm2 logs` or `/home/deploy/.pm2/logs/`
+- Application logs: `/opt/polyserver/logs/` or application-specific locations
 - System logs: Access with `sudo journalctl -xe`
 - Virus scan logs: `/var/log/clamav/daily_scan.log`
 - Malware detect logs: `/var/log/maldet/daily_scan.log`
@@ -1402,8 +1513,22 @@ In case of a suspected security incident:
   - `/var/log/security/incidents/`
 
 ### Monitoring
-- Netdata metrics: Available via Netdata Cloud or secure SSH tunnel
-- System resource usage: Check with `htop`
+
+#### System Monitoring (Both Modes)
+- Netdata metrics: Available via Netdata Cloud or secure SSH tunnel at `http://localhost:19999`
+- System resource usage: `htop`, `iotop`, `atop`
+- Network monitoring: `iftop`, `nethogs`
+
+#### Docker Mode Monitoring
+- Container resource usage: `docker stats`
+- Container health: `docker compose ps` and `docker compose top`
+- Container logs: `docker compose logs -f`
+- Docker system info: `docker system df` and `docker system events`
+
+#### Bare Metal Mode Monitoring  
+- Process monitoring: `pm2 monit` (for Node.js apps)
+- Service status: `systemctl status <service-name>`
+- Application-specific monitoring: Depends on application type
 
 ### Maintenance Tasks
 
@@ -1420,7 +1545,9 @@ In case of a suspected security incident:
 | Update virus signatures | Monthly | `sudo freshclam` |
 | Update rootkit database | Monthly | `sudo rkhunter --update` |
 | Update AIDE database | Monthly | `sudo aide.wrapper --update` |
-| Clean unused images | Monthly | `docker system prune -a` to remove unused application images (Docker mode only) |
+| Clean unused Docker images | Monthly | `docker system prune -a` (Docker mode only) |
+| Update container images | Weekly | `docker compose pull && docker compose up -d` (Docker mode only) |
+| Check container health | Weekly | `docker compose ps` and `docker compose logs` (Docker mode only) |
 | Manual security scan | Quarterly | `sudo rkhunter --check --sk` and review output |
 | Check for failed updates | Weekly | `grep "ERROR" /var/log/unattended-upgrades/unattended-upgrades.log` |
 | Review Logcheck reports | Weekly | Check email for logcheck reports |
@@ -1573,13 +1700,11 @@ tcpdump -r capture.pcap -nn -q | awk '{print $3 " " $5}' | tr -d : | sort | uniq
 ## Customizing the Deployment
 
 1. Edit the template files in the `templates/` directory
-2. Set your preferred deployment mode in `templates/defaults.env`:
-   - `DEPLOYMENT_MODE=docker` for containerized deployment
-   - `DEPLOYMENT_MODE=baremetal` for native system deployment
+2. Modify `templates/defaults.env` to customize your server configuration:
+   - Set `DEPLOYMENT_MODE=baremetal` for direct application deployment
+   - Set `DEPLOYMENT_MODE=docker` for containerized application deployment
 3. Run `./scripts/generate-configs.sh` to regenerate configuration files
-4. Deploy using:
-   - `./scripts/deploy-unified.sh` (auto-detects mode)
-   - Push changes to repository for GitHub Actions deployment
+4. Deploy using `./scripts/deploy-unified.sh`
 
 ## Performance Comparison
 
@@ -1590,13 +1715,42 @@ tcpdump -r capture.pcap -nn -q | awk '{print $3 " " $5}' | tr -d : | sort | uniq
 | **Resource Usage** | ⭐⭐⭐ Higher overhead | ⭐⭐⭐⭐⭐ Minimal overhead |
 | **Security** | ⭐⭐⭐⭐⭐ Identical | ⭐⭐⭐⭐⭐ Identical |
 | **Maintenance** | ⭐⭐⭐⭐ Simple | ⭐⭐⭐ More involved |
-| **Scalability** | ⭐⭐⭐⭐ Good | ⭐⭐⭐⭐⭐ Excellent |
+| **Scalability** | ⭐⭐⭐⭐⭐ Excellent | ⭐⭐⭐⭐ Good |
+| **Isolation** | ⭐⭐⭐⭐⭐ Excellent | ⭐⭐⭐ Process-level |
+| **Deployment** | ⭐⭐⭐⭐⭐ Container images | ⭐⭐⭐ Manual setup |
 
-Both modes provide the same security features and monitoring capabilities.
+### Docker Mode Benefits:
+- **Easy deployment**: Applications packaged as container images
+- **Perfect isolation**: Each application in its own container
+- **Horizontal scaling**: Easy to add/remove container instances
+- **Rollback capability**: Quick rollback to previous container versions
+- **Environment consistency**: Same container runs everywhere
+- **Resource limits**: Built-in CPU/memory constraints per application
+
+### Bare Metal Mode Benefits:
+- **Maximum performance**: No containerization overhead
+- **Minimal resource usage**: Direct hardware access
+- **Lower complexity**: Fewer moving parts
+- **Direct debugging**: Easier to troubleshoot issues
+- **Custom optimizations**: Full control over system configuration
+
+Both modes provide the same comprehensive security features and monitoring capabilities.
 
 ## Local Testing
 
-Before deploying to production, you can test the PolyServer foundation locally using Docker. This allows you to validate configurations, test security features, and ensure everything works correctly.
+Before deploying to production, you can test the PolyServer foundation locally using Docker. This allows you to validate configurations, test security features, and ensure everything works correctly for both deployment modes.
+
+### Testing Different Deployment Modes
+
+You can test both deployment modes locally by editing the test configuration:
+
+```bash
+# Test bare metal mode (default)
+echo "DEPLOYMENT_MODE=baremetal" > test-config/.env
+
+# Or test Docker mode
+echo "DEPLOYMENT_MODE=docker" > test-config/.env
+```
 
 ### Docker-Based Testing
 
