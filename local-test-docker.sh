@@ -68,15 +68,20 @@ echo "📝 Generating configuration files from templates..."
 if [ -f "./scripts/generate-configs.sh" ]; then
     ./scripts/generate-configs.sh test-config/.env test-config/
 else
-    echo "⚠️ generate-configs.sh not found, copying templates manually..."
-    cp -r templates/* test-config/
+    echo "❌ generate-configs.sh not found!"
+    exit 1
 fi
 
-# Copy actual PolyServer scripts and templates to test-config for Docker build
+# Copy other scripts (but not server-setup.sh since we use the generated one)
 echo "📋 Copying PolyServer scripts and templates..."
 mkdir -p test-config/scripts/
 mkdir -p test-config/templates/
-cp -r scripts/* test-config/scripts/
+# Copy all scripts except server-setup.sh (we use the generated one)
+for script in scripts/*.sh; do
+    if [[ "$(basename "$script")" != "server-setup.sh" ]]; then
+        cp "$script" test-config/scripts/
+    fi
+done
 cp -r templates/* test-config/templates/
 
 # Create a test Dockerfile that runs the real PolyServer setup
@@ -95,8 +100,9 @@ RUN apt-get update && apt-get install -y \
 # Copy all PolyServer files (including templates)
 COPY . /opt/polyserver/
 
-# Make all scripts executable
-RUN chmod +x /opt/polyserver/scripts/*.sh
+# Make all scripts executable (including the generated server-setup.sh)
+RUN chmod +x /opt/polyserver/scripts/*.sh && \
+    chmod +x /opt/polyserver/server-setup.sh
 
 # Create SSH directory for server-setup.sh
 RUN mkdir -p /root/.ssh && \
@@ -108,8 +114,8 @@ RUN mkdir -p /root/.ssh && \
 ENV TESTING_MODE=true
 ENV LOGWATCH_EMAIL=test@example.com
 
-# Run the actual PolyServer server-setup.sh script
-RUN /opt/polyserver/scripts/server-setup.sh
+# Run the generated PolyServer server-setup.sh script (customized from template)
+RUN /opt/polyserver/server-setup.sh
 
 # Copy the generated index.html to nginx web root if it exists
 RUN cp /opt/polyserver/www/html/index.html /var/www/html/index.html 2>/dev/null || \

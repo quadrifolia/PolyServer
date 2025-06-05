@@ -24,7 +24,6 @@ Thumbs.db
 
 # Claude Code files
 .claude/
-.claude.md
 
 # Local testing files
 /local-config

@@ -96,8 +96,7 @@ Applications deployed on PolyServer may contain or provide access to various typ
    - Unless the breach is unlikely to result in a risk to individuals' rights and freedoms
    
 2. **Authority to Notify**:
-   - For Bremen, Germany: Die Landesbeauftragte für Datenschutz und Informationsfreiheit Bremen
-   - For other locations, see [Regulatory Contacts](#regulatory-contacts)
+   - See [Regulatory Contacts](#regulatory-contacts)
 
 3. **Information to Include**:
    - Description of the breach

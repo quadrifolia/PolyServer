@@ -111,6 +111,7 @@ if [ -f "${TEMPLATE_DIR}/nginx/index.html.template" ]; then
 fi
 
 # Generate backup scripts
+mkdir -p "${OUTPUT_DIR}/scripts"
 render_template "${TEMPLATE_DIR}/scripts/backup.sh.template" "${OUTPUT_DIR}/scripts/backup.sh"
 chmod +x "${OUTPUT_DIR}/scripts/backup.sh"
 
@@ -118,6 +119,12 @@ chmod +x "${OUTPUT_DIR}/scripts/backup.sh"
 if [ -f "${TEMPLATE_DIR}/scripts/s3backup.sh.template" ]; then
   render_template "${TEMPLATE_DIR}/scripts/s3backup.sh.template" "${OUTPUT_DIR}/scripts/s3backup.sh"
   chmod +x "${OUTPUT_DIR}/scripts/s3backup.sh"
+fi
+
+# Generate server setup script from template
+if [ -f "${TEMPLATE_DIR}/server-setup.sh.template" ]; then
+  render_template "${TEMPLATE_DIR}/server-setup.sh.template" "${OUTPUT_DIR}/server-setup.sh"
+  chmod +x "${OUTPUT_DIR}/server-setup.sh"
 fi
 
 # Generate monitoring configuration if templates exist and in Docker mode

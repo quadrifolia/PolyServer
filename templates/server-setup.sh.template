@@ -5,12 +5,12 @@
 set -e
 
 # ========= Variables =========
-USERNAME="deploy"          # Non-root user to create
-HOSTNAME="polyserver"      # Server hostname
-SSH_PORT="2222"            # Custom SSH port (more secure than default 22)
-BLOCK_DEVICE="/dev/sdb"    # Block storage device (adjust if needed)
-BACKUP_MOUNT="/mnt/backup" # Backup mount point
-LOGWATCH_EMAIL="${LOGWATCH_EMAIL:-root}"  # Logwatch notification email (set before running)
+USERNAME="{{DEPLOY_USER}}"                # Non-root user to create
+HOSTNAME="{{HOSTNAME}}"                   # Server hostname
+SSH_PORT="{{SSH_PORT}}"                   # Custom SSH port (more secure than default 22)
+BLOCK_DEVICE="/dev/sdb"                   # Block storage device (adjust if needed)
+BACKUP_MOUNT="{{BACKUP_MOUNT}}"           # Backup mount point
+LOGWATCH_EMAIL="{{LOGWATCH_EMAIL}}"       # Logwatch notification email
 
 # Check if running in Docker testing mode
 if [ "$TESTING_MODE" = "true" ]; then
