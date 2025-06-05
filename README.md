@@ -143,69 +143,95 @@ polyserver/
 ├── DSGVO-TOOLS.md                       # DSGVO/GDPR tools documentation
 ├── GDPR-COMPLIANCE-ROADMAP.md           # GDPR implementation roadmap
 ├── README.md                            # This documentation
-├── SECURITY.md                          # Security documentation and guidelines
-├── SECURITY-ADDENDUM.md                 # Detailed security hardening documentation
+├── SECURITY.md                          # Comprehensive security documentation and guidelines
 ├── local-test-cleanup-docker.sh         # Local Docker testing cleanup script
 └── local-test-docker.sh                 # Local Docker testing script
 ```
 
 ## Base Server Setup Process
 
-### Step 1: Customize Base Configuration (Optional)
+### Step 1: Local Setup and Configuration
 
-1. Edit base system templates to suit your environment:
-   - Modify `templates/defaults.env` to set system-wide configuration
-   - Customize security settings in various template files:
-     - Audit rules in `templates/audit/audit.rules.template`
-     - DNS caching in `templates/unbound/local.conf.template`
-     - Network security in `templates/suricata/local.yaml.template`
-     - Web server security in `templates/nginx/security.conf.template`
+**Run on your local machine:**
 
-2. Generate base configurations:
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/quadrifolia/PolyServer.git
+   cd PolyServer
+   ```
 
-```bash
-./scripts/generate-configs.sh
-```
+2. **Customize base configuration:**
+   Edit `templates/defaults.env` to set your environment-specific values:
+   ```bash
+   nano templates/defaults.env
+   ```
+   
+   **Required changes:**
+   - `LOGWATCH_EMAIL=your-email@example.com` (for daily security reports)
+   - `SSL_EMAIL=your-email@example.com` (for Let's Encrypt certificates)
+   - `BASE_DOMAIN=your-domain.com` (your actual domain)
+   - `TIMEZONE=Your/Timezone` (e.g., America/New_York)
+
+   **Optional changes:**
+   - `HOSTNAME=polyserver` (safe to change to your preferred hostname)
+   - `SSH_PORT=2222` (custom SSH port for security)
+   - Other security and monitoring settings
+
+3. **Generate configuration files:**
+   ```bash
+   ./scripts/generate-configs.sh
+   ```
+   
+   This will create a `config/` directory with all configuration files, including a customized `server-setup.sh` script that uses your settings from `defaults.env`.
 
 ### Step 2: Server Provisioning
+
+**Set up your server:**
 
 1. Provision a Debian 12 (bookworm) server from your preferred provider
    - Recommended specs: 2+ vCores, 4GB+ RAM, 50GB+ SSD
    - Ensure SSH access with public key authentication
-   - Record the server IP address and SSH port
+   - Record the server IP address and initial SSH port (usually 22)
 
-### Step 3: Initial Server Hardening
+### Step 3: Deploy and Run Server Hardening
 
-Run the comprehensive server hardening script:
+**Run from your local machine:**
 
-```bash
-# Download and review the hardening script
-wget -O server_setup.sh https://raw.githubusercontent.com/yourusername/polyserver/main/scripts/server-setup.sh
+1. **Upload the generated hardening script to your server:**
+   ```bash
+   # Copy the customized script to your server
+   scp config/server-setup.sh root@your-server-ip:/root/
+   ```
 
-# Edit configuration variables if needed
-nano server_setup.sh
-# Set LOGWATCH_EMAIL="your-email@example.com" for daily security reports
+2. **SSH to your server and run the hardening script:**
+   ```bash
+   # Connect to your server
+   ssh root@your-server-ip
+   
+   # Run the hardening script (already executable)
+   /root/server-setup.sh
+   ```
 
-# Make executable and run
-chmod +x server_setup.sh
-sudo ./server_setup.sh
-```
-
-This script will:
-- Update and secure the base Debian system
-- Install and configure all security tools
-- Set up monitoring and logging systems
-- Configure DSGVO/GDPR compliance framework
-- Harden network and system access
+   **The script will automatically:**
+   - Update and secure the base Debian system
+   - Install and configure all security tools
+   - Set up monitoring and logging systems
+   - Configure DSGVO/GDPR compliance framework
+   - Harden network and system access
+   - Change SSH port to 2222 (reconnect using this port afterward)
 
 ### Step 4: Deploy Base Configuration
+
+**Run from your local machine after server hardening:**
 
 Deploy the generated configuration to your hardened server:
 
 ```bash
-# Deploy base configuration to server
-./scripts/deploy-unified.sh templates/defaults.env username server.example.com 2222
+# Deploy base configuration to server (note the new SSH port)
+./scripts/deploy-unified.sh templates/defaults.env deploy your-server-ip 2222
 ```
+
+**Note:** After step 3, SSH access will be on port 2222, and you'll connect as the `deploy` user, not root.
 
 ## Application Deployment
 
