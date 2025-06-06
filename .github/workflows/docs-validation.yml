@@ -110,9 +110,13 @@ jobs:
           "Base Server Setup Process"
           "Application Deployment"
           "DSGVO/GDPR Compliance"
-          "Security"
+          "Base Server Features"
+          "Updating and Maintenance"
           "Backup Strategy"
+          "Server Monitoring and Security"
           "Maintenance and Monitoring"
+          "Local Testing"
+          "CI/CD and Testing"
         )
         
         missing_sections=()
