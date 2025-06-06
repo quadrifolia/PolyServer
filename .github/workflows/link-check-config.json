@@ -1,0 +1,41 @@
+{
+  "ignorePatterns": [
+    {
+      "pattern": "^http://localhost"
+    },
+    {
+      "pattern": "^https://localhost"
+    },
+    {
+      "pattern": "^http://127.0.0.1"
+    },
+    {
+      "pattern": "example.com"
+    },
+    {
+      "pattern": "your-domain.com"
+    },
+    {
+      "pattern": "your-server-ip"
+    },
+    {
+      "pattern": "server.example.com"
+    },
+    {
+      "pattern": "test@example.com"
+    }
+  ],
+  "httpHeaders": [
+    {
+      "urls": ["https://github.com"],
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (compatible; linkcheck)"
+      }
+    }
+  ],
+  "timeout": "10s",
+  "retryOn429": true,
+  "retryCount": 3,
+  "fallbackRetryDelay": "30s",
+  "aliveStatusCodes": [200, 206, 429]
+}

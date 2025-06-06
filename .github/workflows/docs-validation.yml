@@ -1,0 +1,240 @@
+name: Documentation Validation
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '*.md'
+      - 'templates/**/*.md'
+  push:
+    branches: [ main ]
+    paths:
+      - '*.md'
+      - 'templates/**/*.md'
+  workflow_dispatch:
+
+jobs:
+  validate-documentation:
+    runs-on: ubuntu-latest
+    name: Validate Documentation
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Install markdown tools
+      run: |
+        npm install -g markdownlint-cli markdown-link-check
+        
+    - name: Validate markdown syntax
+      run: |
+        echo "📝 Validating markdown syntax..."
+        
+        # Configure markdownlint rules
+        cat > .markdownlint.json << 'EOF'
+        {
+          "MD013": false,
+          "MD033": false,
+          "MD041": false
+        }
+        EOF
+        
+        # Check main documentation files
+        markdownlint README.md SECURITY.md DSGVO.md || true
+        
+        # Check template markdown files
+        find templates/ -name "*.md" -type f | while read -r md_file; do
+          echo "Checking: $md_file"
+          markdownlint "$md_file" || true
+        done
+        
+        echo "✅ Markdown syntax validation completed"
+        
+    - name: Check internal links
+      run: |
+        echo "🔗 Checking internal links in documentation..."
+        
+        # Check README.md links
+        if markdown-link-check README.md --config .github/workflows/link-check-config.json; then
+          echo "✅ README.md links are valid"
+        else
+          echo "⚠️ Some links in README.md may be broken"
+        fi
+        
+        # Check other main docs
+        for doc in SECURITY.md DSGVO.md GDPR-COMPLIANCE-ROADMAP.md; do
+          if [ -f "$doc" ]; then
+            echo "Checking links in $doc..."
+            markdown-link-check "$doc" --config .github/workflows/link-check-config.json || echo "⚠️ Issues found in $doc"
+          fi
+        done
+        
+    - name: Validate table of contents
+      run: |
+        echo "📋 Validating Table of Contents in README.md..."
+        
+        # Extract TOC links and actual headers
+        grep -E "^- \[.*\]\(#.*\)" README.md | sed 's/.*](#\([^)]*\)).*/\1/' > toc_links.txt
+        grep -E "^#{1,6} " README.md | sed 's/^#* *//; s/ /_/g; s/[^a-zA-Z0-9_-]//g' | tr '[:upper:]' '[:lower:]' > actual_headers.txt
+        
+        # Compare TOC with actual headers
+        echo "Checking TOC completeness..."
+        
+        missing_count=0
+        while read -r toc_link; do
+          if ! grep -q "^$toc_link$" actual_headers.txt; then
+            echo "⚠️ TOC link not found: $toc_link"
+            missing_count=$((missing_count + 1))
+          fi
+        done < toc_links.txt
+        
+        if [ $missing_count -eq 0 ]; then
+          echo "✅ Table of Contents is consistent with headers"
+        else
+          echo "❌ Found $missing_count inconsistent TOC links"
+          exit 1
+        fi
+        
+    - name: Check for required documentation sections
+      run: |
+        echo "📚 Checking for required documentation sections..."
+        
+        required_sections=(
+          "Overview"
+          "Repository Structure"
+          "Base Server Setup Process"
+          "Application Deployment"
+          "DSGVO/GDPR Compliance"
+          "Security"
+          "Backup Strategy"
+          "Maintenance and Monitoring"
+        )
+        
+        missing_sections=()
+        
+        for section in "${required_sections[@]}"; do
+          if ! grep -q "^## $section" README.md; then
+            missing_sections+=("$section")
+          fi
+        done
+        
+        if [ ${#missing_sections[@]} -eq 0 ]; then
+          echo "✅ All required documentation sections are present"
+        else
+          echo "❌ Missing required sections:"
+          printf '%s\n' "${missing_sections[@]}"
+          exit 1
+        fi
+        
+    - name: Validate DSGVO documentation completeness
+      run: |
+        echo "⚖️ Validating DSGVO documentation completeness..."
+        
+        # Check that DSGVO.md exists and has required sections
+        if [ -f "DSGVO.md" ]; then
+          required_dsgvo_sections=(
+            "Data Protection Officer"
+            "Data Processing Activities"
+            "Data Subject Rights"
+            "Breach Notification"
+            "Data Retention"
+          )
+          
+          missing_dsgvo=()
+          for section in "${required_dsgvo_sections[@]}"; do
+            if ! grep -qi "$section" DSGVO.md; then
+              missing_dsgvo+=("$section")
+            fi
+          done
+          
+          if [ ${#missing_dsgvo[@]} -eq 0 ]; then
+            echo "✅ DSGVO documentation appears complete"
+          else
+            echo "⚠️ DSGVO documentation may be missing sections:"
+            printf '%s\n' "${missing_dsgvo[@]}"
+          fi
+        else
+          echo "❌ DSGVO.md not found"
+          exit 1
+        fi
+        
+    - name: Check documentation consistency
+      run: |
+        echo "🔄 Checking documentation consistency..."
+        
+        # Check that file references in README match actual files
+        grep -o "\`[^`]*\.sh\`" README.md | tr -d '`' | while read -r script; do
+          if [[ "$script" == *"/"* ]]; then
+            # Full path reference
+            if [ ! -f "$script" ]; then
+              echo "⚠️ Referenced script not found: $script"
+            fi
+          else
+            # Script name only - check in scripts/ directory
+            if [ ! -f "scripts/$script" ] && [ ! -f "templates/$script.template" ]; then
+              echo "⚠️ Referenced script not found: $script"
+            fi
+          fi
+        done
+        
+        # Check that mentioned directories exist
+        grep -o "\`[^`]*/\`" README.md | tr -d '`' | while read -r dir; do
+          if [ ! -d "$dir" ]; then
+            echo "⚠️ Referenced directory not found: $dir"
+          fi
+        done
+        
+        echo "✅ Documentation consistency check completed"
+
+# Create link check configuration
+  create-link-check-config:
+    runs-on: ubuntu-latest
+    name: Create Link Check Configuration
+    
+    steps:
+    - name: Create link check config
+      run: |
+        mkdir -p .github/workflows
+        cat > .github/workflows/link-check-config.json << 'EOF'
+        {
+          "ignorePatterns": [
+            {
+              "pattern": "^http://localhost"
+            },
+            {
+              "pattern": "^https://localhost"
+            },
+            {
+              "pattern": "^http://127.0.0.1"
+            },
+            {
+              "pattern": "example.com"
+            },
+            {
+              "pattern": "your-domain.com"
+            },
+            {
+              "pattern": "your-server-ip"
+            }
+          ],
+          "httpHeaders": [
+            {
+              "urls": ["https://github.com"],
+              "headers": {
+                "User-Agent": "Mozilla/5.0 (compatible; linkcheck)"
+              }
+            }
+          ],
+          "timeout": "5s",
+          "retryOn429": true,
+          "retryCount": 3,
+          "fallbackRetryDelay": "30s",
+          "aliveStatusCodes": [200, 206]
+        }
+        EOF
+        
+    - name: Upload link check config
+      uses: actions/upload-artifact@v3
+      with:
+        name: link-check-config
+        path: .github/workflows/link-check-config.json

@@ -68,6 +68,7 @@ This repository provides a comprehensive, security-hardened Debian server founda
 - [Customizing the Deployment](#customizing-the-deployment)
 - [Performance Comparison](#performance-comparison)
 - [Local Testing](#local-testing)
+- [CI/CD and Testing](#cicd-and-testing)
 
 ## Overview
 
@@ -1880,3 +1881,131 @@ Once you've extended PolyServer for your specific application, you can modify th
 - Verify monitoring and security integrations
 
 The local testing environment provides a safe sandbox to experiment with configurations before deploying to production servers.
+
+## CI/CD and Testing
+
+PolyServer includes comprehensive automated testing and validation through GitHub Actions workflows that ensure code quality, security, and proper functionality.
+
+### Automated Testing Workflows
+
+#### 🔧 **Server Hardening Tests** (`test-server-hardening.yml`)
+Comprehensive testing of the PolyServer foundation:
+
+- **Template Validation**: Validates shell script syntax and configuration generation
+- **Matrix Testing**: Tests both Docker and Bare Metal deployment modes in parallel
+- **Server Hardening**: Runs actual server-setup.sh script in containerized environments
+- **Security Verification**: Validates log rotation, audit configuration, and DSGVO compliance
+- **Local Testing**: Tests the local Docker testing workflow
+
+**Triggers**: Pull requests to main, pushes to main, changes to templates/ or scripts/
+
+#### 🛡️ **Security Scanning** (`security-scan.yml`)
+Multi-layered security validation:
+
+- **Secret Scanning**: Detects exposed credentials using TruffleHog
+- **Vulnerability Scanning**: Scans container images with Trivy
+- **Dependency Auditing**: Validates external dependencies and supply chain security
+- **Code Quality**: ShellCheck analysis and configuration validation
+- **Security Reporting**: Automated security reports with PR comments
+
+**Triggers**: Pull requests, weekly schedule (Sundays 2 AM UTC), manual dispatch
+
+#### 📚 **Documentation Validation** (`docs-validation.yml`)
+Ensures documentation quality and consistency:
+
+- **Markdown Validation**: Syntax checking and formatting
+- **Link Verification**: Internal and external link validation  
+- **Table of Contents**: Consistency with actual document structure
+- **Content Completeness**: Required sections and DSGVO documentation
+- **Reference Validation**: File and directory references in documentation
+
+**Triggers**: Changes to *.md files, pull requests to main
+
+### Testing Strategy
+
+#### Quality Gates
+All workflows must pass before PRs can be merged to main branch:
+
+1. ✅ Template syntax and configuration generation
+2. ✅ Server hardening in both deployment modes  
+3. ✅ Security validation and compliance checks
+4. ✅ Documentation consistency and completeness
+
+#### Security-First Approach
+- Continuous vulnerability scanning
+- Secret detection and prevention
+- Supply chain security monitoring
+- Code quality enforcement
+
+#### Automated Reporting
+- Security scan results posted to PR comments
+- Weekly security reports for ongoing monitoring
+- Detailed test artifacts for troubleshooting
+- Performance tracking and optimization
+
+### Running Tests Locally
+
+#### Prerequisites
+```bash
+# Docker for container testing
+docker --version
+
+# ShellCheck for script validation
+shellcheck --version
+
+# Basic tools
+curl --version
+```
+
+#### Local Test Execution
+```bash
+# Run full local testing suite
+./local-test-docker.sh
+
+# Run specific template validation
+./scripts/generate-configs.sh templates/defaults.env test-output/
+
+# Validate shell scripts
+find scripts/ -name "*.sh" -exec shellcheck {} \;
+
+# Test both deployment modes
+echo "DEPLOYMENT_MODE=docker" > test.env
+cat templates/defaults.env >> test.env
+./scripts/generate-configs.sh test.env test-docker/
+```
+
+#### Manual Security Checks
+```bash
+# Check for secrets (requires TruffleHog)
+trufflehog git file://. --only-verified=false
+
+# Scan containers for vulnerabilities (requires Trivy)
+trivy image polyserver:test
+
+# Validate configuration files
+find templates/ -name "*.yml" -exec yamllint {} \;
+```
+
+### Contributing Guidelines
+
+#### For Contributors
+1. **Test Locally**: Run local tests before submitting PRs
+2. **Review Security**: Address any security scan warnings
+3. **Update Documentation**: Ensure documentation reflects changes
+4. **Follow Conventions**: Use established coding and documentation standards
+
+#### For Security-Sensitive Changes
+1. **Extra Validation**: Test security configurations thoroughly
+2. **Review Dependencies**: Audit any new external dependencies
+3. **Document Changes**: Update security documentation as needed
+4. **Monitor Results**: Review automated security scan results
+
+### Workflow Maintenance
+
+The CI/CD workflows are designed to be:
+- **Self-Maintaining**: Automated updates for security tools
+- **Extensible**: Easy to add new tests and validations
+- **Efficient**: Parallel execution and smart caching
+- **Informative**: Clear reporting and actionable feedback
+
+For detailed workflow documentation, see [`.github/README.md`](.github/README.md).
