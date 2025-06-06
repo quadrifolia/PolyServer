@@ -172,7 +172,7 @@ jobs:
         echo "🔄 Checking documentation consistency..."
         
         # Check that file references in README match actual files
-        grep -o "\`[^`]*\.sh\`" README.md | tr -d '`' | while read -r script; do
+        grep -o '`[^`]*\.sh`' README.md | tr -d '`' | while read -r script; do
           if [[ "$script" == *"/"* ]]; then
             # Full path reference
             if [ ! -f "$script" ]; then
@@ -187,7 +187,7 @@ jobs:
         done
         
         # Check that mentioned directories exist
-        grep -o "\`[^`]*/\`" README.md | tr -d '`' | while read -r dir; do
+        grep -o '`[^`]*/`' README.md | tr -d '`' | while read -r dir; do
           if [ ! -d "$dir" ]; then
             echo "⚠️ Referenced directory not found: $dir"
           fi
