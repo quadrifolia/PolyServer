@@ -67,8 +67,20 @@ This repository provides a comprehensive, security-hardened Debian server founda
   - [Advanced Network Traffic Monitoring](#advanced-network-traffic-monitoring)
 - [Customizing the Deployment](#customizing-the-deployment)
 - [Performance Comparison](#performance-comparison)
+  - [Docker Mode Benefits](#docker-mode-benefits)
+  - [Bare Metal Mode Benefits](#bare-metal-mode-benefits)
 - [Local Testing](#local-testing)
+  - [Testing Different Deployment Modes](#testing-different-deployment-modes)
+  - [Docker-Based Testing](#docker-based-testing)
+  - [What Gets Tested](#what-gets-tested)
+  - [Testing PolyServer Scripts](#testing-polyserver-scripts)
+  - [Testing Your Applications](#testing-your-applications)
 - [CI/CD and Testing](#cicd-and-testing)
+  - [Automated Testing Workflows](#automated-testing-workflows)
+  - [Testing Strategy](#testing-strategy)
+  - [Running Tests Locally](#running-tests-locally)
+  - [Contributing Guidelines](#contributing-guidelines)
+  - [Workflow Maintenance](#workflow-maintenance)
 
 ## Overview
 

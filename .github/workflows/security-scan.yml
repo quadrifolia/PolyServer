@@ -44,7 +44,7 @@ jobs:
         fi
         
     - name: Upload secret scan results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: secret-scan-results
@@ -108,7 +108,7 @@ jobs:
         ./local-test-cleanup-docker.sh || true
         
     - name: Upload vulnerability scan results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: container-vulnerability-scan
@@ -267,7 +267,7 @@ jobs:
     
     steps:
     - name: Download all artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         path: security-results
         
@@ -322,7 +322,7 @@ jobs:
         cat security-report.md
         
     - name: Upload security report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: security-summary-report
         path: security-report.md
