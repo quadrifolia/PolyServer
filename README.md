@@ -18,7 +18,7 @@ This repository provides a comprehensive, security-hardened Debian server founda
   - [Supported Applications](#supported-applications)
   - [Deployment Examples](#deployment-examples)
   - [Next Steps](#next-steps)
-- [DSGVO/GDPR Compliance](#dsgvo-gdpr-compliance)
+- [DSGVO/GDPR Compliance](#dsgvogdpr-compliance)
   - [Compliance Documentation](#compliance-documentation)
   - [Compliance Scripts](#compliance-scripts)
   - [Compliance Setup](#compliance-setup)
