@@ -9,6 +9,7 @@ This repository provides a comprehensive, security-hardened Debian server founda
 - [Overview](#overview)
 - [Repository Structure](#repository-structure)
 - [Base Server Setup Process](#base-server-setup-process)
+  - [SSH Key Setup (Recommended)](#ssh-key-setup-recommended)
   - [Step 1: Local Setup and Configuration](#step-1-local-setup-and-configuration)
   - [Step 2: Server Provisioning](#step-2-server-provisioning)
   - [Step 3: Deploy and Run Server Hardening](#step-3-deploy-and-run-server-hardening)
@@ -169,6 +170,73 @@ polyserver/
 
 ## Base Server Setup Process
 
+### SSH Key Setup (Recommended)
+
+For secure access to your server, it's strongly recommended to use SSH keys instead of password authentication. PolyServer can automatically configure SSH key-based authentication during setup.
+
+#### Creating SSH Keys
+
+If you don't already have SSH keys, create them on your local machine:
+
+**For Ed25519 keys (recommended):**
+```bash
+# Generate a new Ed25519 SSH key
+ssh-keygen -t ed25519 -C "your-email@example.com"
+
+# When prompted, save to default location: ~/.ssh/id_ed25519
+# Enter a strong passphrase when prompted
+```
+
+**For RSA keys (alternative):**
+```bash
+# Generate a new RSA SSH key (4096 bits)
+ssh-keygen -t rsa -b 4096 -C "your-email@example.com"
+
+# When prompted, save to default location: ~/.ssh/id_rsa
+# Enter a strong passphrase when prompted
+```
+
+#### Getting Your Public Key
+
+Display your public key to copy into the PolyServer configuration:
+
+```bash
+# For Ed25519 keys
+cat ~/.ssh/id_ed25519.pub
+
+# For RSA keys
+cat ~/.ssh/id_rsa.pub
+
+# Example output:
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG4rT3vTt99Ox5kndS4HmgTrKBT8SKzhK4rhGkEVGlCI your-email@example.com
+```
+
+Copy the entire output (starting with `ssh-ed25519` or `ssh-rsa`) for use in the next step.
+
+#### SSH Authentication Options
+
+PolyServer provides flexible SSH authentication configuration:
+
+**Option 1: Key-Only Authentication (Recommended)**
+- Set `SSH_PUBLIC_KEY="your-ssh-public-key"` in `defaults.env`
+- Password authentication is automatically disabled
+- Most secure option
+
+**Option 2: Password Authentication (Initial Setup Only)**
+- Leave `SSH_PUBLIC_KEY=""` empty in `defaults.env`
+- Password authentication remains enabled for initial access
+- You'll be prompted to set a password during server setup
+- Add SSH keys later using `./scripts/ssh-disable-password-auth.sh`
+
+**Option 3: Convert Later**
+- Start with password authentication
+- Add SSH keys to your server manually
+- Run the conversion script to disable password auth:
+  ```bash
+  # On the server, after adding SSH keys
+  sudo /opt/polyserver/scripts/ssh-disable-password-auth.sh
+  ```
+
 ### Step 1: Local Setup and Configuration
 
 **Run on your local machine:**
@@ -191,6 +259,15 @@ polyserver/
    - `BASE_DOMAIN=your-domain.com` (your actual domain)
    - `TIMEZONE=Your/Timezone` (e.g., America/New_York)
    - `DEPLOYMENT_MODE=baremetal` or `docker` (choose your deployment strategy)
+
+   **SSH Configuration:**
+   ```bash
+   # For key-based authentication (recommended):
+   SSH_PUBLIC_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG... your-email@example.com"
+   
+   # For password authentication (initial setup only):
+   SSH_PUBLIC_KEY=""
+   ```
 
    **Optional changes:**
    - `HOSTNAME=polyserver` (safe to change to your preferred hostname)
@@ -422,8 +499,8 @@ The PolyServer foundation provides a comprehensive set of security, performance,
 - **Malware Protection**: ClamAV and Linux Malware Detect
 
 #### Access Control
-- **SSH Hardening**: Key-based authentication, custom ports
-- **Strong Authentication**: Enforced strong passwords and access policies
+- **SSH Hardening**: Flexible authentication (key-based or password), custom ports
+- **Strong Authentication**: Enforced strong passwords and access policies  
 - **Privilege Escalation Protection**: Restricted sudo access and monitoring
 
 ### Performance Optimization
@@ -470,7 +547,7 @@ Regular updates are crucial for security and functionality. This section provide
 ### Update Schedule Recommendations
 
 | Component | Automatic Updates | Manual Update Frequency | Priority | Guidance |
-|-----------|-------------------|----------------------|----------|----------|
+|-----------|-------------------|------------------------|----------|----------|
 | Applications | No | As needed | High | Follow application release notes, test in staging first |
 | Docker Engine | No | Quarterly | High | `apt upgrade docker-ce` (Docker mode only) |
 | Container Images | No | Weekly | High | `docker compose pull && docker compose up -d` (Docker mode only) |
@@ -812,6 +889,7 @@ All other incoming traffic is blocked by default, while all outgoing traffic is 
 #### Security Considerations
 
 - **SSH Port**: Using non-standard port 2222 instead of 22 to reduce automated attacks
+- **SSH Authentication**: Flexible configuration supporting both key-based and password authentication
 - **No Direct Application Ports**: Application ports are not exposed directly; only accessible via Nginx proxy
 - **No Public Monitoring**: Netdata monitoring port is not publicly accessible (access via SSH tunnel only)
 - **Minimal Attack Surface**: Only essential services are exposed to the internet
@@ -1133,6 +1211,95 @@ Range = yesterday
 
 Logwatch is configured to include hardware sensor information from lm_sensors, providing temperature and other hardware metrics in the daily reports.
 
+### SSH Security Management
+
+PolyServer provides comprehensive SSH security with flexible authentication options:
+
+#### SSH Configuration Options
+
+**Key-Based Authentication (Recommended)**
+- Most secure option with automatic password auth disable
+- Configured automatically during server setup if `SSH_PUBLIC_KEY` is provided
+- No password authentication allowed
+
+**Password Authentication (Initial Setup)**
+- Enabled when `SSH_PUBLIC_KEY` is empty during setup
+- Allows initial access with password
+- Can be converted to key-only authentication later
+
+#### Managing SSH Keys
+
+**Adding SSH Keys to Existing Server:**
+```bash
+# Connect to your server
+ssh -p 2222 deploy@your-server-ip
+
+# Add your public key to authorized_keys
+echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG... your-email@example.com" >> ~/.ssh/authorized_keys
+
+# Set proper permissions
+chmod 600 ~/.ssh/authorized_keys
+chmod 700 ~/.ssh
+```
+
+**Converting from Password to Key-Only Authentication:**
+```bash
+# After adding SSH keys, disable password authentication
+sudo /opt/polyserver/scripts/ssh-disable-password-auth.sh
+
+# This script will:
+# 1. Create a backup of current SSH config
+# 2. Ask for confirmation  
+# 3. Test SSH configuration
+# 4. Restart SSH service
+# 5. Provide rollback instructions if needed
+```
+
+**Testing SSH Configuration:**
+```bash
+# Test SSH config before applying changes
+sudo sshd -t
+
+# Check current authentication methods
+sudo sshd -T | grep -E "(PasswordAuthentication|PubkeyAuthentication)"
+
+# View SSH authentication logs
+sudo tail -f /var/log/auth.log
+```
+
+#### SSH Security Features
+
+- **Custom Port**: SSH runs on port 2222 to reduce automated attacks
+- **Strong Ciphers**: Modern encryption algorithms only
+- **Failed Login Protection**: Fail2ban automatically blocks brute force attempts  
+- **User Restrictions**: Only deploy user allowed for SSH access
+- **No Root Access**: Root login disabled for security
+- **Connection Limits**: Maximum 5 sessions, 3 authentication attempts
+
+#### SSH Troubleshooting
+
+**If Locked Out of Server:**
+```bash
+# If you have console access (VPS provider console)
+# 1. Access via provider's web console
+# 2. Edit SSH config to re-enable password auth temporarily:
+sudo nano /etc/ssh/sshd_config
+# Change: PasswordAuthentication yes
+sudo systemctl restart sshd
+
+# 3. Add SSH keys properly, then disable password auth again
+```
+
+**Backup and Recovery:**
+```bash
+# SSH config is automatically backed up during changes
+ls -la /etc/ssh/sshd_config.*
+
+# Restore from backup if needed
+sudo cp /etc/ssh/sshd_config.backup /etc/ssh/sshd_config
+sudo systemctl restart sshd
+```
+
 ### Automatic Security Updates
 
 For enhanced security, the server is configured with:
@@ -1140,7 +1307,7 @@ For enhanced security, the server is configured with:
 - **Automatic security patches**: Critical updates applied nightly
 - **Fail2ban**: Protection against brute force attacks
 - **UFW firewall**: Minimal open ports (SSH, HTTP, HTTPS)
-- **Strong SSH configuration**: Key-based authentication only
+- **SSH hardening**: Secure configuration with flexible authentication options
 
 ### Nginx Security Configuration
 
@@ -1577,10 +1744,12 @@ In case of a suspected security incident:
 | Review fail2ban status | Weekly | `sudo fail2ban-client status` |
 | Check banned IPs | Weekly | `sudo fail2ban-client status sshd` |
 | Check AppArmor status | Weekly | `sudo aa-status` |
-| Check ModSecurity logs | Weekly | `sudo cat /var/log/nginx/modsec_audit.log | grep -i "attack"` |
+| Check ModSecurity logs | Weekly | `sudo cat /var/log/nginx/modsec_audit.log \| grep -i "attack"` |
 | Review Suricata alerts | Weekly | `sudo cat /var/log/suricata/fast.log` |
 | Scan container images | Monthly | `sudo /etc/cron.daily/trivy-scan` |
 | Run DSGVO compliance check | Monthly | `sudo /opt/polyserver/scripts/dsgvo-compliance-check.sh` |
+| Check SSH authentication logs | Weekly | `sudo grep "Failed password\|Accepted publickey" /var/log/auth.log` |
+| Review SSH configuration | Quarterly | `sudo sshd -T \| grep -E "(PasswordAuthentication\|PubkeyAuthentication\|Port)"` |
 
 ### Disaster Recovery Testing
 Regularly test your ability to recover from failures:
@@ -2020,4 +2189,4 @@ The CI/CD workflows are designed to be:
 - **Efficient**: Parallel execution and smart caching
 - **Informative**: Clear reporting and actionable feedback
 
-For detailed workflow documentation, see [`.github/README.md`](.github/README.md).
+For detailed workflow documentation, see [`.github/README-WORKFLOW.md`](.github/README-WORKFLOW.md).
