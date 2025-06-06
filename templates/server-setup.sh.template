@@ -8,6 +8,7 @@ set -e
 USERNAME="{{DEPLOY_USER}}"                # Non-root user to create
 HOSTNAME="{{HOSTNAME}}"                   # Server hostname
 SSH_PORT="{{SSH_PORT}}"                   # Custom SSH port (more secure than default 22)
+SSH_PUBLIC_KEY="{{SSH_PUBLIC_KEY}}"       # SSH public key for deploy user
 BLOCK_DEVICE="/dev/sdb"                   # Block storage device (adjust if needed)
 BACKUP_MOUNT="{{BACKUP_MOUNT}}"           # Backup mount point
 LOGWATCH_EMAIL="{{LOGWATCH_EMAIL}}"       # Logwatch notification email
@@ -48,22 +49,60 @@ if ! id "$USERNAME" &>/dev/null; then
     useradd -m -s /bin/bash "$USERNAME"
     echo "$USERNAME:$USERNAME" | chpasswd
   else
-    adduser --gecos "" "$USERNAME"
+    # Determine if we should create user with or without password
+    if [ -n "$SSH_PUBLIC_KEY" ]; then
+      echo "SSH public key provided - creating user without password prompt"
+      useradd -m -s /bin/bash "$USERNAME"
+      # Generate a random password and immediately expire it to force key-only auth
+      TEMP_PASS=$(openssl rand -base64 32)
+      echo "$USERNAME:$TEMP_PASS" | chpasswd
+      passwd -e "$USERNAME"
+    else
+      echo "No SSH public key provided - user will be prompted to set password"
+      adduser --gecos "" "$USERNAME"
+    fi
   fi
   usermod -aG sudo "$USERNAME"
   
   # Create SSH directory for the new user
   mkdir -p /home/$USERNAME/.ssh
-  cp ~/.ssh/authorized_keys /home/$USERNAME/.ssh/ 2>/dev/null || echo "No SSH keys to copy"
-  chown -R $USERNAME:$USERNAME /home/$USERNAME/.ssh
   chmod 700 /home/$USERNAME/.ssh
-  chmod 600 /home/$USERNAME/.ssh/authorized_keys 2>/dev/null || true
+  chown $USERNAME:$USERNAME /home/$USERNAME/.ssh
+  
+  # Set up SSH key if provided
+  if [ -n "$SSH_PUBLIC_KEY" ]; then
+    echo "Setting up SSH public key for $USERNAME"
+    echo "$SSH_PUBLIC_KEY" > /home/$USERNAME/.ssh/authorized_keys
+    chmod 600 /home/$USERNAME/.ssh/authorized_keys
+    chown $USERNAME:$USERNAME /home/$USERNAME/.ssh/authorized_keys
+    echo "SSH key configured successfully"
+  else
+    # Try to copy existing keys as fallback
+    if [ -f ~/.ssh/authorized_keys ]; then
+      echo "Copying existing SSH keys from root user"
+      cp ~/.ssh/authorized_keys /home/$USERNAME/.ssh/
+      chmod 600 /home/$USERNAME/.ssh/authorized_keys
+      chown $USERNAME:$USERNAME /home/$USERNAME/.ssh/authorized_keys
+    else
+      echo "No SSH keys available - password authentication will be enabled"
+    fi
+  fi
 fi
 
 echo "===== 4. Securing SSH ====="
 if [ "$DOCKER_MODE" = "false" ]; then
     # Backup original SSH config
     cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
+    
+    # Determine password authentication setting based on key availability
+    if [ -n "$SSH_PUBLIC_KEY" ] || [ -f /home/$USERNAME/.ssh/authorized_keys ]; then
+        PASSWORD_AUTH="no"
+        echo "SSH keys are available - disabling password authentication"
+    else
+        PASSWORD_AUTH="yes"
+        echo "No SSH keys available - enabling password authentication for initial setup"
+        echo "WARNING: Remember to add SSH keys and disable password auth later!"
+    fi
     
     # Configure SSH
     cat > /etc/ssh/sshd_config << EOF
@@ -80,7 +119,7 @@ StrictModes yes
 MaxAuthTries 3
 MaxSessions 5
 PubkeyAuthentication yes
-PasswordAuthentication no
+PasswordAuthentication $PASSWORD_AUTH
 PermitEmptyPasswords no
 ChallengeResponseAuthentication no
 UsePAM yes
