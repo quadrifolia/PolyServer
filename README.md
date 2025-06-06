@@ -63,6 +63,7 @@ This repository provides a comprehensive, security-hardened Debian server founda
   - [Monitoring](#monitoring)
   - [Maintenance Tasks](#maintenance-tasks)
   - [Disaster Recovery Testing](#disaster-recovery-testing)
+  - [Log Rotation and Management](#log-rotation-and-management)
   - [Advanced Network Traffic Monitoring](#advanced-network-traffic-monitoring)
 - [Customizing the Deployment](#customizing-the-deployment)
 - [Performance Comparison](#performance-comparison)
@@ -1575,6 +1576,64 @@ Regularly test your ability to recover from failures:
 2. Practice restoring from backup in a test environment
 3. Document recovery time and any issues encountered
 4. Update recovery procedures based on findings
+
+### Log Rotation and Management
+
+PolyServer includes comprehensive log rotation to prevent disk space issues and maintain system performance. All logs are automatically rotated with compression and appropriate retention periods.
+
+#### Configured Log Rotation
+
+| Log Category | Rotation Frequency | Retention | Location |
+|--------------|-------------------|-----------|----------|
+| **Web Server Logs** | Daily | 30 days | `/var/log/nginx/*.log` |
+| **ModSecurity WAF** | Daily | 14 days (100MB max) | `/var/log/nginx/modsec_*.log` |
+| **Security Scans** | Weekly | 12 weeks | `/var/log/{clamav,maldet,rkhunter,chkrootkit}/` |
+| **Container Security** | Weekly | 8 weeks | `/var/log/security/trivy/*.log` |
+| **Docker Containers** | Daily | 7 days (100MB max) | `/var/lib/docker/containers/*/*.log` |
+| **Application Logs** | Daily | 30 days | `/opt/polyserver/logs/*.log` |
+| **Backup Logs** | Weekly | 12 weeks | `/opt/polyserver/backups/*.log` |
+| **Audit Logs** | Weekly | 10 weeks (50MB max) | `/var/log/audit/audit.log` |
+| **Suricata IDS** | Daily | 7 days | `/var/log/suricata/*.log` |
+| **Netdata Monitoring** | Daily | 14 days | `/var/log/netdata/*.log` |
+| **Unbound DNS** | Weekly | 12 weeks | `/var/log/unbound.log` |
+| **Fail2ban** | Weekly | 12 weeks | `/var/log/fail2ban.log` |
+| **UFW Firewall** | Daily | 30 days | `/var/log/ufw.log` |
+| **DSGVO/GDPR** | Monthly | 24 months | `/var/log/dsgvo/*.log` |
+| **Security Incidents** | Monthly | 36 months | `/var/log/security/incidents/*.log` |
+
+#### Log Rotation Features
+
+- **Compression**: All rotated logs are compressed to save disk space
+- **Proper Permissions**: Rotated logs maintain appropriate ownership and permissions
+- **Service Integration**: Services are properly reloaded/restarted after log rotation
+- **Size Limits**: Large logs (ModSecurity, Docker) have size-based rotation
+- **Compliance**: Security and GDPR logs have extended retention for compliance requirements
+
+#### Manual Log Rotation
+
+```bash
+# Force rotation of all logs
+sudo logrotate -f /etc/logrotate.conf
+
+# Test log rotation configuration
+sudo logrotate -d /etc/logrotate.conf
+
+# Check log rotation status
+sudo cat /var/lib/logrotate/status
+```
+
+#### Monitoring Disk Usage
+
+```bash
+# Check log directory sizes
+sudo du -sh /var/log/* | sort -h
+
+# Check PolyServer logs specifically
+sudo du -sh /opt/polyserver/{logs,backups}
+
+# Monitor disk space
+df -h /var/log
+```
 
 ### Advanced Network Traffic Monitoring
 
