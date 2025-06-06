@@ -1732,6 +1732,209 @@ else
     echo "🐳 Skipping Unbound DNS cache setup in Docker mode"
 fi
 
+# ========= Configure comprehensive log rotation =========
+echo "===== 10.5 Setting up comprehensive log rotation ====="
+
+# Nginx log rotation (includes ModSecurity logs)
+cat > /etc/logrotate.d/nginx << 'EOF'
+/var/log/nginx/*.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 www-data adm
+    sharedscripts
+    prerotate
+        if [ -d /etc/logrotate.d/httpd-prerotate ]; then \
+            run-parts /etc/logrotate.d/httpd-prerotate; \
+        fi \
+    endprerotate
+    postrotate
+        systemctl reload nginx > /dev/null 2>&1 || true
+    endscript
+}
+
+# ModSecurity audit logs (separate rotation for large files)
+/var/log/nginx/modsec_audit.log /var/log/nginx/modsec_debug.log {
+    daily
+    rotate 14
+    size 100M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 www-data adm
+    copytruncate
+}
+EOF
+
+# Security scan logs rotation
+cat > /etc/logrotate.d/security-scans << 'EOF'
+# ClamAV scan logs
+/var/log/clamav/daily_scan.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 root root
+}
+
+# Malware detection logs
+/var/log/maldet/daily_scan.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 root root
+}
+
+# RKHunter scan logs
+/var/log/rkhunter/daily_scan.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 root root
+}
+
+# chkrootkit scan logs
+/var/log/chkrootkit/daily_scan.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 root root
+}
+EOF
+
+# Container security logs rotation
+cat > /etc/logrotate.d/container-security << 'EOF'
+# Trivy container vulnerability scan logs
+/var/log/security/trivy/*.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 root root
+}
+
+# Docker logs (if using json-file driver)
+/var/lib/docker/containers/*/*.log {
+    daily
+    rotate 7
+    size 100M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+EOF
+
+# PolyServer application logs rotation
+cat > /etc/logrotate.d/polyserver << 'EOF'
+# PolyServer application logs
+/opt/polyserver/logs/*.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 deploy deploy
+    copytruncate
+}
+
+# PolyServer backup logs
+/opt/polyserver/backups/*.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 deploy deploy
+}
+
+# DSGVO/GDPR logs
+/var/log/dsgvo/*.log {
+    monthly
+    rotate 24
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 root root
+}
+
+# Security incident logs
+/var/log/security/incidents/*.log {
+    monthly
+    rotate 36
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0600 root root
+}
+EOF
+
+# Fail2ban log rotation (enhance default)
+cat > /etc/logrotate.d/fail2ban << 'EOF'
+/var/log/fail2ban.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 root root
+    postrotate
+        systemctl reload fail2ban > /dev/null 2>&1 || true
+    endscript
+}
+EOF
+
+# UFW firewall log rotation
+cat > /etc/logrotate.d/ufw << 'EOF'
+/var/log/ufw.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+}
+EOF
+
+# Logwatch logs rotation
+cat > /etc/logrotate.d/logwatch << 'EOF'
+/var/log/logwatch/*.log {
+    monthly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 root root
+}
+EOF
+
+echo "Comprehensive log rotation configured for all PolyServer components"
+
 # ========= Now restart SSH with new configuration =========
 echo "===== 11. Restarting SSH to apply security settings ====="
 docker_systemctl restart sshd
