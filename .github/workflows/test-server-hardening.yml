@@ -17,6 +17,11 @@ on:
       - 'local-test-cleanup-docker.sh'
   workflow_dispatch:  # Allow manual triggers
 
+# Permissions for workflow operations
+permissions:
+  contents: read
+  pull-requests: read
+
 env:
   DOCKER_BUILDKIT: 1
   COMPOSE_DOCKER_CLI_BUILD: 1

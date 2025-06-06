@@ -13,6 +13,11 @@ on:
       - 'templates/**/*.md'
   workflow_dispatch:
 
+# Permissions for documentation validation
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   validate-documentation:
     runs-on: ubuntu-latest
@@ -75,7 +80,7 @@ jobs:
         
         # Extract TOC links and actual headers
         grep -E "^- \[.*\]\(#.*\)" README.md | sed 's/.*](#\([^)]*\)).*/\1/' > toc_links.txt
-        grep -E "^#{1,6} " README.md | sed 's/^#* *//; s/ /_/g; s/[^a-zA-Z0-9_-]//g' | tr '[:upper:]' '[:lower:]' > actual_headers.txt
+        grep -E "^#{1,6} " README.md | sed 's/^#* *//; s/ /-/g; s/[^a-zA-Z0-9_-]//g' | tr '[:upper:]' '[:lower:]' > actual_headers.txt
         
         # Compare TOC with actual headers
         echo "Checking TOC completeness..."

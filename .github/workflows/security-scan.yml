@@ -10,6 +10,13 @@ on:
     - cron: '0 2 * * 0'
   workflow_dispatch:
 
+# Add permissions for PR comments and issue writing
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  security-events: write
+
 jobs:
   # Job 1: Scan for secrets and sensitive data
   secret-scanning:
@@ -330,14 +337,23 @@ jobs:
     - name: Comment on PR with security summary (if PR)
       if: github.event_name == 'pull_request'
       uses: actions/github-script@v6
+      continue-on-error: true
       with:
         script: |
-          const fs = require('fs');
-          const report = fs.readFileSync('security-report.md', 'utf8');
-          
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: `## 🛡️ Security Scan Results\n\n${report}`
-          });
+          try {
+            const fs = require('fs');
+            const report = fs.readFileSync('security-report.md', 'utf8');
+            
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 🛡️ Security Scan Results\n\n${report}`
+            });
+            
+            console.log('✅ Security report posted to PR successfully');
+          } catch (error) {
+            console.log('⚠️ Failed to post security report to PR:', error.message);
+            console.log('This may be due to insufficient permissions or forked PR restrictions');
+            console.log('Security report is still available as an artifact');
+          };
