@@ -14,6 +14,7 @@ This repository provides a comprehensive, security-hardened Debian server founda
   - [Step 2: Server Provisioning](#step-2-server-provisioning)
   - [Step 3: Deploy and Run Server Hardening](#step-3-deploy-and-run-server-hardening)
   - [Step 4: Deploy Base Configuration](#step-4-deploy-base-configuration)
+  - [Bastion Host Setup](#bastion-host-setup)
 - [Application Deployment](#application-deployment)
   - [Deployment Modes](#deployment-modes)
   - [Supported Applications](#supported-applications)
@@ -110,6 +111,7 @@ polyserver/
 ├── scripts/                             # Deployment and administration scripts
 │   ├── deploy-unified.sh                # Base configuration deployment script
 │   ├── generate-configs.sh              # Configuration generation from templates
+│   ├── server-setup-bastion.sh          # Specialized bastion host hardening script
 │   ├── audit-report.sh                  # Security audit reporting
 │   ├── breach-response-checklist.sh     # DSGVO breach response procedures
 │   ├── collect-forensics.sh             # Forensic evidence collection
@@ -330,6 +332,175 @@ Deploy the generated configuration to your hardened server:
 ```
 
 **Note:** After step 3, SSH access will be on port 2222, and you'll connect as the `deploy` user, not root.
+
+## Bastion Host Setup
+
+For environments requiring secure access to internal networks, PolyServer includes a specialized bastion host hardening script. Bastion hosts provide a secure gateway for administrative access to internal infrastructure.
+
+### What is a Bastion Host?
+
+A bastion host is a specialized server that:
+- Provides secure SSH access to internal networks
+- Acts as a single point of entry for system administration
+- Enforces strict security policies and logging
+- Enables secure tunneling and port forwarding to internal services
+
+### Setting Up a Bastion Host
+
+**Prerequisites:**
+- Fresh Debian 12 (bookworm) server
+- SSH public key for authentication (required - no password auth allowed)
+- **Root access to the server** (or sudo privileges)
+
+**Setup Process:**
+
+1. **Configure SSH Public Key in Script:**
+   ```bash
+   # Edit the bastion setup script
+   nano scripts/server-setup-bastion.sh
+   
+   # Find this line and replace with your actual SSH public key:
+   SSH_PUBLIC_KEY=""
+   
+   # Replace with your key:
+   SSH_PUBLIC_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG... user@domain.com"
+   ```
+
+2. **Get Your SSH Public Key:**
+   ```bash
+   # Display your Ed25519 public key
+   cat ~/.ssh/id_ed25519.pub
+   
+   # Or display your RSA public key
+   cat ~/.ssh/id_rsa.pub
+   
+   # Copy the entire output to use in the script
+   ```
+
+3. **Deploy the Bastion Host:**
+   ```bash
+   # Copy the script to your server (as root)
+   scp scripts/server-setup-bastion.sh root@your-bastion-ip:/root/
+   
+   # SSH to your server as root and run the hardening script
+   ssh root@your-bastion-ip
+   chmod +x /root/server-setup-bastion.sh
+   /root/server-setup-bastion.sh
+   ```
+   
+   **During setup, you'll be prompted for:**
+   - Email address for security notifications
+   - Optional external SMTP configuration for reliable email delivery
+   - SMTP server details (recommended for production environments)
+   
+   **Alternative if you have sudo access:**
+   ```bash
+   # Copy the script to your server (as regular user)
+   scp scripts/server-setup-bastion.sh debian@your-bastion-ip:/home/debian/
+   
+   # SSH to your server and run with sudo
+   ssh debian@your-bastion-ip
+   chmod +x /home/debian/server-setup-bastion.sh
+   sudo /home/debian/server-setup-bastion.sh
+   ```
+   
+   **⚠️ Important:** The script must run as root because it:
+   - Installs and configures system packages
+   - Modifies critical system configuration files
+   - Sets up firewall rules and security services
+   - Configures SSH, audit system, and kernel parameters
+
+### Bastion Host Features
+
+The bastion setup provides enhanced security beyond the standard server hardening:
+
+#### Enhanced SSH Security
+- **Key-only authentication**: No password authentication allowed
+- **Custom SSH port**: Default port 2222 to reduce attack surface
+- **SSH tunneling enabled**: Supports port forwarding for internal access
+- **Connection limits**: Maximum 5 concurrent sessions
+- **Client keep-alive**: Automatic session management
+
+#### Advanced Monitoring
+- **Comprehensive audit logging**: All user activities tracked
+- **Real-time SSH monitoring**: Live monitoring of SSH connections
+- **Network intrusion detection**: Suricata IDS with bastion-specific rules
+- **Hourly security checks**: Automated monitoring of suspicious activity
+- **Daily security reports**: Detailed email reports of all activities
+
+#### Email System Configuration
+- **External SMTP support**: Reliable delivery via services like Amazon SES, Gmail, etc.
+- **Local mail fallback**: Stores notifications locally if SMTP is not configured
+- **Automatic aliasing**: All local system accounts redirect to your configured email
+- **Security notifications**: Sudo usage, failed logins, and system alerts via email
+
+#### Network Security
+- **Restrictive firewall**: Only essential ports open (SSH, DNS, NTP, HTTP/HTTPS)
+- **Internal network access**: Configurable access to internal networks
+- **Enhanced fail2ban**: Aggressive protection against brute force attacks
+- **Traffic monitoring**: Network activity logging and analysis
+
+#### Built-in Tools
+- **Network diagnostics**: nmap, ncat, socat, mtr, traceroute
+- **Security scanning**: ClamAV, maldet, rkhunter, chkrootkit
+- **Traffic analysis**: tcpdump, iftop, nethogs
+- **System monitoring**: htop, iotop, atop, sysstat
+
+### Using the Bastion Host
+
+After setup, connect to your bastion host:
+
+```bash
+# Connect to bastion host
+ssh -p 2222 bastion@your-bastion-ip
+
+# Use built-in status command (requires root privileges for UFW/system access)
+sudo bastionstat
+
+# Monitor SSH activity in real-time (requires root privileges for auth.log access)
+sudo sshmon
+
+# Access internal servers through the bastion
+ssh -J bastion@your-bastion-ip:2222 user@internal-server
+
+# Create SSH tunnel for web access
+ssh -L 8080:internal-server:80 -p 2222 bastion@your-bastion-ip
+# Then access http://localhost:8080 in your browser
+
+# Read local mail (if using local delivery mode)
+bastionmail
+```
+
+### Security Considerations
+
+**Important Security Notes:**
+- Bastion hosts should be dedicated servers (no other applications)
+- Configure external SMTP for reliable security notification delivery
+- Regularly review audit logs and security reports
+- Keep the bastion host updated with security patches
+- Monitor network traffic patterns for anomalies
+- Implement proper access controls for bastion users
+
+**Network Architecture:**
+- Place bastion host in a DMZ or public subnet
+- Restrict internal network access to necessary ports only
+- Use security groups/firewalls to limit bastion access
+- Monitor all traffic between bastion and internal networks
+
+### Customizing Bastion Configuration
+
+You can customize the bastion host by editing the script variables:
+
+```bash
+# Edit these variables in the script before deployment:
+USERNAME="bastion"                                          # Bastion user account
+HOSTNAME="bastion"                                          # Server hostname
+SSH_PORT="2222"                                             # SSH port
+INTERNAL_NETWORK="10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"  # Allowed internal networks
+ALLOWED_INTERNAL_PORTS="22,80,443,3306,5432"                # Ports accessible on internal networks
+```
+
+For more advanced configurations, review the comprehensive audit rules and monitoring settings in the script.
 
 ## Application Deployment
 
