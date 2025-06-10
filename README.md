@@ -262,6 +262,21 @@ PolyServer provides flexible SSH authentication configuration:
    - `TIMEZONE=Your/Timezone` (e.g., America/New_York)
    - `DEPLOYMENT_MODE=baremetal` or `docker` (choose your deployment strategy)
 
+   **Email Configuration (Recommended):**
+   For reliable security notification delivery, configure external SMTP:
+   ```bash
+   # Enable external SMTP for reliable email delivery
+   SMTP_ENABLED=true
+   SMTP_SERVER=smtp.gmail.com  # or your SMTP provider
+   SMTP_PORT=587
+   SMTP_USERNAME=your-email@gmail.com
+   SMTP_PASSWORD=your-app-password  # Use App Password for Gmail
+   SMTP_FROM_EMAIL=your-email@gmail.com
+   SMTP_USE_TLS=true
+   ```
+   
+   **Note**: If `SMTP_ENABLED=false`, all system emails will be stored locally in `/var/mail/root`
+
    **SSH Configuration:**
    ```bash
    # For key-based authentication (recommended):
@@ -673,6 +688,13 @@ The PolyServer foundation provides a comprehensive set of security, performance,
 - **SSH Hardening**: Flexible authentication (key-based or password), custom ports
 - **Strong Authentication**: Enforced strong passwords and access policies  
 - **Privilege Escalation Protection**: Restricted sudo access and monitoring
+
+#### Email & Notification System
+- **External SMTP Support**: Reliable delivery via Gmail, Amazon SES, Outlook, etc.
+- **Local Mail Fallback**: Stores notifications locally when SMTP is disabled
+- **Email Aliasing**: All local system accounts redirect to configured email address
+- **Security Notifications**: Automated alerts for malware, rootkits, failed logins, and system events
+- **Amazon SES Compatibility**: Proper sender rewriting and UTF-8 handling
 
 ### Performance Optimization
 
