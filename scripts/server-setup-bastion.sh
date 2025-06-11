@@ -965,8 +965,6 @@ freq = 50
 max_log_file = 16
 num_logs = 10
 priority_boost = 4
-disp_qos = lossy
-dispatcher = /sbin/audispd
 name_format = HOSTNAME
 max_log_file_action = ROTATE
 space_left = 100
@@ -1246,17 +1244,83 @@ systemctl restart rsyslog
 
 # Configure Logcheck (make it less noisy - logwatch provides better daily reports)
 echo "===== 10.1 Configuring Logcheck (minimal noise) ====="
-# Set logcheck to use server level (much less noisy than default paranoid)
-sed -i 's/^REPORTLEVEL=.*/REPORTLEVEL="server"/' /etc/logcheck/logcheck.conf
 
-# Set logcheck email recipient
-sed -i "s/^SENDMAILTO=.*/SENDMAILTO=\"${LOGWATCH_EMAIL}\"/" /etc/logcheck/logcheck.conf
+# Create proper logcheck configuration with error handling
+cat > /etc/logcheck/logcheck.conf << EOF
+# Logcheck configuration for bastion host
+# This file controls logcheck behavior and frequency
+
+# Set to server level (much less noisy than default paranoid)
+REPORTLEVEL="server"
+
+# Email configuration
+SENDMAILTO="${LOGWATCH_EMAIL}"
 
 # Set running frequency to daily (default is hourly - too noisy!)
-sed -i 's/^CRON_DAILY_RUN=.*/CRON_DAILY_RUN="true"/' /etc/logcheck/logcheck.conf
-sed -i 's/^CRON_HOURLY_RUN=.*/CRON_HOURLY_RUN="false"/' /etc/logcheck/logcheck.conf
+CRON_DAILY_RUN="true"
+CRON_HOURLY_RUN="false"
+
+# Lock file and PID management
+LOCKFILE="/var/lock/logcheck/logcheck.lock"
+
+# Temporary file cleanup
+TMP="/tmp"
+
+# Additional safety settings
+FQDN=1
+INTRO=1
+ATTACKALERT=1
+VIOLATIONS=1
+CRACKING=1
+PARANOID=0
+LOGFILES_LIST=1
+
+# Reduce false positives for bastion hosts
+SYSLOGSUMMARY=0
+MAILASATTACHMENTS=0
+REBOOT=1
+EOF
+
+# Ensure logcheck directories exist with proper permissions
+mkdir -p /var/lock/logcheck
+chown logcheck:logcheck /var/lock/logcheck 2>/dev/null || true
+chmod 755 /var/lock/logcheck
+
+# Clean up any stale lock files
+rm -f /var/lock/logcheck/logcheck.lock 2>/dev/null || true
+
+# Add logcheck ignore rules for common bastion activity
+echo "===== 10.1.1 Adding bastion-specific logcheck ignore rules ====="
+cat >> /etc/logcheck/ignore.d.server/bastion-ignore << 'EOF'
+# Bastion host specific ignore patterns
+# Ignore normal SSH activity patterns that are not security issues
+
+# Normal SSH connection patterns
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd\[[0-9]+\]: Connection from [.[:digit:]]+ port [0-9]+ on [.[:digit:]]+ port [0-9]+$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd\[[0-9]+\]: Accepted publickey for [[:alnum:]]+ from [.[:digit:]]+ port [0-9]+ ssh2: [[:alnum:][:space:]]+$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd\[[0-9]+\]: pam_unix\(sshd:session\): session opened for user [[:alnum:]]+ by \(uid=[0-9]+\)$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd\[[0-9]+\]: pam_unix\(sshd:session\): session closed for user [[:alnum:]]+$
+
+# Normal sudo activity (bastion users need sudo access)
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sudo:\s+[[:alnum:]]+ : TTY=[[:alnum:]\/]+ ; PWD=[\/[:alnum:]._-]+ ; USER=root ; COMMAND=\/usr\/local\/bin\/.*$
+
+# UFW and fail2ban normal operations
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ kernel: \[UFW [[:upper:]]+\].*$
+
+# Normal cron activity
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ \/USR\/SBIN\/CRON\[[0-9]+\]: \([[:alnum:]]+\) CMD \(.*\)$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ cron\[[0-9]+\]: \([[:alnum:]]+\) CMD \(.*\)$
+
+# Normal systemd activity
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ systemd\[[0-9]+\]: .*\.service: Succeeded\.$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ systemd\[[0-9]+\]: Started .*\.$
+
+# Normal postfix activity (for notifications)
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ postfix\/.*\[[0-9]+\]: [A-F0-9]+: .*$
+EOF
 
 echo "✅ Logcheck configured for daily server-level reports (less technical than default)"
+echo "✅ Added bastion-specific ignore patterns to reduce false positives"
 echo "📧 Primary reporting via Logwatch (user-friendly daily summaries)"
 echo "🔍 Logcheck provides additional technical details if needed"
 
@@ -1268,17 +1332,14 @@ MailTo = $LOGWATCH_EMAIL
 Format = html
 Range = yesterday
 Detail = High
-Service = All
 
-# Bastion-specific services
+# Only use specific services (not "All" with additions)
 Service = sshd
 Service = sudo
-Service = auth
-Service = audit
+Service = secure
+Service = kernel
+Service = postfix
 Service = fail2ban
-Service = firewall
-
-# Enhanced detail for security events
 Service = "-zz-disk_space"
 Service = "-zz-network"
 EOF
