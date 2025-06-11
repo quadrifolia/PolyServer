@@ -38,7 +38,7 @@ if [ -z "$SSH_PUBLIC_KEY" ]; then
     echo "  cat ~/.ssh/id_ed25519.pub    (for Ed25519 keys)"
     echo "  cat ~/.ssh/id_rsa.pub        (for RSA keys)"
     echo ""
-    read -p "Enter your SSH public key: " SSH_PUBLIC_KEY
+    read -r -p "Enter your SSH public key: " SSH_PUBLIC_KEY
     
     if [ -z "$SSH_PUBLIC_KEY" ]; then
         echo "ERROR: SSH public key is required for bastion host setup"
@@ -46,7 +46,7 @@ if [ -z "$SSH_PUBLIC_KEY" ]; then
     fi
     
     echo ""
-    read -p "Enter email address for security notifications (default: root): " EMAIL_INPUT
+    read -r -p "Enter email address for security notifications (default: root): " EMAIL_INPUT
     if [ -n "$EMAIL_INPUT" ]; then
         LOGWATCH_EMAIL="$EMAIL_INPUT"
     fi
@@ -59,20 +59,20 @@ echo ""
 echo "Configure external SMTP for reliable email delivery (recommended)."
 echo "This ensures security notifications are not filtered as spam."
 echo ""
-read -p "Do you want to configure external SMTP? (y/n, default: n): " SMTP_CONFIGURE
+read -r -p "Do you want to configure external SMTP? (y/n, default: n): " SMTP_CONFIGURE
 
 if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
     echo ""
     echo "Please provide your SMTP server details:"
     echo ""
-    read -p "SMTP Server (e.g., smtp.gmail.com): " SMTP_SERVER
-    read -p "SMTP Port (default: 587): " SMTP_PORT
+    read -r -p "SMTP Server (e.g., smtp.gmail.com): " SMTP_SERVER
+    read -r -p "SMTP Port (default: 587): " SMTP_PORT
     SMTP_PORT=${SMTP_PORT:-587}
-    read -p "SMTP Username: " SMTP_USERNAME
-    read -s -p "SMTP Password: " SMTP_PASSWORD
+    read -r -p "SMTP Username: " SMTP_USERNAME
+    read -r -s -p "SMTP Password: " SMTP_PASSWORD
     echo ""
-    read -p "From Email Address (must match SMTP account): " SMTP_FROM_EMAIL
-    read -p "Use TLS/STARTTLS? (y/n, default: y): " SMTP_TLS
+    read -r -p "From Email Address (must match SMTP account): " SMTP_FROM_EMAIL
+    read -r -p "Use TLS/STARTTLS? (y/n, default: y): " SMTP_TLS
     SMTP_TLS=${SMTP_TLS:-y}
     
     if [ -z "$SMTP_SERVER" ] || [ -z "$SMTP_USERNAME" ] || [ -z "$SMTP_PASSWORD" ] || [ -z "$SMTP_FROM_EMAIL" ]; then
@@ -102,16 +102,25 @@ apt-get update && apt-get upgrade -y
 echo "===== 2. Setting hostname ====="
 hostnamectl set-hostname "$HOSTNAME"
 
+echo "===== 2.1 Setting root password for emergency access ====="
+echo "Setting a secure root password for console/emergency access..."
+echo "This is important for recovery scenarios when SSH key access fails."
+echo ""
+echo "Please set a strong root password:"
+passwd root
+echo "✅ Root password configured for emergency console access"
+echo ""
+
 echo "===== 3. Creating bastion user with strict configuration ====="
 if ! id "$USERNAME" &>/dev/null; then
     
     echo "Creating bastion user with key-only authentication"
     useradd -m -s /bin/bash "$USERNAME"
-    # Completely disable password authentication - multiple approaches
-    # Method 1: Set impossible password hash
+    # Disable password authentication while preserving SSH key access
+    # Method 1: Set impossible password hash (allows SSH keys, blocks password)
     usermod -p '*' "$USERNAME"   # Set impossible password hash (stronger than !)
     
-    # Method 2: Remove all password aging constraints
+    # Method 2: Configure password aging to prevent password login
     chage -E -1 "$USERNAME"      # Remove password expiration date
     chage -I -1 "$USERNAME"      # Remove inactive period
     chage -m 0 "$USERNAME"       # No minimum password age
@@ -119,8 +128,9 @@ if ! id "$USERNAME" &>/dev/null; then
     chage -d 0 "$USERNAME"       # Set last change to epoch (never expires)
     chage -W -1 "$USERNAME"      # Remove expiration warning
     
-    # Method 3: Lock account from password login entirely
-    passwd -l "$USERNAME" >/dev/null 2>&1 || true
+    # Method 3: Do NOT use passwd -l as it completely locks the account
+    # passwd -l would prevent SSH key authentication from working
+    # The combination of usermod -p '*' and SSH configuration is sufficient
     
     # Method 4: Verify settings
     echo "Password authentication status for $USERNAME:"
@@ -308,15 +318,15 @@ ufw allow in $SSH_PORT/tcp comment "SSH bastion access"
 # Allow outgoing connections to internal networks on common ports
 IFS=',' read -ra PORTS <<< "$ALLOWED_INTERNAL_PORTS"
 for port in "${PORTS[@]}"; do
-    ufw allow out $port/tcp comment "Internal network access TCP"
+    ufw allow out "$port"/tcp comment "Internal network access TCP"
     # Also allow UDP for DNS and other services that may need it
     if [ "$port" = "53" ]; then
-        ufw allow out $port/udp comment "DNS resolution UDP"
+        ufw allow out "$port"/udp comment "DNS resolution UDP"
     fi
 done
 
 # Allow outgoing SSH on custom port (for SSH tunneling and forwarding)
-ufw allow out $SSH_PORT/tcp comment "SSH outbound for tunneling"
+ufw allow out "$SSH_PORT"/tcp comment "SSH outbound for tunneling"
 
 # Ensure DNS is allowed (both TCP and UDP) if not already in the list
 if [[ ! "$ALLOWED_INTERNAL_PORTS" =~ "53" ]]; then
@@ -330,7 +340,7 @@ ufw allow out 443/tcp comment "HTTPS updates"
 
 # Allow SMTP port if external SMTP is configured
 if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
-    ufw allow out $SMTP_PORT/tcp comment "SMTP email delivery"
+    ufw allow out "$SMTP_PORT"/tcp comment "SMTP email delivery"
     echo "✅ Added UFW rule for SMTP port $SMTP_PORT"
 fi
 
@@ -594,12 +604,12 @@ Server: $(hostname)
     # Check if mail was delivered locally
     if [ -f /var/mail/root ]; then
         echo "✅ Local mail delivery confirmed in /var/mail/root"
-        echo "Mail file size: $(ls -lh /var/mail/root | awk '{print $5}')"
+        echo "Mail file size: $(stat -c%s /var/mail/root 2>/dev/null | numfmt --to=iec || echo "unknown")"
         echo "Recent mail headers:"
         tail -n 5 /var/mail/root | head -n 3
     elif [ -f /var/spool/mail/root ]; then
         echo "✅ Local mail delivery confirmed in /var/spool/mail/root"
-        echo "Mail file size: $(ls -lh /var/spool/mail/root | awk '{print $5}')"
+        echo "Mail file size: $(stat -c%s /var/spool/mail/root 2>/dev/null | numfmt --to=iec || echo "unknown")"
         echo "Recent mail headers:"
         tail -n 5 /var/spool/mail/root | head -n 3
     else
@@ -646,6 +656,10 @@ apt-get install -y nmap ncat socat
 # Pre-configure iperf3 to not start as daemon (security best practice for bastions)
 echo "iperf3 iperf3/start_daemon boolean false" | debconf-set-selections
 apt-get install -y iperf3
+
+# Ensure iperf3 service is not started (bastion security)
+systemctl disable iperf3 2>/dev/null || true
+systemctl stop iperf3 2>/dev/null || true
 
 # Security and audit tools
 apt-get install -y debsums aide auditd audispd-plugins
@@ -931,7 +945,7 @@ bantime = 3600
 enabled = true
 filter = recidive
 logpath = /var/log/fail2ban.log
-action = iptables-allports[name=recidive]
+action = iptables-multiport[name=recidive, port="all"]
 bantime = 86400
 findtime = 86400
 maxretry = 5
@@ -948,8 +962,78 @@ failregex = sshd\[<pid>\]: Did not receive identification string from <HOST>
 ignoreregex =
 EOF
 
+# Install and configure rsyslog first (needed for fail2ban)
+echo "Setting up logging system for fail2ban..."
+if ! systemctl is-active --quiet rsyslog; then
+    echo "Installing rsyslog for enhanced logging..."
+    apt-get install -y rsyslog
+    systemctl enable rsyslog
+    systemctl start rsyslog
+    sleep 2
+    echo "✅ Rsyslog installed and started"
+else
+    echo "✅ Rsyslog already active"
+fi
+
+# Ensure required log files exist before fail2ban starts
+echo "Creating required log files for fail2ban..."
+touch /var/log/auth.log
+touch /var/log/fail2ban.log
+chmod 640 /var/log/auth.log
+chmod 640 /var/log/fail2ban.log
+chown root:adm /var/log/auth.log
+chown root:adm /var/log/fail2ban.log
+
+# Restart rsyslog to ensure proper logging
+systemctl restart rsyslog
+sleep 2
+echo "✅ Logging system configured for fail2ban"
+
+# Create a test log entry to initialize auth.log
+logger -p auth.info "Bastion setup: Initializing auth.log for fail2ban"
+
+# Test fail2ban configuration before starting
+echo "Testing fail2ban configuration..."
+if fail2ban-client -t; then
+    echo "✅ Fail2ban configuration is valid"
+else
+    echo "⚠️ Fail2ban configuration test failed - checking for issues"
+    fail2ban-client -t || true
+fi
+
+# Enable and start fail2ban with error handling
 systemctl enable fail2ban
-systemctl start fail2ban
+
+# Stop fail2ban if it's already running to ensure clean start
+systemctl stop fail2ban 2>/dev/null || true
+sleep 1
+
+if systemctl start fail2ban; then
+    echo "✅ Fail2ban started successfully"
+    # Wait a moment for fail2ban to initialize
+    sleep 5
+    # Verify it's running
+    if systemctl is-active --quiet fail2ban; then
+        echo "✅ Fail2ban is active and running"
+        # Test fail2ban client connection
+        if fail2ban-client status >/dev/null 2>&1; then
+            echo "✅ Fail2ban client communication working"
+            fail2ban-client status
+        else
+            echo "⚠️ Fail2ban status check failed (may still be initializing)"
+        fi
+    else
+        echo "⚠️ Fail2ban failed to start properly"
+        systemctl status fail2ban --no-pager -l
+        echo "Checking fail2ban logs:"
+        tail -n 20 /var/log/fail2ban.log 2>/dev/null || echo "No fail2ban log available yet"
+    fi
+else
+    echo "❌ Failed to start fail2ban service"
+    systemctl status fail2ban --no-pager -l
+    echo "Checking fail2ban logs:"
+    tail -n 20 /var/log/fail2ban.log 2>/dev/null || echo "No fail2ban log available"
+fi
 
 echo "===== 8. Configuring comprehensive audit framework for bastion ====="
 # Enhanced audit configuration for bastion hosts
@@ -965,8 +1049,6 @@ freq = 50
 max_log_file = 16
 num_logs = 10
 priority_boost = 4
-disp_qos = lossy
-dispatcher = /sbin/audispd
 name_format = HOSTNAME
 max_log_file_action = ROTATE
 space_left = 100
@@ -1203,13 +1285,7 @@ systemctl start suricata
 
 echo "===== 10. Setting up comprehensive logging and monitoring ====="
 
-# Install rsyslog if not already present
-if ! systemctl is-active --quiet rsyslog; then
-    echo "Installing rsyslog for enhanced logging..."
-    apt-get install -y rsyslog
-    systemctl enable rsyslog
-    systemctl start rsyslog
-fi
+# Rsyslog already installed and configured earlier for fail2ban
 
 # Configure rsyslog for enhanced logging
 cat > /etc/rsyslog.d/bastion-logging.conf << EOF
@@ -1244,19 +1320,204 @@ EOF
 # Restart rsyslog to apply new configuration
 systemctl restart rsyslog
 
-# Configure Logcheck (make it less noisy - logwatch provides better daily reports)
-echo "===== 10.1 Configuring Logcheck (minimal noise) ====="
-# Set logcheck to use server level (much less noisy than default paranoid)
-sed -i 's/^REPORTLEVEL=.*/REPORTLEVEL="server"/' /etc/logcheck/logcheck.conf
+# Configure chkrootkit
+echo "===== 10.1 Configuring chkrootkit ====="
+# Create chkrootkit scan script with proper log handling
+cat > /etc/cron.daily/chkrootkit-scan << 'EOF'
+#!/bin/bash
+# Run a daily chkrootkit scan
 
-# Set logcheck email recipient
-sed -i "s/^SENDMAILTO=.*/SENDMAILTO=\"${LOGWATCH_EMAIL}\"/" /etc/logcheck/logcheck.conf
+# Log file
+LOGFILE="/var/log/chkrootkit/daily_scan.log"
+EXPECTED_LOG="/var/log/chkrootkit/log.expected"
+TODAY_LOG="/var/log/chkrootkit/log.today"
+
+# Create log directory if it doesn't exist
+mkdir -p /var/log/chkrootkit
+
+# Clear previous log
+echo "chkrootkit daily scan started at $(date)" > $LOGFILE
+
+# Run the scan
+chkrootkit -q > $TODAY_LOG 2>&1
+
+# Add completion time
+echo "chkrootkit daily scan completed at $(date)" >> $LOGFILE
+
+# Create expected log file if it doesn't exist (first run)
+if [ ! -f "$EXPECTED_LOG" ]; then
+    echo "Creating initial expected output file for chkrootkit..."
+    cp "$TODAY_LOG" "$EXPECTED_LOG"
+    echo "Initial chkrootkit expected output created at $(date)" >> $LOGFILE
+fi
+
+# Check for differences from expected output
+if ! diff -q "$EXPECTED_LOG" "$TODAY_LOG" >/dev/null 2>&1; then
+    # There are differences - send email alert
+    ADMIN_EMAIL="${LOGWATCH_EMAIL:-root}"
+    
+    # Create diff report
+    echo "chkrootkit output differs from expected baseline" > /tmp/chkrootkit-alert.txt
+    echo "Scan date: $(date)" >> /tmp/chkrootkit-alert.txt
+    echo "" >> /tmp/chkrootkit-alert.txt
+    echo "=== TODAY'S OUTPUT ===" >> /tmp/chkrootkit-alert.txt
+    cat "$TODAY_LOG" >> /tmp/chkrootkit-alert.txt
+    echo "" >> /tmp/chkrootkit-alert.txt
+    echo "=== EXPECTED OUTPUT ===" >> /tmp/chkrootkit-alert.txt
+    cat "$EXPECTED_LOG" >> /tmp/chkrootkit-alert.txt
+    echo "" >> /tmp/chkrootkit-alert.txt
+    echo "=== DIFFERENCES ===" >> /tmp/chkrootkit-alert.txt
+    diff "$EXPECTED_LOG" "$TODAY_LOG" >> /tmp/chkrootkit-alert.txt
+    
+    # Send email alert
+    cat /tmp/chkrootkit-alert.txt | mail -s "⚠️ CHKROOTKIT ALERT: Output changed on $(hostname)" "$ADMIN_EMAIL"
+    
+    # Log the alert
+    echo "chkrootkit output changed - alert sent to $ADMIN_EMAIL" >> $LOGFILE
+    
+    # Clean up
+    rm -f /tmp/chkrootkit-alert.txt
+else
+    echo "chkrootkit output matches expected baseline" >> $LOGFILE
+fi
+
+# Check for INFECTED results specifically
+if grep -q "INFECTED" "$TODAY_LOG"; then
+    ADMIN_EMAIL="${LOGWATCH_EMAIL:-root}"
+    cat "$TODAY_LOG" | mail -s "⚠️ ROOTKIT WARNING: Possible rootkit found on $(hostname)" "$ADMIN_EMAIL"
+    echo "INFECTED results found - alert sent to $ADMIN_EMAIL" >> $LOGFILE
+fi
+EOF
+
+chmod 755 /etc/cron.daily/chkrootkit-scan
+
+# Run initial chkrootkit scan to create baseline
+echo "Running initial chkrootkit scan to create baseline..."
+mkdir -p /var/log/chkrootkit
+/etc/cron.daily/chkrootkit-scan
+
+# Configure Logcheck (make it less noisy - logwatch provides better daily reports)
+echo "===== 10.2 Configuring Logcheck (minimal noise) ====="
+
+# Create proper logcheck configuration with error handling
+cat > /etc/logcheck/logcheck.conf << EOF
+# Logcheck configuration for bastion host
+# This file controls logcheck behavior and frequency
+
+# Set to server level (much less noisy than default paranoid)
+REPORTLEVEL="server"
+
+# Email configuration
+SENDMAILTO="${LOGWATCH_EMAIL}"
 
 # Set running frequency to daily (default is hourly - too noisy!)
-sed -i 's/^CRON_DAILY_RUN=.*/CRON_DAILY_RUN="true"/' /etc/logcheck/logcheck.conf
-sed -i 's/^CRON_HOURLY_RUN=.*/CRON_HOURLY_RUN="false"/' /etc/logcheck/logcheck.conf
+CRON_DAILY_RUN="true"
+CRON_HOURLY_RUN="false"
+
+# Lock file and PID management
+LOCKFILE="/var/lock/logcheck/logcheck.lock"
+
+# Temporary file cleanup
+TMP="/tmp"
+
+# Additional safety settings
+FQDN=1
+INTRO=1
+ATTACKALERT=1
+VIOLATIONS=1
+CRACKING=1
+PARANOID=0
+LOGFILES_LIST=1
+
+# Reduce false positives for bastion hosts
+SYSLOGSUMMARY=0
+MAILASATTACHMENTS=0
+REBOOT=1
+EOF
+
+# Ensure logcheck directories exist with proper permissions
+mkdir -p /var/lock/logcheck
+chown logcheck:logcheck /var/lock/logcheck 2>/dev/null || true
+chmod 755 /var/lock/logcheck
+
+# Clean up any stale lock files
+rm -f /var/lock/logcheck/logcheck.lock 2>/dev/null || true
+
+# Configure logcheck logfiles (fix "1 does not exist" error)
+echo "Configuring logcheck logfiles..."
+cat > /etc/logcheck/logcheck.logfiles << EOF
+# Logcheck logfiles configuration for bastion host
+# List of log files that logcheck should monitor
+
+/var/log/auth.log
+/var/log/syslog
+/var/log/kern.log
+/var/log/mail.log
+/var/log/daemon.log
+/var/log/user.log
+/var/log/messages
+EOF
+
+# Ensure all configured log files exist
+touch /var/log/auth.log
+touch /var/log/syslog
+touch /var/log/kern.log
+touch /var/log/mail.log
+touch /var/log/daemon.log
+touch /var/log/user.log
+touch /var/log/messages
+
+# Set proper permissions for log files
+chmod 640 /var/log/auth.log /var/log/syslog /var/log/kern.log /var/log/mail.log /var/log/daemon.log /var/log/user.log /var/log/messages
+chown root:adm /var/log/auth.log /var/log/syslog /var/log/kern.log /var/log/mail.log /var/log/daemon.log /var/log/user.log /var/log/messages
+
+# Test logcheck configuration
+echo "Testing logcheck configuration..."
+if sudo -u logcheck logcheck -t; then
+    echo "✅ Logcheck configuration is valid"
+else
+    echo "⚠️ Logcheck configuration test failed - will attempt to fix common issues"
+    # Create missing directories that logcheck might need
+    mkdir -p /var/lib/logcheck
+    chown logcheck:logcheck /var/lib/logcheck
+    chmod 755 /var/lib/logcheck
+    
+    # Ensure logcheck user can read log files
+    usermod -aG adm logcheck 2>/dev/null || true
+fi
+
+# Add logcheck ignore rules for common bastion activity
+echo "===== 10.1.1 Adding bastion-specific logcheck ignore rules ====="
+cat >> /etc/logcheck/ignore.d.server/bastion-ignore << 'EOF'
+# Bastion host specific ignore patterns
+# Ignore normal SSH activity patterns that are not security issues
+
+# Normal SSH connection patterns
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd\[[0-9]+\]: Connection from [.[:digit:]]+ port [0-9]+ on [.[:digit:]]+ port [0-9]+$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd\[[0-9]+\]: Accepted publickey for [[:alnum:]]+ from [.[:digit:]]+ port [0-9]+ ssh2: [[:alnum:][:space:]]+$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd\[[0-9]+\]: pam_unix\(sshd:session\): session opened for user [[:alnum:]]+ by \(uid=[0-9]+\)$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd\[[0-9]+\]: pam_unix\(sshd:session\): session closed for user [[:alnum:]]+$
+
+# Normal sudo activity (bastion users need sudo access)
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sudo:\s+[[:alnum:]]+ : TTY=[[:alnum:]\/]+ ; PWD=[\/[:alnum:]._-]+ ; USER=root ; COMMAND=\/usr\/local\/bin\/.*$
+
+# UFW and fail2ban normal operations
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ kernel: \[UFW [[:upper:]]+\].*$
+
+# Normal cron activity
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ \/USR\/SBIN\/CRON\[[0-9]+\]: \([[:alnum:]]+\) CMD \(.*\)$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ cron\[[0-9]+\]: \([[:alnum:]]+\) CMD \(.*\)$
+
+# Normal systemd activity
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ systemd\[[0-9]+\]: .*\.service: Succeeded\.$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ systemd\[[0-9]+\]: Started .*\.$
+
+# Normal postfix activity (for notifications)
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ postfix\/.*\[[0-9]+\]: [A-F0-9]+: .*$
+EOF
 
 echo "✅ Logcheck configured for daily server-level reports (less technical than default)"
+echo "✅ Added bastion-specific ignore patterns to reduce false positives"
 echo "📧 Primary reporting via Logwatch (user-friendly daily summaries)"
 echo "🔍 Logcheck provides additional technical details if needed"
 
@@ -1268,17 +1529,14 @@ MailTo = $LOGWATCH_EMAIL
 Format = html
 Range = yesterday
 Detail = High
-Service = All
 
-# Bastion-specific services
+# Only use specific services (not "All" with additions)
 Service = sshd
 Service = sudo
-Service = auth
-Service = audit
+Service = secure
+Service = kernel
+Service = postfix
 Service = fail2ban
-Service = firewall
-
-# Enhanced detail for security events
 Service = "-zz-disk_space"
 Service = "-zz-network"
 EOF
@@ -1666,9 +1924,9 @@ echo "===== 14. Final system hardening and restart services ====="
 # Disable unnecessary services (bastion hosts should be minimal)
 UNNECESSARY_SERVICES="bluetooth cups avahi-daemon"
 for service in $UNNECESSARY_SERVICES; do
-    if systemctl is-active --quiet $service; then
-        systemctl stop $service
-        systemctl disable $service
+    if systemctl is-active --quiet "$service"; then
+        systemctl stop "$service"
+        systemctl disable "$service"
         echo "Disabled unnecessary service: $service"
     fi
 done
@@ -1861,7 +2119,7 @@ else
     echo "Saving setup completion report to local mail..."
     
     # Send to local root account
-    cat /tmp/bastion-setup-complete.txt | /usr/sbin/sendmail root
+    /usr/sbin/sendmail root < /tmp/bastion-setup-complete.txt
     
     echo "✅ Setup completion report saved to local root mailbox"
     echo "📧 Use 'bastionmail' command to read the setup report"

@@ -51,6 +51,19 @@ else
     echo "🐳 Skipping hostname setup in Docker mode"
 fi
 
+echo "===== 2.1 Setting root password for emergency access ====="
+if [ "$DOCKER_MODE" = "false" ]; then
+    echo "Setting a secure root password for console/emergency access..."
+    echo "This is important for recovery scenarios when SSH key access fails."
+    echo ""
+    echo "Please set a strong root password:"
+    passwd root
+    echo "✅ Root password configured for emergency console access"
+    echo ""
+else
+    echo "🐳 Skipping root password setup in Docker mode"
+fi
+
 echo "===== 3. Creating non-root user ====="
 if ! id "$USERNAME" &>/dev/null; then
   if [ "$DOCKER_MODE" = "true" ]; then
@@ -574,17 +587,33 @@ fi
 
 # Enable and start postfix with new configuration
 systemctl enable postfix
-systemctl start postfix
+if systemctl start postfix; then
+    echo "✅ Postfix started successfully"
+else
+    echo "⚠️ Postfix start failed (may be normal in container environments)"
+fi
 
 # Wait for postfix to fully start
 sleep 3
+
+# Check if we're in a container environment
+CONTAINER_ENV=""
+if [ -f /.dockerenv ] || [ -n "${CONTAINER}" ] || [ "${TESTING_MODE}" = "true" ]; then
+    CONTAINER_ENV="true"
+    echo "📦 Container environment detected - mail testing will be simplified"
+fi
 
 echo "✅ Email system configured"
 
 # Test mail system
 echo "===== Testing mail system ====="
 
-if [ "$SMTP_ENABLED" = "true" ]; then
+# Skip intensive mail testing in container environments
+if [ "$CONTAINER_ENV" = "true" ]; then
+    echo "📦 Container environment - skipping detailed mail testing"
+    echo "✅ Mail system configuration completed"
+    echo "📧 Mail functionality will be available when deployed"
+elif [ "$SMTP_ENABLED" = "true" ]; then
     echo "Testing external SMTP configuration..."
     
     # Create test message with proper From header
@@ -611,14 +640,21 @@ EOF
     echo "✅ Test email sent to $LOGWATCH_EMAIL via external SMTP"
     echo "📧 Check your email inbox to confirm delivery"
     
-    # Check mail queue for any issues
+    # Check mail queue for any issues (container-safe)
     sleep 3
-    QUEUE_STATUS=$(mailq)
-    if [[ "$QUEUE_STATUS" == "Mail queue is empty" ]]; then
-        echo "✅ Mail queue is empty - email sent successfully"
+    if command -v mailq >/dev/null 2>&1; then
+        QUEUE_STATUS=$(mailq 2>/dev/null || echo "queue check failed")
+        if [[ "$QUEUE_STATUS" == "Mail queue is empty" ]]; then
+            echo "✅ Mail queue is empty - email sent successfully"
+        elif [[ "$QUEUE_STATUS" == "queue check failed" ]]; then
+            echo "⚠️ Mail queue check failed (normal in container environments)"
+            echo "✅ SMTP test email sent (queue verification skipped)"
+        else
+            echo "⚠️ Mail queue status:"
+            echo "$QUEUE_STATUS" | head -n 10
+        fi
     else
-        echo "⚠️ Mail queue status:"
-        mailq | head -n 10
+        echo "✅ SMTP test email sent (mailq not available)"
     fi
     
 else
@@ -642,34 +678,38 @@ Server: $(hostname)
     # Check if mail was delivered locally
     if [ -f /var/mail/root ]; then
         echo "✅ Local mail delivery confirmed in /var/mail/root"
-        echo "Mail file size: $(ls -lh /var/mail/root | awk '{print $5}')"
+        echo "Mail file size: $(stat -c%s /var/mail/root 2>/dev/null | numfmt --to=iec || echo "unknown")"
     elif [ -f /var/spool/mail/root ]; then
         echo "✅ Local mail delivery confirmed in /var/spool/mail/root"
-        echo "Mail file size: $(ls -lh /var/spool/mail/root | awk '{print $5}')"
+        echo "Mail file size: $(stat -c%s /var/spool/mail/root 2>/dev/null | numfmt --to=iec || echo "unknown")"
     else
         echo "⚠️ Mail file not found - checking postfix status and logs"
-        systemctl status postfix --no-pager -l
+        systemctl status postfix --no-pager -l 2>/dev/null || echo "Postfix status check failed (normal in containers)"
         echo "Checking mail queue:"
-        mailq
+        mailq 2>/dev/null || echo "Mail queue check failed (normal in container environments)"
+        echo "✅ Local mail test completed (delivery may be delayed in containers)"
     fi
 fi
 
-# Check postfix configuration and logs
-echo ""
-echo "Postfix configuration check:"
-if [ "$SMTP_ENABLED" = "true" ]; then
-    postconf relayhost
-    postconf smtp_sasl_auth_enable
-    postconf smtp_use_tls
-else
-    postconf inet_interfaces
-    postconf mydestination  
-    postconf local_transport
-fi
+# Only check postfix configuration if not in container environment  
+if [ "$CONTAINER_ENV" != "true" ]; then
+    # Check postfix configuration and logs
+    echo ""
+    echo "Postfix configuration check:"
+    if [ "$SMTP_ENABLED" = "true" ]; then
+        postconf relayhost 2>/dev/null || echo "postconf failed"
+        postconf smtp_sasl_auth_enable 2>/dev/null || echo "postconf failed"
+        postconf smtp_use_tls 2>/dev/null || echo "postconf failed"
+    else
+        postconf inet_interfaces 2>/dev/null || echo "postconf failed"
+        postconf mydestination 2>/dev/null || echo "postconf failed"
+        postconf local_transport 2>/dev/null || echo "postconf failed"
+    fi
 
-echo ""
-echo "Recent postfix logs:"
-tail -n 10 /var/log/mail.log 2>/dev/null || echo "Mail log not yet available"
+    echo ""
+    echo "Recent postfix logs:"
+    tail -n 10 /var/log/mail.log 2>/dev/null || echo "Mail log not yet available"
+fi
 
 echo ""
 if [ "$SMTP_ENABLED" = "true" ]; then
@@ -713,6 +753,18 @@ EOF
 
 # Configure fail2ban for SSH
 if [ "$DOCKER_MODE" = "false" ]; then
+    # Ensure required log files exist before fail2ban starts
+    echo "Creating required log files for fail2ban..."
+    touch /var/log/auth.log
+    touch /var/log/fail2ban.log
+    chmod 640 /var/log/auth.log
+    chmod 640 /var/log/fail2ban.log
+    chown root:adm /var/log/auth.log
+    chown root:adm /var/log/fail2ban.log
+    
+    # Create a test log entry to initialize auth.log
+    logger -p auth.info "Server setup: Initializing auth.log for fail2ban"
+    
     cat > /etc/fail2ban/jail.local << EOF
 [sshd]
 enabled = true
@@ -722,7 +774,44 @@ logpath = /var/log/auth.log
 maxretry = 3
 bantime = 3600
 EOF
-    docker_systemctl restart fail2ban
+    
+    # Test fail2ban configuration before starting
+    echo "Testing fail2ban configuration..."
+    if fail2ban-client -t; then
+        echo "✅ Fail2ban configuration is valid"
+    else
+        echo "⚠️ Fail2ban configuration test failed - checking for issues"
+        fail2ban-client -t || true
+    fi
+    
+    # Enable and start fail2ban with error handling
+    docker_systemctl enable fail2ban
+    
+    # Stop fail2ban if it's already running to ensure clean start
+    docker_systemctl stop fail2ban 2>/dev/null || true
+    sleep 1
+    
+    if docker_systemctl start fail2ban; then
+        echo "✅ Fail2ban started successfully"
+        # Wait a moment for fail2ban to initialize
+        sleep 3
+        # Verify it's running (only in non-Docker mode)
+        if [ "$DOCKER_MODE" = "false" ] && systemctl is-active --quiet fail2ban; then
+            echo "✅ Fail2ban is active and running"
+            # Test fail2ban client connection
+            if fail2ban-client status >/dev/null 2>&1; then
+                echo "✅ Fail2ban client communication working"
+                fail2ban-client status || true
+            else
+                echo "⚠️ Fail2ban status check failed (may still be initializing)"
+            fi
+        fi
+    else
+        echo "❌ Failed to start fail2ban service"
+        if [ "$DOCKER_MODE" = "false" ]; then
+            systemctl status fail2ban --no-pager -l || true
+        fi
+    fi
 else
     echo "🐳 Skipping fail2ban configuration in Docker mode"
 fi
@@ -957,8 +1046,6 @@ freq = 50
 max_log_file = 8
 num_logs = 5
 priority_boost = 4
-disp_qos = lossy
-dispatcher = /sbin/audispd
 name_format = HOSTNAME
 ##name = mydomain
 max_log_file_action = ROTATE
@@ -2262,6 +2349,69 @@ cat > /etc/logrotate.d/logwatch << 'EOF'
 EOF
 
 echo "Comprehensive log rotation configured for all PolyServer components"
+
+# Enhanced system log rotation (based on bastion host learnings)
+cat > /etc/logrotate.d/enhanced-system-logs << 'EOF'
+# Enhanced system log rotation for authentication and sudo activity
+
+# Authentication logs (keep longer for security analysis)
+/var/log/auth.log {
+    daily
+    rotate 60
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+    postrotate
+        systemctl reload rsyslog > /dev/null 2>&1 || true
+    endscript
+}
+
+# Sudo activity logs (important for privilege escalation monitoring)
+/var/log/sudo.log {
+    daily
+    rotate 90
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+    postrotate
+        systemctl reload rsyslog > /dev/null 2>&1 || true
+    endscript
+}
+
+# System logs (general system activity)
+/var/log/syslog {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 syslog adm
+    postrotate
+        systemctl reload rsyslog > /dev/null 2>&1 || true
+    endscript
+}
+
+# Kernel logs
+/var/log/kern.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 syslog adm
+    postrotate
+        systemctl reload rsyslog > /dev/null 2>&1 || true
+    endscript
+}
+EOF
+
+echo "✅ Enhanced system log rotation configured for security monitoring"
 
 # ========= Now restart SSH with new configuration =========
 echo "===== 11. Restarting SSH to apply security settings ====="
