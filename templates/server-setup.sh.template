@@ -51,6 +51,19 @@ else
     echo "🐳 Skipping hostname setup in Docker mode"
 fi
 
+echo "===== 2.1 Setting root password for emergency access ====="
+if [ "$DOCKER_MODE" = "false" ]; then
+    echo "Setting a secure root password for console/emergency access..."
+    echo "This is important for recovery scenarios when SSH key access fails."
+    echo ""
+    echo "Please set a strong root password:"
+    passwd root
+    echo "✅ Root password configured for emergency console access"
+    echo ""
+else
+    echo "🐳 Skipping root password setup in Docker mode"
+fi
+
 echo "===== 3. Creating non-root user ====="
 if ! id "$USERNAME" &>/dev/null; then
   if [ "$DOCKER_MODE" = "true" ]; then
@@ -984,8 +997,6 @@ freq = 50
 max_log_file = 8
 num_logs = 5
 priority_boost = 4
-disp_qos = lossy
-dispatcher = /sbin/audispd
 name_format = HOSTNAME
 ##name = mydomain
 max_log_file_action = ROTATE
@@ -2289,6 +2300,69 @@ cat > /etc/logrotate.d/logwatch << 'EOF'
 EOF
 
 echo "Comprehensive log rotation configured for all PolyServer components"
+
+# Enhanced system log rotation (based on bastion host learnings)
+cat > /etc/logrotate.d/enhanced-system-logs << 'EOF'
+# Enhanced system log rotation for authentication and sudo activity
+
+# Authentication logs (keep longer for security analysis)
+/var/log/auth.log {
+    daily
+    rotate 60
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+    postrotate
+        systemctl reload rsyslog > /dev/null 2>&1 || true
+    endscript
+}
+
+# Sudo activity logs (important for privilege escalation monitoring)
+/var/log/sudo.log {
+    daily
+    rotate 90
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+    postrotate
+        systemctl reload rsyslog > /dev/null 2>&1 || true
+    endscript
+}
+
+# System logs (general system activity)
+/var/log/syslog {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 syslog adm
+    postrotate
+        systemctl reload rsyslog > /dev/null 2>&1 || true
+    endscript
+}
+
+# Kernel logs
+/var/log/kern.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 syslog adm
+    postrotate
+        systemctl reload rsyslog > /dev/null 2>&1 || true
+    endscript
+}
+EOF
+
+echo "✅ Enhanced system log rotation configured for security monitoring"
 
 # ========= Now restart SSH with new configuration =========
 echo "===== 11. Restarting SSH to apply security settings ====="
