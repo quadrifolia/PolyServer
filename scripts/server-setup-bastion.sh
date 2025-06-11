@@ -427,6 +427,40 @@ else
     echo "Skipping microcode installation"
 fi
 
+# Update initramfs to include microcode and check for kernel updates
+echo "===== 6.0.2 Updating system with microcode integration ====="
+
+# Update initramfs to ensure microcode is loaded
+echo "Updating initramfs to include microcode..."
+update-initramfs -u -k all
+
+# Check if kernel update is available and recommend it
+echo "Checking for kernel updates..."
+CURRENT_KERNEL=$(uname -r)
+echo "Current kernel: $CURRENT_KERNEL"
+
+# Check for available kernel updates
+if apt list --upgradable 2>/dev/null | grep -q linux-image; then
+    echo "⚠️  Kernel updates available:"
+    apt list --upgradable 2>/dev/null | grep linux-image
+    echo ""
+    echo "💡 Kernel update recommendation:"
+    echo "   Run: apt update && apt upgrade linux-image-*"
+    echo "   Then reboot to activate microcode and kernel updates"
+    KERNEL_UPDATE_NEEDED=true
+else
+    echo "✅ Kernel is up to date"
+    KERNEL_UPDATE_NEEDED=false
+fi
+
+# Check for backports kernel if available (often has better hardware support)
+if apt-cache search linux-image | grep -q backports; then
+    echo ""
+    echo "💡 Backports kernel available for better hardware support:"
+    apt-cache search linux-image | grep backports | head -3
+    echo "   Consider: apt install -t bookworm-backports linux-image-amd64"
+fi
+
 # Show current CPU vulnerabilities status
 echo ""
 echo "Current CPU vulnerability status:"
@@ -439,10 +473,20 @@ if [ -d /sys/devices/system/cpu/vulnerabilities ]; then
 else
     echo "  CPU vulnerability information not available"
 fi
+
+# Check if microcode is properly loaded
+echo ""
+echo "Microcode status:"
+if dmesg | grep -i microcode | tail -5 | grep -q "updated"; then
+    echo "✅ Microcode updates detected in dmesg"
+    dmesg | grep -i microcode | tail -2
+else
+    echo "⚠️  Microcode updates not visible in dmesg (may require reboot)"
+fi
 echo ""
 
 # Configure mail system based on user choice
-echo "===== 6.0.2 Configuring mail system ====="
+echo "===== 6.1 Configuring mail system ====="
 
 # Stop postfix for configuration
 systemctl stop postfix 2>/dev/null || true
