@@ -102,6 +102,15 @@ apt-get update && apt-get upgrade -y
 echo "===== 2. Setting hostname ====="
 hostnamectl set-hostname "$HOSTNAME"
 
+echo "===== 2.1 Setting root password for emergency access ====="
+echo "Setting a secure root password for console/emergency access..."
+echo "This is important for recovery scenarios when SSH key access fails."
+echo ""
+echo "Please set a strong root password:"
+passwd root
+echo "✅ Root password configured for emergency console access"
+echo ""
+
 echo "===== 3. Creating bastion user with strict configuration ====="
 if ! id "$USERNAME" &>/dev/null; then
     
