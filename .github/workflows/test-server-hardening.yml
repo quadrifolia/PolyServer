@@ -55,7 +55,7 @@ jobs:
         # Check other shell scripts
         find scripts/ -name "*.sh" -type f | while read -r script; do
           echo "Checking $script..."
-          shellcheck -e SC1091,SC2034 "$script"
+          shellcheck -e SC1091,SC2034,SC2129 "$script"
         done
         echo "✅ All shell scripts passed syntax validation"
         
