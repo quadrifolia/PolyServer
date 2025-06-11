@@ -7,29 +7,21 @@
       "pattern": "^https://localhost"
     },
     {
-      "pattern": "^http://127.0.0.1"
+      "pattern": "your-domain"
     },
     {
       "pattern": "example.com"
     },
     {
-      "pattern": "your-domain.com"
-    },
-    {
       "pattern": "your-server-ip"
-    },
-    {
-      "pattern": "server.example.com"
-    },
-    {
-      "pattern": "test@example.com"
     }
   ],
   "httpHeaders": [
     {
       "urls": ["https://github.com"],
       "headers": {
-        "User-Agent": "Mozilla/5.0 (compatible; linkcheck)"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
       }
     }
   ],
