@@ -2736,56 +2736,81 @@ fi
 if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; then
     echo "Installing Netdata monitoring for bastion host visibility..."
     
-    # Install Netdata using the official installation script
-    bash <(curl -Ss https://my-netdata.io/kickstart.sh) --dont-wait --non-interactive
+    # Ask for Netdata Cloud claim token
+    echo ""
+    echo "🔗 NETDATA CLOUD INTEGRATION (OPTIONAL)"
+    echo "======================================="
+    echo "To connect this bastion host to Netdata Cloud for centralized monitoring:"
+    echo "1. Sign up at https://app.netdata.cloud (free account)"
+    echo "2. Create a Space for your infrastructure"
+    echo "3. Get your claim token from the 'Connect Nodes' section"
+    echo ""
+    echo "Leave empty to skip Netdata Cloud integration (local-only monitoring)"
+    read -p "Enter your Netdata Cloud claim token (or press Enter to skip): " -r NETDATA_CLAIM_TOKEN
     
-    # Configure Netdata for bastion host
+    # Download and run the official installer
+    echo "Downloading Netdata installer..."
+    if curl -o /tmp/netdata-kickstart.sh https://get.netdata.cloud/kickstart.sh; then
+        echo "Running Netdata installation..."
+        if [ -n "$NETDATA_CLAIM_TOKEN" ]; then
+            echo "Installing with Netdata Cloud integration..."
+            sh /tmp/netdata-kickstart.sh --stable-channel --disable-telemetry --claim-token "$NETDATA_CLAIM_TOKEN"
+        else
+            echo "Installing without Netdata Cloud (local monitoring only)..."
+            sh /tmp/netdata-kickstart.sh --stable-channel --disable-telemetry --dont-wait
+        fi
+        
+        # Clean up installer
+        rm -f /tmp/netdata-kickstart.sh
+    else
+        echo "⚠️ Failed to download Netdata installer, trying fallback method..."
+        
+        # Fallback: install via package manager
+        if command -v apt-get >/dev/null 2>&1; then
+            apt-get update
+            apt-get install -y netdata
+        else
+            echo "❌ Failed to install Netdata - please install manually"
+            echo "   Visit: https://learn.netdata.cloud/docs/installing/one-line-installer-for-all-linux-systems"
+            INSTALL_NETDATA="false"
+        fi
+    fi
+    
+    # Check if Netdata was successfully installed
+    if ! command -v netdata >/dev/null 2>&1 && ! systemctl is-active --quiet netdata; then
+        echo "❌ Netdata installation verification failed"
+        INSTALL_NETDATA="false"
+    fi
+fi
+
+if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; then
+    # Configure Netdata for bastion host security
+    echo "Configuring Netdata for secure bastion host monitoring..."
+    
+    # Create minimal security-focused configuration
     cat > /etc/netdata/netdata.conf << 'EOF'
 [global]
-    # Bind to localhost only for security (access via SSH tunnel)
+    # SECURITY: Bind to localhost only (access via SSH tunnel)
     bind socket to IP = 127.0.0.1
     default port = 19999
     
-    # Set timezone
-    timezone = UTC
-    
-    # Security settings
-    run as user = netdata
-    
-    # Performance settings optimized for bastion
+    # Performance optimized for bastion host
     page cache size = 16
-    dbengine multihost disk space = 128
+    dbengine multihost disk space = 64
     
 [web]
-    # Disable web GUI authentication (since we bind to localhost only)
+    # No authentication needed since localhost-only
     web files owner = root
     web files group = netdata
-    
-[plugins]
-    # Enable useful plugins for bastion monitoring
-    cgroups = yes
-    tc = no
-    idlejitter = no
-    
-[plugin:proc]
-    # Monitor system resources
-    /proc/net/dev = yes
-    /proc/diskstats = yes
-    /proc/net/netstat = yes
-    /proc/net/tcp = yes
-    /proc/net/tcp6 = yes
     
 EOF
 
     # Enable and start Netdata
     systemctl enable netdata
-    systemctl start netdata
+    systemctl restart netdata
 
     # Wait for Netdata to start
-    sleep 5
-
-    # Optional Netdata Cloud Integration
-    NETDATA_CLAIM_TOKEN=${NETDATA_CLAIM_TOKEN:-}
+    sleep 3
     NETDATA_CLAIM_ROOMS=${NETDATA_CLAIM_ROOMS:-}
     
     if [ -n "$NETDATA_CLAIM_TOKEN" ] && [ -n "$NETDATA_CLAIM_ROOMS" ]; then
