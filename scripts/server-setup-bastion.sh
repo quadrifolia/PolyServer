@@ -116,16 +116,17 @@ if ! id "$USERNAME" &>/dev/null; then
     
     echo "Creating bastion user with key-only authentication"
     useradd -m -s /bin/bash "$USERNAME"
+    
     # Disable password authentication while preserving SSH key access
     # Method 1: Set impossible password hash (allows SSH keys, blocks password)
     usermod -p '*' "$USERNAME"   # Set impossible password hash (stronger than !)
     
-    # Method 2: Configure password aging to prevent password login
-    chage -E -1 "$USERNAME"      # Remove password expiration date
+    # Method 2: Configure password aging to eliminate expiration issues
+    chage -E -1 "$USERNAME"      # Remove password expiration date (never expires)
     chage -I -1 "$USERNAME"      # Remove inactive period
     chage -m 0 "$USERNAME"       # No minimum password age
     chage -M 99999 "$USERNAME"   # Maximum password age (essentially forever)
-    chage -d 0 "$USERNAME"       # Set last change to epoch (never expires)
+    chage -d -1 "$USERNAME"      # Set last change to "never" (fixes sudo issues)
     chage -W -1 "$USERNAME"      # Remove expiration warning
     
     # Method 3: Do NOT use passwd -l as it completely locks the account
@@ -1396,6 +1397,17 @@ echo "Running initial chkrootkit scan to create baseline..."
 mkdir -p /var/log/chkrootkit
 /etc/cron.daily/chkrootkit-scan
 
+echo ""
+echo "📝 IMPORTANT: chkrootkit baseline setup"
+echo "The initial chkrootkit baseline was created, but you should update it after"
+echo "all services are running and the system is in its final state."
+echo ""
+echo "After 24-48 hours of operation, run this command to update the baseline:"
+echo "  sudo cp -a -f /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected"
+echo ""
+echo "This will eliminate false positives from legitimate security tools like Suricata."
+echo ""
+
 # Configure Logcheck (make it less noisy - logwatch provides better daily reports)
 echo "===== 10.2 Configuring Logcheck (minimal noise) ====="
 
@@ -2267,8 +2279,10 @@ echo "   2. Configure any internal network access rules as needed"
 echo "   3. Set up centralized logging if required"
 echo "   4. Review and customize monitoring alerts"
 echo "   5. Document connection procedures for authorized users"
+echo "   6. ⚠️  IMPORTANT: After 24-48 hours, update chkrootkit baseline:"
+echo "      sudo cp -a -f /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected"
 if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
-    echo "   6. Check your email inbox for the setup completion report"
+    echo "   7. Check your email inbox for the setup completion report"
 fi
 echo ""
 echo "🛡️  This bastion host is now ready for secure access management!"
