@@ -2711,6 +2711,148 @@ echo ""
 echo "Timer status:"
 systemctl list-timers bastion-monitor.timer disk-space-protection.timer --no-pager || true
 
+echo "===== 14.6.1 Optional Netdata Monitoring Integration ====="
+# Optional Netdata monitoring for bastion host insights
+INSTALL_NETDATA=${INSTALL_NETDATA:-false}
+
+if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; then
+    echo "Installing Netdata monitoring for bastion host visibility..."
+    
+    # Install Netdata using the official installation script
+    bash <(curl -Ss https://my-netdata.io/kickstart.sh) --dont-wait --non-interactive
+    
+    # Configure Netdata for bastion host
+    cat > /etc/netdata/netdata.conf << 'EOF'
+[global]
+    # Bind to localhost only for security (access via SSH tunnel)
+    bind socket to IP = 127.0.0.1
+    default port = 19999
+    
+    # Set timezone
+    timezone = UTC
+    
+    # Security settings
+    run as user = netdata
+    
+    # Performance settings optimized for bastion
+    page cache size = 16
+    dbengine multihost disk space = 128
+    
+[web]
+    # Disable web GUI authentication (since we bind to localhost only)
+    web files owner = root
+    web files group = netdata
+    
+[plugins]
+    # Enable useful plugins for bastion monitoring
+    cgroups = yes
+    tc = no
+    idlejitter = no
+    
+[plugin:proc]
+    # Monitor system resources
+    /proc/net/dev = yes
+    /proc/diskstats = yes
+    /proc/net/netstat = yes
+    /proc/net/tcp = yes
+    /proc/net/tcp6 = yes
+    
+EOF
+
+    # Enable and start Netdata
+    systemctl enable netdata
+    systemctl start netdata
+
+    # Wait for Netdata to start
+    sleep 5
+
+    # Optional Netdata Cloud Integration
+    NETDATA_CLAIM_TOKEN=${NETDATA_CLAIM_TOKEN:-}
+    NETDATA_CLAIM_ROOMS=${NETDATA_CLAIM_ROOMS:-}
+    
+    if [ -n "$NETDATA_CLAIM_TOKEN" ] && [ -n "$NETDATA_CLAIM_ROOMS" ]; then
+        echo "Setting up Netdata Cloud integration for bastion host..."
+        
+        # Claim the bastion node to Netdata Cloud
+        /opt/netdata/bin/netdata-claim.sh \
+            -token="$NETDATA_CLAIM_TOKEN" \
+            -rooms="$NETDATA_CLAIM_ROOMS" \
+            -url=https://app.netdata.cloud \
+            || echo "⚠️ Netdata Cloud claiming failed - check token and room ID"
+        
+        echo "✅ Netdata Cloud integration configured for bastion host"
+        echo "   • Bastion should appear in your Netdata Cloud dashboard within a few minutes"
+        echo "   • Login at: https://app.netdata.cloud"
+    else
+        echo ""
+        echo "📊 NETDATA CLOUD INTEGRATION FOR BASTION (Optional)"
+        echo "================================================="
+        echo "To add this bastion host to Netdata Cloud for centralized monitoring:"
+        echo ""
+        echo "1. Sign up/login at: https://app.netdata.cloud"
+        echo "2. Create a new space or select existing space"
+        echo "3. Go to 'Connect Nodes' and copy your claim token"
+        echo "4. Run the following command on this bastion host:"
+        echo ""
+        echo "   sudo /opt/netdata/bin/netdata-claim.sh \\"
+        echo "     -token=YOUR_CLAIM_TOKEN \\"
+        echo "     -rooms=YOUR_ROOM_ID \\"
+        echo "     -url=https://app.netdata.cloud"
+        echo ""
+        echo "5. Your bastion will appear in Netdata Cloud within 1-2 minutes"
+        echo ""
+        echo "Bastion monitoring benefits:"
+        echo "   • SSH connection monitoring"
+        echo "   • Resource usage tracking"
+        echo "   • Security event correlation"
+        echo "   • Network traffic analysis"
+        echo "   • Alert on suspicious activity"
+        echo ""
+    fi
+
+    # Create Netdata log rotation
+    cat > /etc/logrotate.d/netdata << 'EOF'
+/var/log/netdata/*.log {
+    daily
+    rotate 7
+    missingok
+    notifempty
+    compress
+    delaycompress
+    postrotate
+        systemctl reload netdata > /dev/null 2>&1 || true
+    endscript
+}
+EOF
+
+    # Create bastion-specific access script
+    cat > /usr/local/bin/netdata-bastion << 'EOF'
+#!/bin/bash
+# Quick access to bastion Netdata dashboard
+echo "🌐 Bastion Netdata Dashboard Access:"
+echo "   Local URL: http://127.0.0.1:19999"
+echo "   SSH Tunnel: ssh -L 19999:127.0.0.1:19999 user@bastion"
+echo "   Netdata Cloud: https://app.netdata.cloud"
+echo ""
+echo "📊 Bastion Monitoring Features:"
+echo "   • SSH connection tracking"
+echo "   • Failed login attempts"
+echo "   • Resource utilization"
+echo "   • Network traffic analysis"
+echo "   • System performance metrics"
+EOF
+    chmod +x /usr/local/bin/netdata-bastion
+    
+    echo "✅ Netdata monitoring installed for bastion host"
+    echo "   • Local access: http://127.0.0.1:19999 (via SSH tunnel)"
+    echo "   • Quick access command: netdata-bastion"
+    echo "   • Optimized for bastion host monitoring"
+else
+    echo "📊 Netdata monitoring skipped (optional feature)"
+    echo "   To enable: Set INSTALL_NETDATA=true or answer 'y' when prompted"
+    echo "   Benefits: SSH monitoring, resource tracking, security insights"
+fi
+
 # Optional: Create tmpfs fallback for critical scenarios (commented out by default)
 cat > /usr/local/bin/setup-log-tmpfs << 'EOF'
 #!/bin/bash
@@ -3303,6 +3445,9 @@ echo "   • Suricata rules maintenance with weekly auto-updates"
 echo "   • Enhanced OpenSSH HMAC tuning (SHA-1 completely disabled)"
 echo "   • Systemd watchdog for fail2ban, suricata, and SSH services"
 echo "   • Daily automated backup of all security configurations"
+if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; then
+    echo "   • Netdata monitoring with optional Cloud integration"
+fi
 echo ""
 echo "Configuration backup location: /var/backups/security-configs/"
 echo "Backup retention: 30 days"

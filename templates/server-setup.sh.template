@@ -2104,8 +2104,9 @@ fi
 
 # ========= Install Netdata Monitoring =========
 echo "===== 8.1 Installing Netdata monitoring ====="
-if [ "$DOCKER_MODE" = "false" ]; then
+if [ "$DOCKER_MODE" = "false" ] && [ "{{NETDATA_ENABLED}}" = "true" ]; then
     # Install Netdata using the official installation script
+    echo "Installing Netdata monitoring agent..."
     bash <(curl -Ss https://my-netdata.io/kickstart.sh) --dont-wait --non-interactive
 
     # Configure Netdata
@@ -2116,7 +2117,7 @@ if [ "$DOCKER_MODE" = "false" ]; then
     default port = 19999
     
     # Set timezone
-    timezone = Europe/Berlin
+    timezone = {{TIMEZONE}}
     
     # Security settings
     run as user = netdata
@@ -2142,6 +2143,54 @@ EOF
     docker_systemctl enable netdata
     docker_systemctl start netdata
 
+    # Wait a moment for Netdata to start
+    sleep 5
+
+    # Optional Netdata Cloud Integration
+    if [ -n "{{NETDATA_CLAIM_TOKEN}}" ] && [ -n "{{NETDATA_CLAIM_ROOMS}}" ]; then
+        echo "Setting up Netdata Cloud integration..."
+        
+        # Claim the node to Netdata Cloud
+        /opt/netdata/bin/netdata-claim.sh \
+            -token={{NETDATA_CLAIM_TOKEN}} \
+            -rooms={{NETDATA_CLAIM_ROOMS}} \
+            -url=https://app.netdata.cloud \
+            || echo "⚠️ Netdata Cloud claiming failed - check token and room ID"
+        
+        echo "✅ Netdata Cloud integration configured"
+        echo "   • Server should appear in your Netdata Cloud dashboard within a few minutes"
+        echo "   • Login at: https://app.netdata.cloud"
+    else
+        echo ""
+        echo "📊 NETDATA CLOUD INTEGRATION (Optional)"
+        echo "======================================"
+        echo "To add this server to Netdata Cloud for centralized monitoring:"
+        echo ""
+        echo "1. Sign up/login at: https://app.netdata.cloud"
+        echo "2. Create a new space or select existing space"
+        echo "3. Go to 'Connect Nodes' and copy your claim token"
+        echo "4. Run the following command on this server:"
+        echo ""
+        echo "   sudo /opt/netdata/bin/netdata-claim.sh \\"
+        echo "     -token=YOUR_CLAIM_TOKEN \\"
+        echo "     -rooms=YOUR_ROOM_ID \\"
+        echo "     -url=https://app.netdata.cloud"
+        echo ""
+        echo "5. Your server will appear in Netdata Cloud within 1-2 minutes"
+        echo ""
+        echo "📝 To set up automatic claiming, add these to your .env file:"
+        echo "   NETDATA_CLAIM_TOKEN=your_claim_token"
+        echo "   NETDATA_CLAIM_ROOMS=your_room_id"
+        echo ""
+        echo "Benefits of Netdata Cloud:"
+        echo "   • Centralized monitoring dashboard"
+        echo "   • Mobile app access"
+        echo "   • Alert management"
+        echo "   • Multi-server correlation"
+        echo "   • Team collaboration features"
+        echo ""
+    fi
+
     # Create Netdata log rotation
     cat > /etc/logrotate.d/netdata << 'EOF'
 /var/log/netdata/*.log {
@@ -2157,7 +2206,23 @@ EOF
 }
 EOF
 
-    echo "Netdata monitoring installed and configured"
+    # Create access script for easy local access
+    cat > /usr/local/bin/netdata-access << 'EOF'
+#!/bin/bash
+# Quick access to local Netdata dashboard
+echo "🌐 Opening Netdata dashboard..."
+echo "   Local URL: http://127.0.0.1:19999"
+echo "   SSH Tunnel: ssh -L 19999:127.0.0.1:19999 user@server"
+echo "   Netdata Cloud: https://app.netdata.cloud"
+EOF
+    chmod +x /usr/local/bin/netdata-access
+
+    echo "✅ Netdata monitoring installed and configured"
+    echo "   • Local access: http://127.0.0.1:19999 (via SSH tunnel)"
+    echo "   • Quick access command: netdata-access"
+elif [ "$DOCKER_MODE" = "false" ] && [ "{{NETDATA_ENABLED}}" != "true" ]; then
+    echo "📊 Netdata monitoring disabled (NETDATA_ENABLED=false)"
+    echo "   To enable: Set NETDATA_ENABLED=true in your configuration"
 else
     echo "🐳 Skipping Netdata configuration in Docker mode"
 fi
@@ -3560,6 +3625,9 @@ echo "   • Suricata rules maintenance with weekly auto-updates"
 echo "   • Enhanced OpenSSH HMAC tuning (SHA-1 completely disabled)"
 echo "   • Systemd watchdog for fail2ban, suricata, SSH, and nginx services"
 echo "   • Daily automated backup of all security configurations"
+if [ "{{NETDATA_ENABLED}}" = "true" ]; then
+    echo "   • Netdata monitoring with optional Cloud integration"
+fi
 echo ""
 echo "Configuration backup location: /var/backups/security-configs/"
 echo "Backup retention: 30 days"
@@ -3573,4 +3641,10 @@ echo "Next steps:"
 echo "1. Edit /etc/dsgvo/contacts.conf to add your DPO contact information"
 echo "2. Complete /etc/dsgvo/data_inventory.json with your actual data"
 echo "3. Run compliance check: /opt/polyserver/scripts/dsgvo-compliance-check.sh"
-echo "4. Deploy your applications using the PolyServer foundation"
+if [ "{{NETDATA_ENABLED}}" = "true" ]; then
+    echo "4. Access Netdata dashboard: ssh -L 19999:127.0.0.1:19999 {{USERNAME}}@server"
+    echo "5. Add to Netdata Cloud (optional): run 'netdata-access' for instructions"
+    echo "6. Deploy your applications using the PolyServer foundation"
+else
+    echo "4. Deploy your applications using the PolyServer foundation"
+fi
