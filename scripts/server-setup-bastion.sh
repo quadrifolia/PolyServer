@@ -378,9 +378,30 @@ apt-get install -y fail2ban unattended-upgrades apt-listchanges \
     suricata tcpdump netcat-openbsd mailutils postfix
 
 echo "===== 6.0.1 Installing CPU microcode updates ====="
+
+# Check if running in a virtual environment
+VIRT_TYPE=""
+if [ -f /proc/cpuinfo ] && grep -q "hypervisor" /proc/cpuinfo; then
+    VIRT_TYPE="hypervisor"
+elif systemd-detect-virt &>/dev/null; then
+    VIRT_TYPE=$(systemd-detect-virt)
+elif [ -f /sys/hypervisor/type ]; then
+    VIRT_TYPE=$(cat /sys/hypervisor/type)
+fi
+
 # Detect CPU vendor and install appropriate microcode updates
 CPU_VENDOR=$(grep vendor_id /proc/cpuinfo | head -1 | awk '{print $3}')
 echo "Detected CPU vendor: $CPU_VENDOR"
+
+if [ -n "$VIRT_TYPE" ] && [ "$VIRT_TYPE" != "none" ]; then
+    echo "🔍 Virtualization detected: $VIRT_TYPE"
+    echo "⚠️  Note: In virtualized environments (OVH, Hetzner, AWS, etc.):"
+    echo "   - Microcode updates are typically managed by the host/hypervisor"
+    echo "   - VM-level microcode installation may not affect actual CPU vulnerability mitigations"
+    echo "   - Contact your hosting provider for physical host microcode status"
+    echo ""
+    echo "Installing microcode package anyway for completeness..."
+fi
 
 if [ "$CPU_VENDOR" = "AuthenticAMD" ]; then
     echo "AMD processor detected - installing AMD microcode updates..."
@@ -481,7 +502,22 @@ if dmesg | grep -i microcode | tail -5 | grep -q "updated"; then
     echo "✅ Microcode updates detected in dmesg"
     dmesg | grep -i microcode | tail -2
 else
-    echo "⚠️  Microcode updates not visible in dmesg (may require reboot)"
+    if [ -n "$VIRT_TYPE" ] && [ "$VIRT_TYPE" != "none" ]; then
+        echo "ℹ️  No microcode updates in dmesg (expected in virtualized environment)"
+        echo "   Microcode management is handled by the hypervisor/host system"
+    else
+        echo "⚠️  Microcode updates not visible in dmesg (may require reboot)"
+    fi
+fi
+
+# Check initramfs for microcode
+if [ -f "/boot/initrd.img-$(uname -r)" ]; then
+    if lsinitramfs "/boot/initrd.img-$(uname -r)" 2>/dev/null | grep -q microcode; then
+        echo "✅ Microcode files present in initramfs"
+        lsinitramfs "/boot/initrd.img-$(uname -r)" 2>/dev/null | grep microcode | head -3
+    else
+        echo "⚠️  No microcode files found in initramfs"
+    fi
 fi
 echo ""
 
