@@ -678,10 +678,10 @@ Server: $(hostname)
     # Check if mail was delivered locally
     if [ -f /var/mail/root ]; then
         echo "✅ Local mail delivery confirmed in /var/mail/root"
-        echo "Mail file size: $(ls -lh /var/mail/root | awk '{print $5}')"
+        echo "Mail file size: $(stat -c%s /var/mail/root 2>/dev/null | numfmt --to=iec || echo "unknown")"
     elif [ -f /var/spool/mail/root ]; then
         echo "✅ Local mail delivery confirmed in /var/spool/mail/root"
-        echo "Mail file size: $(ls -lh /var/spool/mail/root | awk '{print $5}')"
+        echo "Mail file size: $(stat -c%s /var/spool/mail/root 2>/dev/null | numfmt --to=iec || echo "unknown")"
     else
         echo "⚠️ Mail file not found - checking postfix status and logs"
         systemctl status postfix --no-pager -l 2>/dev/null || echo "Postfix status check failed (normal in containers)"

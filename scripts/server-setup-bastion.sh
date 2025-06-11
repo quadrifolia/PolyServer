@@ -38,7 +38,7 @@ if [ -z "$SSH_PUBLIC_KEY" ]; then
     echo "  cat ~/.ssh/id_ed25519.pub    (for Ed25519 keys)"
     echo "  cat ~/.ssh/id_rsa.pub        (for RSA keys)"
     echo ""
-    read -p "Enter your SSH public key: " SSH_PUBLIC_KEY
+    read -r -p "Enter your SSH public key: " SSH_PUBLIC_KEY
     
     if [ -z "$SSH_PUBLIC_KEY" ]; then
         echo "ERROR: SSH public key is required for bastion host setup"
@@ -46,7 +46,7 @@ if [ -z "$SSH_PUBLIC_KEY" ]; then
     fi
     
     echo ""
-    read -p "Enter email address for security notifications (default: root): " EMAIL_INPUT
+    read -r -p "Enter email address for security notifications (default: root): " EMAIL_INPUT
     if [ -n "$EMAIL_INPUT" ]; then
         LOGWATCH_EMAIL="$EMAIL_INPUT"
     fi
@@ -59,20 +59,20 @@ echo ""
 echo "Configure external SMTP for reliable email delivery (recommended)."
 echo "This ensures security notifications are not filtered as spam."
 echo ""
-read -p "Do you want to configure external SMTP? (y/n, default: n): " SMTP_CONFIGURE
+read -r -p "Do you want to configure external SMTP? (y/n, default: n): " SMTP_CONFIGURE
 
 if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
     echo ""
     echo "Please provide your SMTP server details:"
     echo ""
-    read -p "SMTP Server (e.g., smtp.gmail.com): " SMTP_SERVER
-    read -p "SMTP Port (default: 587): " SMTP_PORT
+    read -r -p "SMTP Server (e.g., smtp.gmail.com): " SMTP_SERVER
+    read -r -p "SMTP Port (default: 587): " SMTP_PORT
     SMTP_PORT=${SMTP_PORT:-587}
-    read -p "SMTP Username: " SMTP_USERNAME
-    read -s -p "SMTP Password: " SMTP_PASSWORD
+    read -r -p "SMTP Username: " SMTP_USERNAME
+    read -r -s -p "SMTP Password: " SMTP_PASSWORD
     echo ""
-    read -p "From Email Address (must match SMTP account): " SMTP_FROM_EMAIL
-    read -p "Use TLS/STARTTLS? (y/n, default: y): " SMTP_TLS
+    read -r -p "From Email Address (must match SMTP account): " SMTP_FROM_EMAIL
+    read -r -p "Use TLS/STARTTLS? (y/n, default: y): " SMTP_TLS
     SMTP_TLS=${SMTP_TLS:-y}
     
     if [ -z "$SMTP_SERVER" ] || [ -z "$SMTP_USERNAME" ] || [ -z "$SMTP_PASSWORD" ] || [ -z "$SMTP_FROM_EMAIL" ]; then
@@ -318,15 +318,15 @@ ufw allow in $SSH_PORT/tcp comment "SSH bastion access"
 # Allow outgoing connections to internal networks on common ports
 IFS=',' read -ra PORTS <<< "$ALLOWED_INTERNAL_PORTS"
 for port in "${PORTS[@]}"; do
-    ufw allow out $port/tcp comment "Internal network access TCP"
+    ufw allow out "$port"/tcp comment "Internal network access TCP"
     # Also allow UDP for DNS and other services that may need it
     if [ "$port" = "53" ]; then
-        ufw allow out $port/udp comment "DNS resolution UDP"
+        ufw allow out "$port"/udp comment "DNS resolution UDP"
     fi
 done
 
 # Allow outgoing SSH on custom port (for SSH tunneling and forwarding)
-ufw allow out $SSH_PORT/tcp comment "SSH outbound for tunneling"
+ufw allow out "$SSH_PORT"/tcp comment "SSH outbound for tunneling"
 
 # Ensure DNS is allowed (both TCP and UDP) if not already in the list
 if [[ ! "$ALLOWED_INTERNAL_PORTS" =~ "53" ]]; then
@@ -340,7 +340,7 @@ ufw allow out 443/tcp comment "HTTPS updates"
 
 # Allow SMTP port if external SMTP is configured
 if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
-    ufw allow out $SMTP_PORT/tcp comment "SMTP email delivery"
+    ufw allow out "$SMTP_PORT"/tcp comment "SMTP email delivery"
     echo "✅ Added UFW rule for SMTP port $SMTP_PORT"
 fi
 
@@ -604,12 +604,12 @@ Server: $(hostname)
     # Check if mail was delivered locally
     if [ -f /var/mail/root ]; then
         echo "✅ Local mail delivery confirmed in /var/mail/root"
-        echo "Mail file size: $(ls -lh /var/mail/root | awk '{print $5}')"
+        echo "Mail file size: $(stat -c%s /var/mail/root 2>/dev/null | numfmt --to=iec || echo "unknown")"
         echo "Recent mail headers:"
         tail -n 5 /var/mail/root | head -n 3
     elif [ -f /var/spool/mail/root ]; then
         echo "✅ Local mail delivery confirmed in /var/spool/mail/root"
-        echo "Mail file size: $(ls -lh /var/spool/mail/root | awk '{print $5}')"
+        echo "Mail file size: $(stat -c%s /var/spool/mail/root 2>/dev/null | numfmt --to=iec || echo "unknown")"
         echo "Recent mail headers:"
         tail -n 5 /var/spool/mail/root | head -n 3
     else
@@ -1924,9 +1924,9 @@ echo "===== 14. Final system hardening and restart services ====="
 # Disable unnecessary services (bastion hosts should be minimal)
 UNNECESSARY_SERVICES="bluetooth cups avahi-daemon"
 for service in $UNNECESSARY_SERVICES; do
-    if systemctl is-active --quiet $service; then
-        systemctl stop $service
-        systemctl disable $service
+    if systemctl is-active --quiet "$service"; then
+        systemctl stop "$service"
+        systemctl disable "$service"
         echo "Disabled unnecessary service: $service"
     fi
 done
@@ -2119,7 +2119,7 @@ else
     echo "Saving setup completion report to local mail..."
     
     # Send to local root account
-    cat /tmp/bastion-setup-complete.txt | /usr/sbin/sendmail root
+    /usr/sbin/sendmail root < /tmp/bastion-setup-complete.txt
     
     echo "✅ Setup completion report saved to local root mailbox"
     echo "📧 Use 'bastionmail' command to read the setup report"
