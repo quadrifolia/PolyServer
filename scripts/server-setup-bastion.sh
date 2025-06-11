@@ -2713,61 +2713,104 @@ systemctl list-timers bastion-monitor.timer disk-space-protection.timer --no-pag
 
 echo "===== 14.6.1 Optional Netdata Monitoring Integration ====="
 # Optional Netdata monitoring for bastion host insights
-INSTALL_NETDATA=${INSTALL_NETDATA:-false}
+
+# Ask user if they want to install Netdata (unless already set via environment)
+if [ -z "${INSTALL_NETDATA:-}" ]; then
+    echo ""
+    echo "📊 NETDATA MONITORING INTEGRATION"
+    echo "================================="
+    echo "Netdata provides comprehensive monitoring for your bastion host including:"
+    echo "   • SSH connection tracking and analysis"
+    echo "   • Resource usage monitoring for security analysis" 
+    echo "   • Network traffic correlation with security events"
+    echo "   • Optional integration with Netdata Cloud for centralized monitoring"
+    echo ""
+    read -p "Would you like to install Netdata monitoring? (y/N): " -r
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        INSTALL_NETDATA="true"
+    else
+        INSTALL_NETDATA="false"
+    fi
+fi
 
 if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; then
     echo "Installing Netdata monitoring for bastion host visibility..."
     
-    # Install Netdata using the official installation script
-    bash <(curl -Ss https://my-netdata.io/kickstart.sh) --dont-wait --non-interactive
+    # Ask for Netdata Cloud claim token
+    echo ""
+    echo "🔗 NETDATA CLOUD INTEGRATION (OPTIONAL)"
+    echo "======================================="
+    echo "To connect this bastion host to Netdata Cloud for centralized monitoring:"
+    echo "1. Sign up at https://app.netdata.cloud (free account)"
+    echo "2. Create a Space for your infrastructure"
+    echo "3. Get your claim token from the 'Connect Nodes' section"
+    echo ""
+    echo "Leave empty to skip Netdata Cloud integration (local-only monitoring)"
+    read -p "Enter your Netdata Cloud claim token (or press Enter to skip): " -r NETDATA_CLAIM_TOKEN
     
-    # Configure Netdata for bastion host
+    # Download and run the official installer
+    echo "Downloading Netdata installer..."
+    if curl -o /tmp/netdata-kickstart.sh https://get.netdata.cloud/kickstart.sh; then
+        echo "Running Netdata installation..."
+        if [ -n "$NETDATA_CLAIM_TOKEN" ]; then
+            echo "Installing with Netdata Cloud integration..."
+            sh /tmp/netdata-kickstart.sh --stable-channel --disable-telemetry --claim-token "$NETDATA_CLAIM_TOKEN"
+        else
+            echo "Installing without Netdata Cloud (local monitoring only)..."
+            sh /tmp/netdata-kickstart.sh --stable-channel --disable-telemetry --dont-wait
+        fi
+        
+        # Clean up installer
+        rm -f /tmp/netdata-kickstart.sh
+    else
+        echo "⚠️ Failed to download Netdata installer, trying fallback method..."
+        
+        # Fallback: install via package manager
+        if command -v apt-get >/dev/null 2>&1; then
+            apt-get update
+            apt-get install -y netdata
+        else
+            echo "❌ Failed to install Netdata - please install manually"
+            echo "   Visit: https://learn.netdata.cloud/docs/installing/one-line-installer-for-all-linux-systems"
+            INSTALL_NETDATA="false"
+        fi
+    fi
+    
+    # Check if Netdata was successfully installed
+    if ! command -v netdata >/dev/null 2>&1 && ! systemctl is-active --quiet netdata; then
+        echo "❌ Netdata installation verification failed"
+        INSTALL_NETDATA="false"
+    fi
+fi
+
+if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; then
+    # Configure Netdata for bastion host security
+    echo "Configuring Netdata for secure bastion host monitoring..."
+    
+    # Create minimal security-focused configuration
     cat > /etc/netdata/netdata.conf << 'EOF'
 [global]
-    # Bind to localhost only for security (access via SSH tunnel)
+    # SECURITY: Bind to localhost only (access via SSH tunnel)
     bind socket to IP = 127.0.0.1
     default port = 19999
     
-    # Set timezone
-    timezone = UTC
-    
-    # Security settings
-    run as user = netdata
-    
-    # Performance settings optimized for bastion
+    # Performance optimized for bastion host
     page cache size = 16
-    dbengine multihost disk space = 128
+    dbengine multihost disk space = 64
     
 [web]
-    # Disable web GUI authentication (since we bind to localhost only)
+    # No authentication needed since localhost-only
     web files owner = root
     web files group = netdata
-    
-[plugins]
-    # Enable useful plugins for bastion monitoring
-    cgroups = yes
-    tc = no
-    idlejitter = no
-    
-[plugin:proc]
-    # Monitor system resources
-    /proc/net/dev = yes
-    /proc/diskstats = yes
-    /proc/net/netstat = yes
-    /proc/net/tcp = yes
-    /proc/net/tcp6 = yes
     
 EOF
 
     # Enable and start Netdata
     systemctl enable netdata
-    systemctl start netdata
+    systemctl restart netdata
 
     # Wait for Netdata to start
-    sleep 5
-
-    # Optional Netdata Cloud Integration
-    NETDATA_CLAIM_TOKEN=${NETDATA_CLAIM_TOKEN:-}
+    sleep 3
     NETDATA_CLAIM_ROOMS=${NETDATA_CLAIM_ROOMS:-}
     
     if [ -n "$NETDATA_CLAIM_TOKEN" ] && [ -n "$NETDATA_CLAIM_ROOMS" ]; then
@@ -3007,7 +3050,23 @@ $MAIL_CONFIG_INFO
 • SSH session monitoring
 • File integrity monitoring
 
-This bastion host is now ready for secure access management!
+🔐 ADVANCED SECURITY REFINEMENTS:
+• AppArmor profile enforcement verification and custom SSH profile
+• Unattended reboot warning system (wall messages + email alerts)
+• Suricata rules maintenance with weekly auto-updates
+• Enhanced OpenSSH HMAC tuning (SHA-1 completely disabled)
+• Systemd watchdog for fail2ban, suricata, and SSH services
+• Daily automated backup of all security configurations
+if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; then
+    echo "   • Netdata monitoring with optional Cloud integration"
+fi
+
+📁 CONFIGURATION BACKUP:
+• Location: /var/backups/security-configs/
+• Retention: 30 days
+• Daily automated backup with integrity verification
+
+This bastion host is now ready for secure access management\!
 
 --
 Generated by PolyServer Bastion Setup
@@ -3072,70 +3131,6 @@ tail -n 10 /var/log/mail.log 2>/dev/null || echo "Mail logs not yet available"
 # Also save a copy for local reference
 cp /tmp/bastion-setup-complete.txt "/root/bastion-setup-completion-$SETUP_DATE.txt"
 
-# Clean up temporary files
-rm -f /tmp/smtp_test_email.txt /tmp/final_setup_email.txt /tmp/bastion-setup-complete.txt
-
-echo "===== BASTION HOST SETUP COMPLETE ====="
-echo "========================================"
-echo ""
-echo "✅ Bastion host has been successfully configured with enhanced security"
-echo ""
-echo "🔐 IMPORTANT SECURITY INFORMATION:"
-echo "   • SSH Port: $SSH_PORT (NOT the default 22)"
-echo "   • Authentication: SSH keys ONLY (no passwords)"
-echo "   • User: $USERNAME"
-echo "   • Firewall: Restrictive rules active"
-echo "   • Monitoring: Comprehensive logging and alerting enabled"
-echo ""
-echo "🔗 CONNECTION COMMAND:"
-echo "   ssh -p $SSH_PORT $USERNAME@$BASION_IP"
-echo ""
-echo "📊 MONITORING:"
-if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
-    echo "   • Security reports delivered via external SMTP to: $LOGWATCH_EMAIL"
-else
-    echo "   • Security reports delivered to local root mailbox (use 'bastionmail' to read)"
-fi
-echo "   • Setup completion report saved locally"
-echo "   • Real-time monitoring active"
-echo "   • All activities logged and audited"
-echo ""
-echo "📚 DOCUMENTATION:"
-echo "   • Read /root/BASTION-README.md for complete information"
-echo "   • Setup report: /root/bastion-setup-completion-$SETUP_DATE.txt"
-echo ""
-echo "🛠️ BASTION COMMANDS:"
-echo "   • 'sudo bastionstat' - Show comprehensive bastion status (requires root)"
-echo "   • 'sudo sshmon' - Monitor SSH activity in real-time (requires root)"
-if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
-    echo "   • All security alerts sent to: $LOGWATCH_EMAIL"
-else
-    echo "   • 'bastionmail' - Read local mail and notifications"
-fi
-echo ""
-echo "📧 EMAIL CONFIGURATION:"
-if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
-    echo "   • External SMTP configured: $SMTP_SERVER:$SMTP_PORT"
-    echo "   • From address: $SMTP_FROM_EMAIL"
-    echo "   • All security notifications sent to: $LOGWATCH_EMAIL"
-    echo "   • Reliable delivery - emails will not be filtered as spam"
-else
-    echo "   • Local mail delivery only"
-    echo "   • Security notifications stored in local root mailbox"
-    echo "   • Use 'bastionmail' command to read alerts"
-fi
-echo ""
-echo "⚠️  NEXT STEPS:"
-echo "   1. Test SSH access from your workstation"
-echo "   2. Configure any internal network access rules as needed"
-echo "   3. Set up centralized logging if required"
-echo "   4. Review and customize monitoring alerts"
-echo "   5. Document connection procedures for authorized users"
-echo "   6. ⚠️  IMPORTANT: After 24-48 hours, update chkrootkit baseline:"
-echo "      sudo cp -a -f /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected"
-if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
-    echo "   7. Check your email inbox for the setup completion report"
-fi
 echo "===== 14.7 Advanced Security Refinements ====="
 
 # AppArmor Profile Enforcement Verification
@@ -3437,8 +3432,61 @@ echo "Creating initial security configuration backup..."
 /etc/cron.daily/security-config-backup
 
 echo "✅ Daily security configuration backup system configured"
+
+# Clean up temporary files
+rm -f /tmp/smtp_test_email.txt /tmp/final_setup_email.txt /tmp/bastion-setup-complete.txt
+
+echo "===== BASTION HOST SETUP COMPLETE ====="
+echo "========================================"
 echo ""
-echo "Advanced security refinements completed:"
+echo "✅ Bastion host has been successfully configured with enhanced security"
+echo ""
+echo "🔐 IMPORTANT SECURITY INFORMATION:"
+echo "   • SSH Port: $SSH_PORT (NOT the default 22)"
+echo "   • Authentication: SSH keys ONLY (no passwords)"
+echo "   • User: $USERNAME"
+echo "   • Firewall: Restrictive rules active"
+echo "   • Monitoring: Comprehensive logging and alerting enabled"
+echo ""
+echo "🔗 CONNECTION COMMAND:"
+echo "   ssh -p $SSH_PORT $USERNAME@$BASION_IP"
+echo ""
+echo "📊 MONITORING:"
+if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
+    echo "   • Security reports delivered via external SMTP to: $LOGWATCH_EMAIL"
+else
+    echo "   • Security reports delivered to local root mailbox (use 'bastionmail' to read)"
+fi
+echo "   • Setup completion report saved locally"
+echo "   • Real-time monitoring active"
+echo "   • All activities logged and audited"
+echo ""
+echo "📚 DOCUMENTATION:"
+echo "   • Read /root/BASTION-README.md for complete information"
+echo "   • Setup report: /root/bastion-setup-completion-$SETUP_DATE.txt"
+echo ""
+echo "🛠️ BASTION COMMANDS:"
+echo "   • 'sudo bastionstat' - Show comprehensive bastion status (requires root)"
+echo "   • 'sudo sshmon' - Monitor SSH activity in real-time (requires root)"
+if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
+    echo "   • All security alerts sent to: $LOGWATCH_EMAIL"
+else
+    echo "   • 'bastionmail' - Read local mail and notifications"
+fi
+echo ""
+echo "📧 EMAIL CONFIGURATION:"
+if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
+    echo "   • External SMTP configured: $SMTP_SERVER:$SMTP_PORT"
+    echo "   • From address: $SMTP_FROM_EMAIL"
+    echo "   • All security notifications sent to: $LOGWATCH_EMAIL"
+    echo "   • Reliable delivery - emails will not be filtered as spam"
+else
+    echo "   • Local mail delivery only"
+    echo "   • Security notifications stored in local root mailbox"
+    echo "   • Use 'bastionmail' command to read alerts"
+fi
+echo ""
+echo "🔐 ADVANCED SECURITY REFINEMENTS:"
 echo "   • AppArmor profile enforcement verification and custom SSH profile"
 echo "   • Unattended reboot warning system (wall messages + email alerts)"
 echo "   • Suricata rules maintenance with weekly auto-updates"
@@ -3449,8 +3497,21 @@ if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; the
     echo "   • Netdata monitoring with optional Cloud integration"
 fi
 echo ""
-echo "Configuration backup location: /var/backups/security-configs/"
-echo "Backup retention: 30 days"
-
+echo "📁 CONFIGURATION BACKUP:"
+echo "   • Location: /var/backups/security-configs/"
+echo "   • Retention: 30 days"
+echo "   • Daily automated backup with integrity verification"
 echo ""
-echo "🛡️  This bastion host is now ready for secure access management!"
+echo "⚠️  NEXT STEPS:"
+echo "   1. Test SSH access from your workstation"
+echo "   2. Configure any internal network access rules as needed"
+echo "   3. Set up centralized logging if required"
+echo "   4. Review and customize monitoring alerts"
+echo "   5. Document connection procedures for authorized users"
+echo "   6. ⚠️  IMPORTANT: After 24-48 hours, update chkrootkit baseline:"
+echo "      sudo cp -a -f /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected"
+if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
+    echo "   7. Check your email inbox for the setup completion report"
+fi
+echo ""
+echo "🎉 This bastion host is now ready for secure access management!"

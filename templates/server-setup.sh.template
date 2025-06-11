@@ -2105,62 +2105,82 @@ fi
 # ========= Install Netdata Monitoring =========
 echo "===== 8.1 Installing Netdata monitoring ====="
 if [ "$DOCKER_MODE" = "false" ] && [ "{{NETDATA_ENABLED}}" = "true" ]; then
-    # Install Netdata using the official installation script
     echo "Installing Netdata monitoring agent..."
-    bash <(curl -Ss https://my-netdata.io/kickstart.sh) --dont-wait --non-interactive
+    
+    # Download and run the official installer
+    echo "Downloading Netdata installer..."
+    if curl -o /tmp/netdata-kickstart.sh https://get.netdata.cloud/kickstart.sh; then
+        echo "Running Netdata installation..."
+        
+        # Check if claim token is provided via template variables
+        NETDATA_CLAIM_TOKEN="{{NETDATA_CLAIM_TOKEN}}"
+        NETDATA_CLAIM_ROOMS="{{NETDATA_CLAIM_ROOMS}}"
+        
+        if [ -n "$NETDATA_CLAIM_TOKEN" ] && [ "$NETDATA_CLAIM_TOKEN" != "{{NETDATA_CLAIM_TOKEN}}" ]; then
+            echo "Installing with Netdata Cloud integration (from configuration)..."
+            sh /tmp/netdata-kickstart.sh --stable-channel --disable-telemetry --claim-token "$NETDATA_CLAIM_TOKEN" --claim-rooms "$NETDATA_CLAIM_ROOMS"
+        else
+            echo "Installing without Netdata Cloud (local monitoring only)..."
+            sh /tmp/netdata-kickstart.sh --stable-channel --disable-telemetry --dont-wait
+        fi
+        
+        # Clean up installer
+        rm -f /tmp/netdata-kickstart.sh
+    else
+        echo "⚠️ Failed to download Netdata installer, trying fallback method..."
+        
+        # Fallback: install via package manager
+        if command -v apt-get >/dev/null 2>&1; then
+            apt-get update
+            apt-get install -y netdata
+        else
+            echo "❌ Failed to install Netdata - please install manually"
+            echo "   Visit: https://learn.netdata.cloud/docs/installing/one-line-installer-for-all-linux-systems"
+            NETDATA_ENABLED="false"
+        fi
+    fi
+    
+    # Check if Netdata was successfully installed
+    if ! command -v netdata >/dev/null 2>&1 && ! systemctl is-active --quiet netdata; then
+        echo "❌ Netdata installation verification failed"
+        NETDATA_ENABLED="false"
+    fi
+fi
 
-    # Configure Netdata
+if [ "$DOCKER_MODE" = "false" ] && [ "{{NETDATA_ENABLED}}" = "true" ] && [ "$NETDATA_ENABLED" != "false" ]; then
+    # Configure Netdata for secure server monitoring
+    echo "Configuring Netdata for secure server monitoring..."
+    
+    # Create minimal security-focused configuration
     cat > /etc/netdata/netdata.conf << 'EOF'
 [global]
-    # Bind to localhost only for security (access via SSH tunnel or Nginx proxy)
+    # SECURITY: Bind to localhost only (access via SSH tunnel or Nginx proxy)
     bind socket to IP = 127.0.0.1
     default port = 19999
     
-    # Set timezone
-    timezone = {{TIMEZONE}}
-    
-    # Security settings
-    run as user = netdata
-    
-    # Performance settings  
+    # Performance optimized for server
     page cache size = 32
-    dbengine multihost disk space = 256
+    dbengine multihost disk space = 128
     
 [web]
-    # Disable web GUI authentication (since we bind to localhost only)
+    # No authentication needed since localhost-only
     web files owner = root
     web files group = netdata
-    
-[plugins]
-    # Enable useful plugins
-    cgroups = yes
-    tc = no
-    idlejitter = no
     
 EOF
 
     # Enable and start Netdata
     docker_systemctl enable netdata
-    docker_systemctl start netdata
+    docker_systemctl restart netdata
 
-    # Wait a moment for Netdata to start
-    sleep 5
+    # Wait for Netdata to start
+    sleep 3
 
-    # Optional Netdata Cloud Integration
-    if [ -n "{{NETDATA_CLAIM_TOKEN}}" ] && [ -n "{{NETDATA_CLAIM_ROOMS}}" ]; then
-        echo "Setting up Netdata Cloud integration..."
-        
-        # Claim the node to Netdata Cloud
-        /opt/netdata/bin/netdata-claim.sh \
-            -token={{NETDATA_CLAIM_TOKEN}} \
-            -rooms={{NETDATA_CLAIM_ROOMS}} \
-            -url=https://app.netdata.cloud \
-            || echo "⚠️ Netdata Cloud claiming failed - check token and room ID"
-        
-        echo "✅ Netdata Cloud integration configured"
-        echo "   • Server should appear in your Netdata Cloud dashboard within a few minutes"
-        echo "   • Login at: https://app.netdata.cloud"
-    else
+    # Optional Netdata Cloud Integration (show instructions if not configured)
+    NETDATA_CLAIM_TOKEN="{{NETDATA_CLAIM_TOKEN}}"
+    NETDATA_CLAIM_ROOMS="{{NETDATA_CLAIM_ROOMS}}"
+    
+    if [ -z "$NETDATA_CLAIM_TOKEN" ] || [ "$NETDATA_CLAIM_TOKEN" = "{{NETDATA_CLAIM_TOKEN}}" ]; then
         echo ""
         echo "📊 NETDATA CLOUD INTEGRATION (Optional)"
         echo "======================================"
@@ -2182,13 +2202,10 @@ EOF
         echo "   NETDATA_CLAIM_TOKEN=your_claim_token"
         echo "   NETDATA_CLAIM_ROOMS=your_room_id"
         echo ""
-        echo "Benefits of Netdata Cloud:"
-        echo "   • Centralized monitoring dashboard"
-        echo "   • Mobile app access"
-        echo "   • Alert management"
-        echo "   • Multi-server correlation"
-        echo "   • Team collaboration features"
-        echo ""
+    else
+        echo "✅ Netdata Cloud integration configured from template variables"
+        echo "   • Server should appear in your Netdata Cloud dashboard within a few minutes"
+        echo "   • Login at: https://app.netdata.cloud"
     fi
 
     # Create Netdata log rotation
