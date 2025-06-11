@@ -2417,6 +2417,84 @@ EOF
 
 echo "✅ Emergency disk space protection configured"
 
+echo "===== 14.5.1 Creating systemd timer services for reliable monitoring ====="
+# Create systemd services and timers to ensure monitoring runs even if cron missed
+
+# Bastion monitoring service
+cat > /etc/systemd/system/bastion-monitor.service << 'EOF'
+[Unit]
+Description=Bastion Host Security Monitoring
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/cron.hourly/bastion-monitor
+User=root
+StandardOutput=journal
+StandardError=journal
+EOF
+
+# Bastion monitoring timer (runs hourly, catches up missed runs)
+cat > /etc/systemd/system/bastion-monitor.timer << 'EOF'
+[Unit]
+Description=Run bastion monitoring every hour
+Requires=bastion-monitor.service
+
+[Timer]
+OnCalendar=hourly
+Persistent=yes
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# Disk space protection service
+cat > /etc/systemd/system/disk-space-protection.service << 'EOF'
+[Unit]
+Description=Emergency Disk Space Protection
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/cron.hourly/disk-space-protection
+User=root
+StandardOutput=journal
+StandardError=journal
+EOF
+
+# Disk space protection timer (runs hourly, catches up missed runs)
+cat > /etc/systemd/system/disk-space-protection.timer << 'EOF'
+[Unit]
+Description=Run disk space protection every hour
+Requires=disk-space-protection.service
+
+[Timer]
+OnCalendar=hourly
+Persistent=yes
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# Enable and start the timer services
+systemctl daemon-reload
+systemctl enable bastion-monitor.timer
+systemctl enable disk-space-protection.timer
+systemctl start bastion-monitor.timer
+systemctl start disk-space-protection.timer
+
+echo "✅ Systemd timer services created and enabled"
+echo "   • bastion-monitor.timer - runs hourly, catches missed runs"
+echo "   • disk-space-protection.timer - runs hourly, catches missed runs"
+echo "   • Both timers use Persistent=yes to run missed executions on boot"
+
+# Verify timers are active
+echo ""
+echo "Timer status:"
+systemctl list-timers bastion-monitor.timer disk-space-protection.timer --no-pager || true
+
 # Optional: Create tmpfs fallback for critical scenarios (commented out by default)
 cat > /usr/local/bin/setup-log-tmpfs << 'EOF'
 #!/bin/bash

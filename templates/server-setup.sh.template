@@ -2704,6 +2704,165 @@ EOF
 
 echo "✅ Unused filesystem modules blacklisted for security"
 
+echo "===== 11.5 Creating systemd timer services for reliable security monitoring ====="
+# Create systemd timers to ensure critical security scans run even if cron missed
+
+# Malware detection service
+cat > /etc/systemd/system/maldet-scan.service << 'EOF'
+[Unit]
+Description=Linux Malware Detect Daily Scan
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/cron.daily/maldet-scan
+User=root
+StandardOutput=journal
+StandardError=journal
+TimeoutSec=7200
+EOF
+
+# Malware detection timer (runs daily, catches up missed runs)
+cat > /etc/systemd/system/maldet-scan.timer << 'EOF'
+[Unit]
+Description=Run malware detection daily
+Requires=maldet-scan.service
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=30min
+Persistent=yes
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# ClamAV scan service
+cat > /etc/systemd/system/clamscan.service << 'EOF'
+[Unit]
+Description=ClamAV Daily Virus Scan
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/cron.daily/clamscan
+User=root
+StandardOutput=journal
+StandardError=journal
+TimeoutSec=7200
+EOF
+
+# ClamAV scan timer (runs daily, catches up missed runs)
+cat > /etc/systemd/system/clamscan.timer << 'EOF'
+[Unit]
+Description=Run ClamAV scan daily
+Requires=clamscan.service
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=45min
+Persistent=yes
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# Trivy container scan service (if Docker mode)
+if [ "{{DEPLOYMENT_MODE}}" = "docker" ]; then
+cat > /etc/systemd/system/trivy-scan.service << 'EOF'
+[Unit]
+Description=Trivy Container Security Scan
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/etc/cron.daily/trivy-scan
+User=root
+StandardOutput=journal
+StandardError=journal
+TimeoutSec=3600
+EOF
+
+cat > /etc/systemd/system/trivy-scan.timer << 'EOF'
+[Unit]
+Description=Run Trivy container scan daily
+Requires=trivy-scan.service
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=60min
+Persistent=yes
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+fi
+
+# Rootkit scan service
+cat > /etc/systemd/system/rkhunter-scan.service << 'EOF'
+[Unit]
+Description=RKHunter Rootkit Scan
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/cron.daily/rkhunter-scan
+User=root
+StandardOutput=journal
+StandardError=journal
+TimeoutSec=1800
+EOF
+
+# Rootkit scan timer (runs daily, catches up missed runs)
+cat > /etc/systemd/system/rkhunter-scan.timer << 'EOF'
+[Unit]
+Description=Run rootkit scan daily
+Requires=rkhunter-scan.service
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=90min
+Persistent=yes
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# Enable and start the timer services
+systemctl daemon-reload
+systemctl enable maldet-scan.timer
+systemctl enable clamscan.timer
+systemctl enable rkhunter-scan.timer
+
+if [ "{{DEPLOYMENT_MODE}}" = "docker" ]; then
+    systemctl enable trivy-scan.timer
+    systemctl start trivy-scan.timer
+fi
+
+systemctl start maldet-scan.timer
+systemctl start clamscan.timer
+systemctl start rkhunter-scan.timer
+
+echo "✅ Systemd timer services created and enabled for security scans"
+echo "   • maldet-scan.timer - daily malware detection (with randomized delay)"
+echo "   • clamscan.timer - daily antivirus scan (with randomized delay)"
+echo "   • rkhunter-scan.timer - daily rootkit scan (with randomized delay)"
+if [ "{{DEPLOYMENT_MODE}}" = "docker" ]; then
+    echo "   • trivy-scan.timer - daily container vulnerability scan"
+fi
+echo "   • All timers use Persistent=yes to run missed executions on boot"
+echo "   • Randomized delays prevent all scans running simultaneously"
+
+# Verify timers are active
+echo ""
+echo "Security scan timer status:"
+systemctl list-timers maldet-scan.timer clamscan.timer rkhunter-scan.timer --no-pager || true
+
 # ========= Now restart SSH with new configuration =========
 echo "===== 12. Restarting SSH to apply security settings ====="
 docker_systemctl restart sshd
