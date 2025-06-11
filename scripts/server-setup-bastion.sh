@@ -1320,8 +1320,84 @@ EOF
 # Restart rsyslog to apply new configuration
 systemctl restart rsyslog
 
+# Configure chkrootkit
+echo "===== 10.1 Configuring chkrootkit ====="
+# Create chkrootkit scan script with proper log handling
+cat > /etc/cron.daily/chkrootkit-scan << 'EOF'
+#!/bin/bash
+# Run a daily chkrootkit scan
+
+# Log file
+LOGFILE="/var/log/chkrootkit/daily_scan.log"
+EXPECTED_LOG="/var/log/chkrootkit/log.expected"
+TODAY_LOG="/var/log/chkrootkit/log.today"
+
+# Create log directory if it doesn't exist
+mkdir -p /var/log/chkrootkit
+
+# Clear previous log
+echo "chkrootkit daily scan started at $(date)" > $LOGFILE
+
+# Run the scan
+chkrootkit -q > $TODAY_LOG 2>&1
+
+# Add completion time
+echo "chkrootkit daily scan completed at $(date)" >> $LOGFILE
+
+# Create expected log file if it doesn't exist (first run)
+if [ ! -f "$EXPECTED_LOG" ]; then
+    echo "Creating initial expected output file for chkrootkit..."
+    cp "$TODAY_LOG" "$EXPECTED_LOG"
+    echo "Initial chkrootkit expected output created at $(date)" >> $LOGFILE
+fi
+
+# Check for differences from expected output
+if ! diff -q "$EXPECTED_LOG" "$TODAY_LOG" >/dev/null 2>&1; then
+    # There are differences - send email alert
+    ADMIN_EMAIL="${LOGWATCH_EMAIL:-root}"
+    
+    # Create diff report
+    echo "chkrootkit output differs from expected baseline" > /tmp/chkrootkit-alert.txt
+    echo "Scan date: $(date)" >> /tmp/chkrootkit-alert.txt
+    echo "" >> /tmp/chkrootkit-alert.txt
+    echo "=== TODAY'S OUTPUT ===" >> /tmp/chkrootkit-alert.txt
+    cat "$TODAY_LOG" >> /tmp/chkrootkit-alert.txt
+    echo "" >> /tmp/chkrootkit-alert.txt
+    echo "=== EXPECTED OUTPUT ===" >> /tmp/chkrootkit-alert.txt
+    cat "$EXPECTED_LOG" >> /tmp/chkrootkit-alert.txt
+    echo "" >> /tmp/chkrootkit-alert.txt
+    echo "=== DIFFERENCES ===" >> /tmp/chkrootkit-alert.txt
+    diff "$EXPECTED_LOG" "$TODAY_LOG" >> /tmp/chkrootkit-alert.txt
+    
+    # Send email alert
+    cat /tmp/chkrootkit-alert.txt | mail -s "⚠️ CHKROOTKIT ALERT: Output changed on $(hostname)" "$ADMIN_EMAIL"
+    
+    # Log the alert
+    echo "chkrootkit output changed - alert sent to $ADMIN_EMAIL" >> $LOGFILE
+    
+    # Clean up
+    rm -f /tmp/chkrootkit-alert.txt
+else
+    echo "chkrootkit output matches expected baseline" >> $LOGFILE
+fi
+
+# Check for INFECTED results specifically
+if grep -q "INFECTED" "$TODAY_LOG"; then
+    ADMIN_EMAIL="${LOGWATCH_EMAIL:-root}"
+    cat "$TODAY_LOG" | mail -s "⚠️ ROOTKIT WARNING: Possible rootkit found on $(hostname)" "$ADMIN_EMAIL"
+    echo "INFECTED results found - alert sent to $ADMIN_EMAIL" >> $LOGFILE
+fi
+EOF
+
+chmod 755 /etc/cron.daily/chkrootkit-scan
+
+# Run initial chkrootkit scan to create baseline
+echo "Running initial chkrootkit scan to create baseline..."
+mkdir -p /var/log/chkrootkit
+/etc/cron.daily/chkrootkit-scan
+
 # Configure Logcheck (make it less noisy - logwatch provides better daily reports)
-echo "===== 10.1 Configuring Logcheck (minimal noise) ====="
+echo "===== 10.2 Configuring Logcheck (minimal noise) ====="
 
 # Create proper logcheck configuration with error handling
 cat > /etc/logcheck/logcheck.conf << EOF
@@ -1366,6 +1442,49 @@ chmod 755 /var/lock/logcheck
 
 # Clean up any stale lock files
 rm -f /var/lock/logcheck/logcheck.lock 2>/dev/null || true
+
+# Configure logcheck logfiles (fix "1 does not exist" error)
+echo "Configuring logcheck logfiles..."
+cat > /etc/logcheck/logcheck.logfiles << EOF
+# Logcheck logfiles configuration for bastion host
+# List of log files that logcheck should monitor
+
+/var/log/auth.log
+/var/log/syslog
+/var/log/kern.log
+/var/log/mail.log
+/var/log/daemon.log
+/var/log/user.log
+/var/log/messages
+EOF
+
+# Ensure all configured log files exist
+touch /var/log/auth.log
+touch /var/log/syslog
+touch /var/log/kern.log
+touch /var/log/mail.log
+touch /var/log/daemon.log
+touch /var/log/user.log
+touch /var/log/messages
+
+# Set proper permissions for log files
+chmod 640 /var/log/auth.log /var/log/syslog /var/log/kern.log /var/log/mail.log /var/log/daemon.log /var/log/user.log /var/log/messages
+chown root:adm /var/log/auth.log /var/log/syslog /var/log/kern.log /var/log/mail.log /var/log/daemon.log /var/log/user.log /var/log/messages
+
+# Test logcheck configuration
+echo "Testing logcheck configuration..."
+if sudo -u logcheck logcheck -t; then
+    echo "✅ Logcheck configuration is valid"
+else
+    echo "⚠️ Logcheck configuration test failed - will attempt to fix common issues"
+    # Create missing directories that logcheck might need
+    mkdir -p /var/lib/logcheck
+    chown logcheck:logcheck /var/lib/logcheck
+    chmod 755 /var/lib/logcheck
+    
+    # Ensure logcheck user can read log files
+    usermod -aG adm logcheck 2>/dev/null || true
+fi
 
 # Add logcheck ignore rules for common bastion activity
 echo "===== 10.1.1 Adding bastion-specific logcheck ignore rules ====="
