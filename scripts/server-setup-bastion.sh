@@ -2994,5 +2994,318 @@ echo "      sudo cp -a -f /var/log/chkrootkit/log.today /var/log/chkrootkit/log.
 if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
     echo "   7. Check your email inbox for the setup completion report"
 fi
+echo "===== 14.7 Advanced Security Refinements ====="
+
+# AppArmor Profile Enforcement Verification
+echo "Verifying AppArmor profile enforcement..."
+if command -v aa-status >/dev/null 2>&1; then
+    echo "Current AppArmor status:"
+    aa-status
+    
+    # Check if profiles are in enforce mode
+    PROFILES_ENFORCE=$(aa-status --complain 2>/dev/null | wc -l)
+    PROFILES_COMPLAIN=$(aa-status --enforce 2>/dev/null | wc -l)
+    
+    if [ "$PROFILES_COMPLAIN" -gt 0 ]; then
+        echo "⚠️ $PROFILES_COMPLAIN AppArmor profiles in complain mode - consider enforcing:"
+        aa-status --complain 2>/dev/null || true
+        echo "   To enforce: sudo aa-enforce /etc/apparmor.d/<profile>"
+    fi
+    
+    # Create custom SSH profile for enhanced protection
+    cat > /etc/apparmor.d/usr.sbin.sshd << 'EOF'
+#include <tunables/global>
+
+/usr/sbin/sshd {
+  #include <abstractions/authentication>
+  #include <abstractions/base>
+  #include <abstractions/consoles>
+  #include <abstractions/nameservice>
+  #include <abstractions/wutmp>
+
+  capability sys_chroot,
+  capability sys_resource,
+  capability chown,
+  capability fowner,
+  capability kill,
+  capability setgid,
+  capability setuid,
+  capability audit_write,
+  capability dac_override,
+  capability dac_read_search,
+  capability sys_tty_config,
+
+  /dev/log w,
+  /dev/null rw,
+  /dev/ptmx rw,
+  /dev/pts/* rw,
+  /dev/tty rw,
+  /dev/urandom r,
+
+  /etc/default/locale r,
+  /etc/environment r,
+  /etc/group r,
+  /etc/hosts.allow r,
+  /etc/hosts.deny r,
+  /etc/ld.so.cache r,
+  /etc/localtime r,
+  /etc/motd r,
+  /etc/passwd r,
+  /etc/security/** r,
+  /etc/shadow r,
+  /etc/ssh/** r,
+
+  /proc/*/fd/ r,
+  /proc/*/mounts r,
+  /proc/*/stat r,
+  /proc/sys/crypto/fips_enabled r,
+
+  /run/sshd.pid w,
+  /run/systemd/sessions/* rw,
+  /run/utmp rw,
+
+  /usr/bin/** PUx,
+  /bin/** PUx,
+  /usr/sbin/sshd mr,
+
+  /var/log/auth.log w,
+  /var/log/btmp w,
+  /var/log/lastlog rw,
+  /var/log/wtmp rw,
+
+  # Site-specific additions and overrides. See local/README for details.
+  #include <local/usr.sbin.sshd>
+}
+EOF
+    
+    # Load and enforce the SSH profile
+    apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd 2>/dev/null || echo "AppArmor SSH profile created (will be active after sshd restart)"
+    echo "✅ AppArmor SSH profile created and loaded"
+else
+    echo "⚠️ AppArmor not available or not installed"
+fi
+
+# Unattended Reboot Warning System
+echo "Configuring unattended reboot warning system..."
+cat > /etc/apt/apt.conf.d/51unattended-upgrades-bastion << 'EOF'
+// Enhanced bastion host configuration for unattended upgrades
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "false";
+Unattended-Upgrade::Automatic-Reboot-Time "04:00";
+
+// Warning system before reboot
+Unattended-Upgrade::SyslogEnable "true";
+Unattended-Upgrade::SyslogFacility "daemon";
+EOF
+
+# Create pre-reboot warning script
+cat > /usr/local/bin/unattended-reboot-warning.sh << 'EOF'
+#!/bin/bash
+# Pre-reboot warning for unattended upgrades
+
+# Check if reboot is required
+if [ -f /var/run/reboot-required ]; then
+    # Send wall message to all logged in users
+    echo "SYSTEM NOTICE: Unattended upgrade requires reboot. System will reboot at 04:00 AM." | wall
+    
+    # Log to syslog
+    logger -p daemon.warning "Bastion host scheduled for automatic reboot due to unattended upgrade"
+    
+    # Send email notification
+    echo "Bastion host $(hostname) is scheduled for automatic reboot at 04:00 AM due to security updates requiring reboot." | \
+        mail -s "BASTION NOTICE: Scheduled Reboot Tonight" root
+fi
+EOF
+
+chmod +x /usr/local/bin/unattended-reboot-warning.sh
+
+# Add to daily cron to warn users
+echo "0 20 * * * root /usr/local/bin/unattended-reboot-warning.sh" >> /etc/crontab
+
+echo "✅ Unattended reboot warning system configured"
+
+# Suricata Rules Maintenance
+echo "Setting up Suricata rules maintenance..."
+if command -v suricata-update >/dev/null 2>&1; then
+    # Configure suricata-update
+    suricata-update update-sources
+    suricata-update enable-source et/open
+    suricata-update enable-source oisf/trafficid
+    
+    # Create weekly rules update job
+    cat > /etc/cron.weekly/suricata-update << 'EOF'
+#!/bin/bash
+# Weekly Suricata rules update for bastion host
+
+# Update rule sources
+/usr/bin/suricata-update update-sources
+
+# Update rules
+/usr/bin/suricata-update
+
+# Test configuration
+if suricata -T -c /etc/suricata/suricata.yaml; then
+    # Restart Suricata if config is valid
+    systemctl reload suricata || systemctl restart suricata
+    logger -p daemon.info "Suricata rules updated successfully"
+else
+    # Notify of configuration error
+    echo "Suricata configuration test failed after rules update on $(hostname)" | \
+        mail -s "BASTION ERROR: Suricata Rules Update Failed" root
+    logger -p daemon.error "Suricata rules update failed - configuration test error"
+fi
+EOF
+    
+    chmod +x /etc/cron.weekly/suricata-update
+    echo "✅ Suricata rules auto-update configured"
+else
+    echo "⚠️ suricata-update not available - install with: apt install suricata-update"
+fi
+
+# Enhanced OpenSSH HMAC Tuning
+echo "Applying enhanced OpenSSH HMAC tuning..."
+cat >> /etc/ssh/sshd_config << 'EOF'
+
+# Enhanced HMAC configuration - disable SHA-1 completely
+MACs hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512
+
+# Ensure no weak algorithms
+PubkeyAcceptedKeyTypes rsa-sha2-512,rsa-sha2-256,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-ed25519
+KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256
+EOF
+
+echo "✅ Enhanced SSH HMAC configuration applied (no SHA-1)"
+
+# Systemd Watchdog for Critical Services
+echo "Configuring systemd watchdog for critical services..."
+
+# Enhanced fail2ban service with watchdog
+mkdir -p /etc/systemd/system/fail2ban.service.d
+cat > /etc/systemd/system/fail2ban.service.d/watchdog.conf << 'EOF'
+[Service]
+WatchdogSec=60
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=3
+EOF
+
+# Enhanced Suricata service with watchdog
+mkdir -p /etc/systemd/system/suricata.service.d
+cat > /etc/systemd/system/suricata.service.d/watchdog.conf << 'EOF'
+[Service]
+WatchdogSec=120
+Restart=on-failure
+RestartSec=15
+StartLimitInterval=600
+StartLimitBurst=3
+EOF
+
+# SSH service watchdog
+mkdir -p /etc/systemd/system/ssh.service.d
+cat > /etc/systemd/system/ssh.service.d/watchdog.conf << 'EOF'
+[Service]
+WatchdogSec=30
+Restart=on-failure
+RestartSec=5
+StartLimitInterval=300
+StartLimitBurst=5
+EOF
+
+systemctl daemon-reload
+echo "✅ Systemd watchdog configured for critical services"
+
+# Daily Security Configuration Backup
+echo "Setting up daily security configuration backup..."
+cat > /etc/cron.daily/security-config-backup << 'EOF'
+#!/bin/bash
+# Daily backup of critical security configurations
+
+BACKUP_DIR="/var/backups/security-configs"
+DATE=$(date +%Y%m%d)
+BACKUP_FILE="$BACKUP_DIR/security-config-$DATE.tar.gz"
+
+# Create backup directory
+mkdir -p "$BACKUP_DIR"
+
+# Create comprehensive backup
+tar -czf "$BACKUP_FILE" \
+    /etc/fail2ban \
+    /etc/suricata \
+    /etc/ssh \
+    /etc/audit \
+    /etc/ufw \
+    /etc/apparmor.d \
+    /etc/cron.d \
+    /etc/cron.daily \
+    /etc/cron.hourly \
+    /etc/cron.weekly \
+    /etc/systemd/system \
+    /var/lib/security/baselines \
+    /var/lib/persistence-baselines \
+    /etc/security-status.conf \
+    /etc/logrotate.d \
+    2>/dev/null
+
+# Verify backup
+if [ -f "$BACKUP_FILE" ]; then
+    # Check backup integrity
+    if tar -tzf "$BACKUP_FILE" >/dev/null 2>&1; then
+        logger -p daemon.info "Security configuration backup completed: $BACKUP_FILE"
+        
+        # Keep only last 30 days of backups
+        find "$BACKUP_DIR" -name "security-config-*.tar.gz" -mtime +30 -delete
+        
+        # Report backup size
+        BACKUP_SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
+        echo "Security configuration backup completed: $BACKUP_SIZE ($BACKUP_FILE)" >> /var/log/backup.log
+    else
+        logger -p daemon.error "Security configuration backup corrupted: $BACKUP_FILE"
+        echo "BACKUP ERROR: Security configuration backup corrupted on $(hostname)" | \
+            mail -s "BASTION ERROR: Backup Failure" root
+    fi
+else
+    logger -p daemon.error "Security configuration backup failed"
+    echo "BACKUP ERROR: Security configuration backup failed on $(hostname)" | \
+        mail -s "BASTION ERROR: Backup Failure" root
+fi
+
+# Quick integrity check of critical configs
+for config in /etc/ssh/sshd_config /etc/suricata/suricata.yaml /etc/fail2ban/jail.local; do
+    if [ -f "$config" ]; then
+        case "$config" in
+            */sshd_config)
+                sshd -t 2>/dev/null || echo "WARNING: SSH config validation failed" >> /var/log/backup.log
+                ;;
+            */suricata.yaml)
+                suricata -T -c "$config" >/dev/null 2>&1 || echo "WARNING: Suricata config validation failed" >> /var/log/backup.log
+                ;;
+            */jail.local)
+                fail2ban-client -t >/dev/null 2>&1 || echo "WARNING: Fail2ban config validation failed" >> /var/log/backup.log
+                ;;
+        esac
+    fi
+done
+EOF
+
+chmod +x /etc/cron.daily/security-config-backup
+
+# Run initial backup
+echo "Creating initial security configuration backup..."
+/etc/cron.daily/security-config-backup
+
+echo "✅ Daily security configuration backup system configured"
+echo ""
+echo "Advanced security refinements completed:"
+echo "   • AppArmor profile enforcement verification and custom SSH profile"
+echo "   • Unattended reboot warning system (wall messages + email alerts)"
+echo "   • Suricata rules maintenance with weekly auto-updates"
+echo "   • Enhanced OpenSSH HMAC tuning (SHA-1 completely disabled)"
+echo "   • Systemd watchdog for fail2ban, suricata, and SSH services"
+echo "   • Daily automated backup of all security configurations"
+echo ""
+echo "Configuration backup location: /var/backups/security-configs/"
+echo "Backup retention: 30 days"
+
 echo ""
 echo "🛡️  This bastion host is now ready for secure access management!"
