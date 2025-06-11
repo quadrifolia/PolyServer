@@ -962,6 +962,19 @@ failregex = sshd\[<pid>\]: Did not receive identification string from <HOST>
 ignoreregex =
 EOF
 
+# Ensure required log files exist before fail2ban starts
+echo "Creating required log files for fail2ban..."
+touch /var/log/auth.log
+touch /var/log/fail2ban.log
+chmod 640 /var/log/auth.log
+chmod 640 /var/log/fail2ban.log
+chown root:adm /var/log/auth.log
+chown root:adm /var/log/fail2ban.log
+
+# Restart rsyslog to ensure proper logging
+systemctl restart rsyslog
+sleep 2
+
 # Test fail2ban configuration before starting
 echo "Testing fail2ban configuration..."
 if fail2ban-client -t; then
@@ -973,21 +986,36 @@ fi
 
 # Enable and start fail2ban with error handling
 systemctl enable fail2ban
+
+# Stop fail2ban if it's already running to ensure clean start
+systemctl stop fail2ban 2>/dev/null || true
+sleep 1
+
 if systemctl start fail2ban; then
     echo "✅ Fail2ban started successfully"
     # Wait a moment for fail2ban to initialize
-    sleep 3
+    sleep 5
     # Verify it's running
     if systemctl is-active --quiet fail2ban; then
         echo "✅ Fail2ban is active and running"
-        fail2ban-client status || echo "⚠️ Fail2ban status check failed (may be initializing)"
+        # Test fail2ban client connection
+        if fail2ban-client status >/dev/null 2>&1; then
+            echo "✅ Fail2ban client communication working"
+            fail2ban-client status
+        else
+            echo "⚠️ Fail2ban status check failed (may still be initializing)"
+        fi
     else
         echo "⚠️ Fail2ban failed to start properly"
         systemctl status fail2ban --no-pager -l
+        echo "Checking fail2ban logs:"
+        tail -n 20 /var/log/fail2ban.log 2>/dev/null || echo "No fail2ban log available yet"
     fi
 else
     echo "❌ Failed to start fail2ban service"
     systemctl status fail2ban --no-pager -l
+    echo "Checking fail2ban logs:"
+    tail -n 20 /var/log/fail2ban.log 2>/dev/null || echo "No fail2ban log available"
 fi
 
 echo "===== 8. Configuring comprehensive audit framework for bastion ====="
