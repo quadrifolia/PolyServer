@@ -116,11 +116,11 @@ if ! id "$USERNAME" &>/dev/null; then
     
     echo "Creating bastion user with key-only authentication"
     useradd -m -s /bin/bash "$USERNAME"
-    # Completely disable password authentication - multiple approaches
-    # Method 1: Set impossible password hash
+    # Disable password authentication while preserving SSH key access
+    # Method 1: Set impossible password hash (allows SSH keys, blocks password)
     usermod -p '*' "$USERNAME"   # Set impossible password hash (stronger than !)
     
-    # Method 2: Remove all password aging constraints
+    # Method 2: Configure password aging to prevent password login
     chage -E -1 "$USERNAME"      # Remove password expiration date
     chage -I -1 "$USERNAME"      # Remove inactive period
     chage -m 0 "$USERNAME"       # No minimum password age
@@ -128,8 +128,9 @@ if ! id "$USERNAME" &>/dev/null; then
     chage -d 0 "$USERNAME"       # Set last change to epoch (never expires)
     chage -W -1 "$USERNAME"      # Remove expiration warning
     
-    # Method 3: Lock account from password login entirely
-    passwd -l "$USERNAME" >/dev/null 2>&1 || true
+    # Method 3: Do NOT use passwd -l as it completely locks the account
+    # passwd -l would prevent SSH key authentication from working
+    # The combination of usermod -p '*' and SSH configuration is sufficient
     
     # Method 4: Verify settings
     echo "Password authentication status for $USERNAME:"
@@ -656,6 +657,10 @@ apt-get install -y nmap ncat socat
 echo "iperf3 iperf3/start_daemon boolean false" | debconf-set-selections
 apt-get install -y iperf3
 
+# Ensure iperf3 service is not started (bastion security)
+systemctl disable iperf3 2>/dev/null || true
+systemctl stop iperf3 2>/dev/null || true
+
 # Security and audit tools
 apt-get install -y debsums aide auditd audispd-plugins
 apt-get install -y logcheck logcheck-database
@@ -940,7 +945,7 @@ bantime = 3600
 enabled = true
 filter = recidive
 logpath = /var/log/fail2ban.log
-action = iptables-allports[name=recidive]
+action = iptables-multiport[name=recidive, port="all"]
 bantime = 86400
 findtime = 86400
 maxretry = 5
@@ -957,8 +962,33 @@ failregex = sshd\[<pid>\]: Did not receive identification string from <HOST>
 ignoreregex =
 EOF
 
+# Test fail2ban configuration before starting
+echo "Testing fail2ban configuration..."
+if fail2ban-client -t; then
+    echo "✅ Fail2ban configuration is valid"
+else
+    echo "⚠️ Fail2ban configuration test failed - checking for issues"
+    fail2ban-client -t || true
+fi
+
+# Enable and start fail2ban with error handling
 systemctl enable fail2ban
-systemctl start fail2ban
+if systemctl start fail2ban; then
+    echo "✅ Fail2ban started successfully"
+    # Wait a moment for fail2ban to initialize
+    sleep 3
+    # Verify it's running
+    if systemctl is-active --quiet fail2ban; then
+        echo "✅ Fail2ban is active and running"
+        fail2ban-client status || echo "⚠️ Fail2ban status check failed (may be initializing)"
+    else
+        echo "⚠️ Fail2ban failed to start properly"
+        systemctl status fail2ban --no-pager -l
+    fi
+else
+    echo "❌ Failed to start fail2ban service"
+    systemctl status fail2ban --no-pager -l
+fi
 
 echo "===== 8. Configuring comprehensive audit framework for bastion ====="
 # Enhanced audit configuration for bastion hosts
