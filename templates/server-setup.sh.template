@@ -209,6 +209,70 @@ else
         nginx-extras suricata git awscli
 fi
 
+echo "===== 6.0.1 Installing CPU microcode updates ====="
+# Detect CPU vendor and install appropriate microcode updates
+CPU_VENDOR=$(grep vendor_id /proc/cpuinfo | head -1 | awk '{print $3}')
+echo "Detected CPU vendor: $CPU_VENDOR"
+
+if [ "$CPU_VENDOR" = "AuthenticAMD" ]; then
+    echo "AMD processor detected - installing AMD microcode updates..."
+    
+    # Check if non-free-firmware repository is available
+    if ! apt-cache search amd64-microcode | grep -q amd64-microcode; then
+        echo "Adding non-free-firmware repository for AMD microcode..."
+        
+        # Check if we're using the new sources.list format (Debian 12+)
+        if [ -f /etc/apt/sources.list.d/debian.sources ]; then
+            # Update existing debian.sources file to include non-free-firmware
+            if ! grep -q "non-free-firmware" /etc/apt/sources.list.d/debian.sources; then
+                echo "Updating debian.sources to include non-free-firmware..."
+                sed -i 's/Components: main/Components: main non-free-firmware/' /etc/apt/sources.list.d/debian.sources
+                apt-get update
+            fi
+        else
+            # Add to traditional sources.list
+            if ! grep -q "non-free-firmware" /etc/apt/sources.list; then
+                echo "Adding non-free-firmware to sources.list..."
+                sed -i 's/main$/main non-free-firmware/' /etc/apt/sources.list
+                apt-get update
+            fi
+        fi
+    fi
+    
+    # Install AMD microcode
+    if apt-cache search amd64-microcode | grep -q amd64-microcode; then
+        apt-get install -y amd64-microcode
+        echo "✅ AMD microcode installed successfully"
+        echo "⚠️  Microcode will be active after next reboot"
+    else
+        echo "⚠️  AMD microcode package not available in repositories"
+    fi
+    
+elif [ "$CPU_VENDOR" = "GenuineIntel" ]; then
+    echo "Intel processor detected - installing Intel microcode updates..."
+    apt-get install -y intel-microcode
+    echo "✅ Intel microcode installed successfully"
+    echo "⚠️  Microcode will be active after next reboot"
+    
+else
+    echo "Unknown or unsupported CPU vendor: $CPU_VENDOR"
+    echo "Skipping microcode installation"
+fi
+
+# Show current CPU vulnerabilities status
+echo ""
+echo "Current CPU vulnerability status:"
+if [ -d /sys/devices/system/cpu/vulnerabilities ]; then
+    for vuln in /sys/devices/system/cpu/vulnerabilities/*; do
+        vuln_name=$(basename "$vuln")
+        vuln_status=$(cat "$vuln")
+        printf "  %-25s %s\n" "$vuln_name:" "$vuln_status"
+    done
+else
+    echo "  CPU vulnerability information not available"
+fi
+echo ""
+
 echo "===== 6.1 Installing incident response and monitoring tools ====="
 # System monitoring
 apt-get install -y htop iotop sysstat atop bmon
