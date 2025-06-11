@@ -1427,7 +1427,6 @@ ATTACKALERT=1
 VIOLATIONS=1
 CRACKING=1
 PARANOID=0
-LOGFILES_LIST=1
 
 # Reduce false positives for bastion hosts
 SYSLOGSUMMARY=0
@@ -1445,10 +1444,12 @@ rm -f /var/lock/logcheck/logcheck.lock 2>/dev/null || true
 
 # Configure logcheck logfiles (fix "1 does not exist" error)
 echo "Configuring logcheck logfiles..."
-cat > /etc/logcheck/logcheck.logfiles << EOF
-# Logcheck logfiles configuration for bastion host
-# List of log files that logcheck should monitor
 
+# Remove any existing logfiles configuration that might conflict
+rm -f /etc/logcheck/logcheck.logfiles.d/* 2>/dev/null || true
+
+# Create clean logfiles configuration
+cat > /etc/logcheck/logcheck.logfiles << 'EOF'
 /var/log/auth.log
 /var/log/syslog
 /var/log/kern.log
@@ -1473,17 +1474,83 @@ chown root:adm /var/log/auth.log /var/log/syslog /var/log/kern.log /var/log/mail
 
 # Test logcheck configuration
 echo "Testing logcheck configuration..."
+
+# Debug: Check if logfiles configuration is readable
+echo "Checking logcheck.logfiles content:"
+cat /etc/logcheck/logcheck.logfiles
+
+# Ensure logcheck directories exist with proper permissions
+mkdir -p /var/lib/logcheck
+mkdir -p /etc/logcheck/logcheck.logfiles.d
+chown logcheck:logcheck /var/lib/logcheck
+chmod 755 /var/lib/logcheck
+
+# Ensure logcheck user can read log files
+usermod -aG adm logcheck 2>/dev/null || true
+
+# Verify all log files exist and are readable by logcheck user
+echo "Verifying log file permissions for logcheck user:"
+for logfile in /var/log/auth.log /var/log/syslog /var/log/kern.log /var/log/mail.log /var/log/daemon.log /var/log/user.log /var/log/messages; do
+    if [ -f "$logfile" ]; then
+        if sudo -u logcheck test -r "$logfile"; then
+            echo "✅ $logfile is readable by logcheck user"
+        else
+            echo "⚠️ $logfile is not readable by logcheck user - fixing permissions"
+            chmod 640 "$logfile"
+            chown root:adm "$logfile"
+        fi
+    else
+        echo "⚠️ $logfile does not exist - creating it"
+        touch "$logfile"
+        chmod 640 "$logfile"
+        chown root:adm "$logfile"
+    fi
+done
+
+# Test logcheck configuration
 if sudo -u logcheck logcheck -t; then
     echo "✅ Logcheck configuration is valid"
 else
-    echo "⚠️ Logcheck configuration test failed - will attempt to fix common issues"
-    # Create missing directories that logcheck might need
-    mkdir -p /var/lib/logcheck
-    chown logcheck:logcheck /var/lib/logcheck
-    chmod 755 /var/lib/logcheck
+    echo "⚠️ Logcheck configuration test failed - checking for more issues"
     
-    # Ensure logcheck user can read log files
-    usermod -aG adm logcheck 2>/dev/null || true
+    # Additional debugging
+    echo "Logcheck user groups:"
+    groups logcheck
+    
+    echo "Testing individual log file access:"
+    sudo -u logcheck ls -la /var/log/auth.log /var/log/syslog 2>&1 || true
+    
+    # Check if there are any invalid entries in logfiles
+    echo "Checking for invalid logfile entries:"
+    while IFS= read -r line; do
+        if [ -n "$line" ] && [ "${line:0:1}" != "#" ]; then
+            if [ ! -f "$line" ]; then
+                echo "⚠️ Log file does not exist: $line"
+            elif ! sudo -u logcheck test -r "$line"; then
+                echo "⚠️ Log file not readable by logcheck: $line"
+            fi
+        fi
+    done < /etc/logcheck/logcheck.logfiles
+    
+    # If still failing, try a simpler approach
+    echo "Attempting alternative logcheck configuration..."
+    
+    # Create a minimal working configuration
+    cat > /etc/logcheck/logcheck.logfiles << 'EOF'
+/var/log/auth.log
+/var/log/syslog
+EOF
+    
+    # Test again with minimal config
+    if sudo -u logcheck logcheck -t; then
+        echo "✅ Logcheck working with minimal configuration"
+    else
+        echo "⚠️ Logcheck still failing - will disable problematic settings"
+        
+        # Disable logcheck if it continues to fail
+        systemctl disable logcheck 2>/dev/null || true
+        echo "⚠️ Logcheck disabled due to configuration issues - logwatch will provide log monitoring"
+    fi
 fi
 
 # Add logcheck ignore rules for common bastion activity
