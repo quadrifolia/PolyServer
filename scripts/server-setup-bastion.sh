@@ -425,12 +425,14 @@ admin@bastion   $LOGWATCH_EMAIL
 security@bastion $LOGWATCH_EMAIL
 postmaster@bastion $LOGWATCH_EMAIL
 webmaster@bastion $LOGWATCH_EMAIL
+logcheck@@bastion $LOGWATCH_EMAIL
 root@\$(hostname)    $LOGWATCH_EMAIL
 bastion@\$(hostname) $LOGWATCH_EMAIL
 admin@\$(hostname)   $LOGWATCH_EMAIL
 security@\$(hostname) $LOGWATCH_EMAIL
 postmaster@\$(hostname) $LOGWATCH_EMAIL
 webmaster@\$(hostname) $LOGWATCH_EMAIL
+logcheck@\$(hostname) $LOGWATCH_EMAIL
 EOF
     
     # Configure recipient canonical mapping
@@ -475,6 +477,7 @@ security: $LOGWATCH_EMAIL
 postmaster: $LOGWATCH_EMAIL
 MAILER-DAEMON: $LOGWATCH_EMAIL
 webmaster: $LOGWATCH_EMAIL
+logcheck: $LOGWATCH_EMAIL
 EOF
 
     # Build alias database
@@ -509,6 +512,7 @@ else
 root: root
 $LOGWATCH_EMAIL: root
 webmaster: root
+logcheck: root
 admin: root
 security: root
 postmaster: root
@@ -724,6 +728,23 @@ sshmon() {
     sudo tail -f /var/log/auth.log | grep --line-buffered "sshd"
 }
 EOF
+
+    # Configure vim settings for better bastion administration
+    cat >> /home/$USERNAME/.vimrc << 'EOF'
+" Bastion host vim configuration
+" Disable visual mode for security (prevents accidental mouse selections)
+set mouse=
+set nocompatible
+set number
+set tabstop=4
+set shiftwidth=4
+set expandtab
+set autoindent
+set hlsearch
+set incsearch
+syntax on
+EOF
+    chown $USERNAME:$USERNAME /home/$USERNAME/.vimrc
 
 # Create global executable commands for bastion functions
 echo "===== 6.2.2 Creating global bastion commands ====="
@@ -1223,6 +1244,22 @@ EOF
 # Restart rsyslog to apply new configuration
 systemctl restart rsyslog
 
+# Configure Logcheck (make it less noisy - logwatch provides better daily reports)
+echo "===== 10.1 Configuring Logcheck (minimal noise) ====="
+# Set logcheck to use server level (much less noisy than default paranoid)
+sed -i 's/^REPORTLEVEL=.*/REPORTLEVEL="server"/' /etc/logcheck/logcheck.conf
+
+# Set logcheck email recipient
+sed -i "s/^SENDMAILTO=.*/SENDMAILTO=\"${LOGWATCH_EMAIL}\"/" /etc/logcheck/logcheck.conf
+
+# Set running frequency to daily (default is hourly - too noisy!)
+sed -i 's/^CRON_DAILY_RUN=.*/CRON_DAILY_RUN="true"/' /etc/logcheck/logcheck.conf
+sed -i 's/^CRON_HOURLY_RUN=.*/CRON_HOURLY_RUN="false"/' /etc/logcheck/logcheck.conf
+
+echo "✅ Logcheck configured for daily server-level reports (less technical than default)"
+echo "📧 Primary reporting via Logwatch (user-friendly daily summaries)"
+echo "🔍 Logcheck provides additional technical details if needed"
+
 # Configure Logwatch for bastion-specific monitoring
 cat > /etc/logwatch/conf/logwatch.conf << EOF
 # Bastion Host Logwatch Configuration
@@ -1377,10 +1414,12 @@ EOF
 
 chmod 755 /etc/cron.daily/bastion-security-report
 
-echo "===== 12. Setting up log rotation for bastion logs ====="
+echo "===== 12. Setting up comprehensive log rotation for bastion logs ====="
 cat > /etc/logrotate.d/bastion-logs << 'EOF'
-# Bastion host specific log rotation
+# Bastion host comprehensive log rotation configuration
+# Ensures logs don't fill up disk space while retaining security audit trail
 
+# SSH logs (critical for bastion security)
 /var/log/ssh.log {
     daily
     rotate 30
@@ -1394,6 +1433,21 @@ cat > /etc/logrotate.d/bastion-logs << 'EOF'
     endscript
 }
 
+# Authentication logs (keep longer for security analysis)
+/var/log/auth.log {
+    daily
+    rotate 60
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+    postrotate
+        systemctl reload rsyslog > /dev/null 2>&1 || true
+    endscript
+}
+
+# Sudo activity logs (important for privilege escalation monitoring)
 /var/log/sudo.log {
     daily
     rotate 90
@@ -1407,6 +1461,50 @@ cat > /etc/logrotate.d/bastion-logs << 'EOF'
     endscript
 }
 
+# Audit logs (critical for compliance - keep longer)
+/var/log/audit/audit.log {
+    daily
+    rotate 365
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+    copytruncate
+    postrotate
+        /sbin/service auditd restart > /dev/null 2>&1 || true
+    endscript
+}
+
+# Mail logs (for email notification troubleshooting)
+/var/log/mail.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+    postrotate
+        systemctl reload rsyslog > /dev/null 2>&1 || true
+    endscript
+}
+
+# Fail2ban logs (security monitoring)
+/var/log/fail2ban.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+    postrotate
+        systemctl reload fail2ban > /dev/null 2>&1 || true
+    endscript
+}
+
+# Network activity logs
 /var/log/network.log {
     weekly
     rotate 12
@@ -1420,6 +1518,7 @@ cat > /etc/logrotate.d/bastion-logs << 'EOF'
     endscript
 }
 
+# Emergency/critical logs (keep longer for incident analysis)
 /var/log/emergency.log {
     monthly
     rotate 24
@@ -1433,6 +1532,7 @@ cat > /etc/logrotate.d/bastion-logs << 'EOF'
     endscript
 }
 
+# Bastion monitoring logs
 /var/log/bastion-monitor.log {
     weekly
     rotate 12
@@ -1442,6 +1542,60 @@ cat > /etc/logrotate.d/bastion-logs << 'EOF'
     notifempty
     create 0644 root root
 }
+
+# System logs (general system activity)
+/var/log/syslog {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 syslog adm
+    postrotate
+        systemctl reload rsyslog > /dev/null 2>&1 || true
+    endscript
+}
+
+# Kernel logs
+/var/log/kern.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 syslog adm
+    postrotate
+        systemctl reload rsyslog > /dev/null 2>&1 || true
+    endscript
+}
+EOF
+
+# Add disk space monitoring to bastion monitoring script
+echo "===== 12.1 Adding disk space monitoring to prevent log overflow ====="
+cat >> /etc/cron.hourly/bastion-monitor << 'EOF'
+
+# Check for excessive log growth (prevent disk space issues)
+LOG_DIRS=("/var/log" "/var/log/audit" "/var/log/suricata")
+for log_dir in "${LOG_DIRS[@]}"; do
+    if [ -d "$log_dir" ]; then
+        # Check if any single log file is over 500MB
+        find "$log_dir" -name "*.log" -size +500M | while read -r large_log; do
+            LOG_SIZE=$(du -h "$large_log" | cut -f1)
+            log_message "WARNING: Large log file detected: $large_log ($LOG_SIZE)"
+            echo "WARNING: Large log file on bastion host $HOSTNAME: $large_log ($LOG_SIZE)" | mail -s "BASTION ALERT: Large Log File" root
+        done
+    fi
+done
+
+# Check overall /var/log disk usage
+VAR_LOG_USAGE=$(du -sh /var/log 2>/dev/null | cut -f1)
+VAR_LOG_USAGE_PCT=$(df /var/log | awk 'NR==2 {print $5}' | sed 's/%//')
+if [ "$VAR_LOG_USAGE_PCT" -gt 70 ]; then
+    log_message "WARNING: /var/log directory usage at $VAR_LOG_USAGE_PCT% ($VAR_LOG_USAGE)"
+    echo "WARNING: High log directory usage on bastion host $HOSTNAME: $VAR_LOG_USAGE_PCT% ($VAR_LOG_USAGE)" | mail -s "BASTION ALERT: Log Directory Space" root
+fi
 EOF
 
 echo "===== 13. Creating bastion host documentation ====="
