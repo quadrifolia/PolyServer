@@ -962,6 +962,19 @@ failregex = sshd\[<pid>\]: Did not receive identification string from <HOST>
 ignoreregex =
 EOF
 
+# Install and configure rsyslog first (needed for fail2ban)
+echo "Setting up logging system for fail2ban..."
+if ! systemctl is-active --quiet rsyslog; then
+    echo "Installing rsyslog for enhanced logging..."
+    apt-get install -y rsyslog
+    systemctl enable rsyslog
+    systemctl start rsyslog
+    sleep 2
+    echo "✅ Rsyslog installed and started"
+else
+    echo "✅ Rsyslog already active"
+fi
+
 # Ensure required log files exist before fail2ban starts
 echo "Creating required log files for fail2ban..."
 touch /var/log/auth.log
@@ -974,6 +987,10 @@ chown root:adm /var/log/fail2ban.log
 # Restart rsyslog to ensure proper logging
 systemctl restart rsyslog
 sleep 2
+echo "✅ Logging system configured for fail2ban"
+
+# Create a test log entry to initialize auth.log
+logger -p auth.info "Bastion setup: Initializing auth.log for fail2ban"
 
 # Test fail2ban configuration before starting
 echo "Testing fail2ban configuration..."
@@ -1268,13 +1285,7 @@ systemctl start suricata
 
 echo "===== 10. Setting up comprehensive logging and monitoring ====="
 
-# Install rsyslog if not already present
-if ! systemctl is-active --quiet rsyslog; then
-    echo "Installing rsyslog for enhanced logging..."
-    apt-get install -y rsyslog
-    systemctl enable rsyslog
-    systemctl start rsyslog
-fi
+# Rsyslog already installed and configured earlier for fail2ban
 
 # Configure rsyslog for enhanced logging
 cat > /etc/rsyslog.d/bastion-logging.conf << EOF
