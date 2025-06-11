@@ -2893,7 +2893,312 @@ else
     echo "Make sure to install DSGVO compliance files before running compliance checks."
 fi
 
-echo "===== 13. Setup complete! ====="
+echo "===== 14. Advanced Security Hardening ====="
+echo "Implementing comprehensive security enhancements..."
+
+# APT Package Pinning for critical security packages
+echo "Setting up APT package pinning for critical security packages..."
+cat > /etc/apt/preferences.d/security-packages << 'EOF'
+# Pin critical security packages to prevent accidental downgrades
+Package: openssh-server openssh-client
+Pin: version *
+Pin-Priority: 1001
+
+Package: fail2ban
+Pin: version *
+Pin-Priority: 1001
+
+Package: ufw
+Pin: version *
+Pin-Priority: 1001
+
+Package: auditd
+Pin: version *
+Pin-Priority: 1001
+
+Package: sudo
+Pin: version *
+Pin-Priority: 1001
+
+Package: clamav clamav-daemon clamav-freshclam
+Pin: version *
+Pin-Priority: 1001
+
+Package: rkhunter chkrootkit
+Pin: version *
+Pin-Priority: 1001
+EOF
+
+# Full Disk Encryption Detection
+echo "Checking for Full Disk Encryption (LUKS)..."
+if lsblk -f | grep -q crypto_LUKS; then
+    echo "✅ Full disk encryption (LUKS) detected and active"
+    echo "LUKS_ENCRYPTION=enabled" >> /etc/security-status.conf
+else
+    echo "⚠️ No LUKS encryption detected - consider enabling FDE for enhanced security"
+    echo "LUKS_ENCRYPTION=disabled" >> /etc/security-status.conf
+fi
+
+# IPv6 Security (belt and suspenders approach)
+echo "Implementing IPv6 security hardening..."
+if command -v ufw >/dev/null 2>&1; then
+    # Additional IPv6 rules as extra protection
+    ufw --force enable
+    # Block all IPv6 by default (additional layer beyond sysctl)
+    ip6tables -P INPUT DROP 2>/dev/null || true
+    ip6tables -P FORWARD DROP 2>/dev/null || true
+    ip6tables -P OUTPUT DROP 2>/dev/null || true
+    echo "✅ IPv6 traffic blocked via ip6tables (additional protection)"
+fi
+
+# Filesystem Mount Options Security Audit
+echo "Auditing filesystem mount options for security compliance..."
+MOUNT_AUDIT_LOG="/var/log/security/mount-audit.log"
+mkdir -p "$(dirname "$MOUNT_AUDIT_LOG")"
+
+{
+    echo "=== Filesystem Mount Security Audit - $(date) ==="
+    echo "Checking critical mount points for security options..."
+    
+    # Check /tmp mount options
+    if mount | grep -E '^[^ ]+ on /tmp ' | grep -E '(noexec|nodev|nosuid)'; then
+        echo "✅ /tmp has security mount options"
+    else
+        echo "⚠️ /tmp missing security options (noexec,nodev,nosuid recommended)"
+    fi
+    
+    # Check /var/tmp mount options  
+    if mount | grep -E '^[^ ]+ on /var/tmp ' | grep -E '(noexec|nodev|nosuid)'; then
+        echo "✅ /var/tmp has security mount options"
+    else
+        echo "⚠️ /var/tmp missing security options (noexec,nodev,nosuid recommended)"
+    fi
+    
+    # Check /home mount options
+    if mount | grep -E '^[^ ]+ on /home ' | grep -E 'nodev'; then
+        echo "✅ /home has nodev option"
+    else
+        echo "⚠️ /home missing nodev option"
+    fi
+    
+    # Check for world-writable mount points
+    echo ""
+    echo "Checking for potentially dangerous mount options..."
+    mount | grep -E '(exec|dev|suid)' | grep -v -E '(noexec|nodev|nosuid)' || echo "No dangerous mount options found"
+    
+    echo ""
+} >> "$MOUNT_AUDIT_LOG"
+
+cat "$MOUNT_AUDIT_LOG"
+
+# Service Whitelist Audit
+echo "Performing service whitelist security audit..."
+SERVICE_AUDIT_LOG="/var/log/security/service-audit.log"
+
+# Define allowed services (extend as needed for your applications)
+ALLOWED_SERVICES="
+ssh|sshd
+systemd-
+NetworkManager
+cron|crond
+rsyslog
+dbus
+getty
+user@
+session-
+auditd
+fail2ban
+ufw
+docker
+containerd
+nginx
+netdata
+unbound
+clamav
+freshclam
+maldet
+rkhunter
+"
+
+{
+    echo "=== Service Whitelist Audit - $(date) ==="
+    echo "Checking running services against security whitelist..."
+    
+    # Get all running services
+    RUNNING_SERVICES=$(systemctl list-units --type=service --state=running --no-legend | awk '{print $1}' | sed 's/\.service$//')
+    
+    echo "Currently running services:"
+    echo "$RUNNING_SERVICES"
+    echo ""
+    
+    echo "Services not in whitelist (review for security):"
+    for service in $RUNNING_SERVICES; do
+        if ! echo "$ALLOWED_SERVICES" | grep -qE "^${service}"; then
+            # Check if it matches any pattern in the whitelist
+            WHITELISTED=false
+            echo "$ALLOWED_SERVICES" | while read -r pattern; do
+                if [[ "$service" =~ $pattern ]]; then
+                    WHITELISTED=true
+                    break
+                fi
+            done 2>/dev/null
+            
+            if [ "$WHITELISTED" = "false" ]; then
+                echo "⚠️ $service - verify this service is necessary"
+            fi
+        fi
+    done
+    
+    echo ""
+} >> "$SERVICE_AUDIT_LOG"
+
+cat "$SERVICE_AUDIT_LOG"
+
+# Enhanced Persistence Detection System
+echo "Setting up enhanced persistence detection monitoring..."
+BASELINE_DIR="/var/lib/security/baselines"
+mkdir -p "$BASELINE_DIR"
+
+# Create persistence monitoring script
+cat > /usr/local/bin/check-persistence-locations.sh << 'EOF'
+#!/bin/bash
+# Enhanced Persistence Detection System
+# Monitors common persistence locations for unauthorized changes
+
+BASELINE_DIR="/var/lib/security/baselines"
+LOG_FILE="/var/log/security/persistence-detection.log"
+MAIL_RECIPIENT="{{LOGWATCH_EMAIL}}"
+
+# Logging function
+log_message() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
+}
+
+# Check a specific location for changes
+check_persistence_location() {
+    local location="$1"
+    local name="$2"
+    local baseline_file="$BASELINE_DIR/${name}.baseline"
+    local current_file="/tmp/${name}.current"
+    
+    if [ -d "$location" ] || [ -f "$location" ]; then
+        find "$location" -type f -exec stat -c "%n %Y %s" {} \; 2>/dev/null | sort > "$current_file"
+        
+        if [ -f "$baseline_file" ]; then
+            if ! diff -q "$baseline_file" "$current_file" >/dev/null 2>&1; then
+                log_message "ALERT: Changes detected in $name ($location)"
+                diff "$baseline_file" "$current_file" | head -20 >> "$LOG_FILE"
+                echo "PERSISTENCE ALERT: Changes detected in $name on $(hostname)" | \
+                    mail -s "SECURITY ALERT: Persistence Detection" "$MAIL_RECIPIENT" 2>/dev/null || true
+            fi
+        else
+            # First run - create baseline
+            cp "$current_file" "$baseline_file"
+            log_message "Created baseline for $name ($location)"
+        fi
+        rm -f "$current_file"
+    fi
+}
+
+# Monitor autostart locations
+log_message "Starting persistence detection scan..."
+
+# System-wide autostart locations
+check_persistence_location "/etc/init.d" "init_scripts"
+check_persistence_location "/etc/systemd/system" "systemd_system"
+check_persistence_location "/etc/systemd/user" "systemd_user"
+check_persistence_location "/etc/cron.d" "cron_d"
+check_persistence_location "/etc/cron.daily" "cron_daily"
+check_persistence_location "/etc/cron.hourly" "cron_hourly"
+check_persistence_location "/etc/cron.weekly" "cron_weekly"
+check_persistence_location "/etc/cron.monthly" "cron_monthly"
+check_persistence_location "/etc/rc.local" "rc_local"
+check_persistence_location "/etc/profile.d" "profile_d"
+check_persistence_location "/etc/bash.bashrc" "bash_bashrc"
+
+# User autostart locations (for existing users)
+for user_home in /home/*; do
+    if [ -d "$user_home" ]; then
+        username=$(basename "$user_home")
+        check_persistence_location "$user_home/.bashrc" "bashrc_$username"
+        check_persistence_location "$user_home/.profile" "profile_$username"
+        check_persistence_location "$user_home/.config/autostart" "autostart_$username"
+        check_persistence_location "$user_home/.config/systemd/user" "systemd_user_$username"
+    fi
+done
+
+# Check for new SUID/SGID binaries
+find /usr /bin /sbin /opt -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | sort > "/tmp/suid_sgid.current"
+if [ -f "$BASELINE_DIR/suid_sgid.baseline" ]; then
+    if ! diff -q "$BASELINE_DIR/suid_sgid.baseline" "/tmp/suid_sgid.current" >/dev/null 2>&1; then
+        log_message "ALERT: SUID/SGID binary changes detected"
+        diff "$BASELINE_DIR/suid_sgid.baseline" "/tmp/suid_sgid.current" | head -20 >> "$LOG_FILE"
+        echo "SUID/SGID ALERT: Binary permission changes detected on $(hostname)" | \
+            mail -s "SECURITY ALERT: SUID/SGID Changes" "$MAIL_RECIPIENT" 2>/dev/null || true
+    fi
+else
+    cp "/tmp/suid_sgid.current" "$BASELINE_DIR/suid_sgid.baseline"
+    log_message "Created SUID/SGID baseline"
+fi
+rm -f "/tmp/suid_sgid.current"
+
+log_message "Persistence detection scan completed"
+EOF
+
+chmod +x /usr/local/bin/check-persistence-locations.sh
+
+# Run initial baseline creation
+echo "Creating initial security baselines..."
+/usr/local/bin/check-persistence-locations.sh
+
+# Add to cron for regular monitoring
+cat > /etc/cron.d/persistence-detection << 'EOF'
+# Enhanced Persistence Detection - runs every 4 hours
+0 */4 * * * root /usr/local/bin/check-persistence-locations.sh >/dev/null 2>&1
+EOF
+
+# Create log rotation for security logs
+cat > /etc/logrotate.d/security-monitoring << 'EOF'
+/var/log/security/*.log {
+    rotate 12
+    monthly
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 640 root root
+}
+EOF
+
+# Final security status summary
+echo "Creating security status summary..."
+cat > /etc/security-status.conf << EOF
+# PolyServer Security Status Configuration
+HARDENING_LEVEL=enhanced
+APT_PINNING=enabled
+PERSISTENCE_MONITORING=enabled
+SERVICE_AUDIT=enabled
+MOUNT_AUDIT=enabled
+SECURITY_BASELINE_DATE=$(date +%Y-%m-%d)
+EOF
+
+echo "✅ Advanced security hardening completed!"
+echo ""
+echo "Security enhancements implemented:"
+echo "   • APT package pinning for critical security packages"
+echo "   • Full disk encryption detection and status logging"  
+echo "   • IPv6 security hardening (belt and suspenders approach)"
+echo "   • Filesystem mount option security audit"
+echo "   • Service whitelist audit against security baseline"
+echo "   • Enhanced persistence detection monitoring"
+echo "   • SUID/SGID binary monitoring"
+echo "   • Automated security baseline creation and monitoring"
+echo ""
+echo "Security logs location: /var/log/security/"
+echo "Security baselines: /var/lib/security/baselines/"
+echo "Security status: /etc/security-status.conf"
+
+echo "===== 15. Setup complete! ====="
 echo "Server has been secured and Docker installed."
 echo "IMPORTANT: SSH is now running on port $SSH_PORT"
 echo "Use the following command to connect: ssh -p $SSH_PORT $USERNAME@your-server-ip"

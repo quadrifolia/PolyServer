@@ -2349,7 +2349,223 @@ EOF
 
 echo "✅ Unused filesystem modules blacklisted for security"
 
-echo "===== 14.5 Setting up disk space protection for logging ====="
+echo "===== 14.5 Advanced security hardening ====="
+
+# APT Package Pinning for critical security packages
+echo "Setting up APT pinning for critical packages..."
+cat > /etc/apt/preferences.d/bastion-security << EOF
+# Pin critical security packages to stable versions
+# Prevents unintended upgrades that could break security
+
+Package: openssh-server openssh-client
+Pin: release a=stable
+Pin-Priority: 1001
+
+Package: fail2ban
+Pin: release a=stable
+Pin-Priority: 1001
+
+Package: ufw
+Pin: release a=stable
+Pin-Priority: 1001
+
+Package: auditd
+Pin: release a=stable
+Pin-Priority: 1001
+
+Package: sudo
+Pin: release a=stable
+Pin-Priority: 1001
+EOF
+echo "✅ APT pinning configured for critical security packages"
+
+# Full Disk Encryption Detection
+echo "Checking for full disk encryption..."
+if lsblk -o NAME,MOUNTPOINT,FSTYPE,TYPE | grep -qi luks; then
+    echo "✅ LUKS disk encryption detected"
+    lsblk -o NAME,MOUNTPOINT,FSTYPE,TYPE | grep -i luks
+else
+    echo "⚠️  WARNING: Disk is not encrypted with LUKS"
+    echo "   For maximum security, consider using full disk encryption"
+    echo "   This is especially important for cloud/VPS instances"
+fi
+
+# IPv6 Security (even when disabled via sysctl)
+echo "Adding IPv6 firewall rules (belt and suspenders approach)..."
+ufw deny out to ::/0 comment "Block all IPv6 outbound"
+ufw deny in from ::/0 comment "Block all IPv6 inbound"
+echo "✅ IPv6 traffic blocked via UFW (additional protection)"
+
+# Filesystem Mount Options Audit
+echo "Auditing filesystem mount options for security..."
+MOUNT_ISSUES=0
+
+# Check /tmp mount options
+if mountpoint -q /tmp; then
+    if findmnt -n -o OPTIONS /tmp | grep -qE 'noexec.*nodev.*nosuid|nodev.*noexec.*nosuid|nosuid.*nodev.*noexec|noexec.*nosuid.*nodev|nodev.*nosuid.*noexec|nosuid.*noexec.*nodev'; then
+        echo "✅ /tmp mounted with security options"
+    else
+        echo "⚠️  /tmp not mounted with optimal security options (should have noexec,nodev,nosuid)"
+        MOUNT_ISSUES=$((MOUNT_ISSUES + 1))
+    fi
+else
+    echo "ℹ️  /tmp not a separate mount point"
+fi
+
+# Check /home mount options if separate
+if mountpoint -q /home; then
+    if findmnt -n -o OPTIONS /home | grep -qE 'nodev.*nosuid|nosuid.*nodev'; then
+        echo "✅ /home mounted with security options"
+    else
+        echo "⚠️  /home not mounted with optimal security options (should have nodev,nosuid)"
+        MOUNT_ISSUES=$((MOUNT_ISSUES + 1))
+    fi
+else
+    echo "ℹ️  /home not a separate mount point"
+fi
+
+# Check /var mount options if separate
+if mountpoint -q /var; then
+    if findmnt -n -o OPTIONS /var | grep -qE 'nodev.*nosuid|nosuid.*nodev'; then
+        echo "✅ /var mounted with security options"
+    else
+        echo "⚠️  /var not mounted with optimal security options (should have nodev,nosuid)"
+        MOUNT_ISSUES=$((MOUNT_ISSUES + 1))
+    fi
+else
+    echo "ℹ️  /var not a separate mount point"
+fi
+
+if [ $MOUNT_ISSUES -gt 0 ]; then
+    echo "💡 Consider remounting filesystems with security options or configuring during next reboot"
+fi
+
+# Service Whitelist Audit
+echo "Auditing enabled services..."
+echo "Currently enabled services:"
+ENABLED_SERVICES=$(systemctl list-unit-files --state=enabled --type=service | grep enabled | awk '{print $1}' | grep -v '@')
+
+# Define whitelist of allowed services for bastion hosts
+ALLOWED_SERVICES="ssh sshd rsyslog systemd-journald systemd-logind systemd-networkd systemd-resolved systemd-timesyncd cron systemd-cron-daily.timer systemd-cron-hourly.timer systemd-cron-monthly.timer systemd-cron-weekly.timer postfix fail2ban ufw auditd suricata unbound apparmor systemd-tmpfiles-setup systemd-tmpfiles-clean.timer unattended-upgrades apt-daily.timer apt-daily-upgrade.timer bastion-monitor.timer disk-space-protection.timer logrotate.timer man-db.timer"
+
+echo "Checking for unexpected enabled services..."
+UNEXPECTED_SERVICES=""
+for service in $ENABLED_SERVICES; do
+    # Remove .service suffix for comparison
+    service_name=${service%.service}
+    if ! echo " $ALLOWED_SERVICES " | grep -q " $service_name "; then
+        UNEXPECTED_SERVICES="$UNEXPECTED_SERVICES $service"
+        echo "⚠️  Unexpected enabled service: $service"
+    fi
+done
+
+if [ -n "$UNEXPECTED_SERVICES" ]; then
+    echo ""
+    echo "💡 Consider reviewing and potentially masking unexpected services:"
+    for service in $UNEXPECTED_SERVICES; do
+        echo "   systemctl mask $service"
+    done
+    echo ""
+    echo "⚠️  Only mask services you're certain are not needed!"
+else
+    echo "✅ All enabled services appear to be necessary"
+fi
+
+# Enhanced Persistence Detection
+echo "Setting up enhanced persistence detection..."
+cat > /etc/cron.daily/persistence-check << 'EOF'
+#!/bin/bash
+# Enhanced persistence detection for bastion host
+# Monitors common persistence locations
+
+LOGFILE="/var/log/persistence-check.log"
+BASELINE_DIR="/var/lib/persistence-baselines"
+DATE=$(date '+%Y-%m-%d %H:%M:%S')
+
+mkdir -p "$BASELINE_DIR"
+
+# Function to log with timestamp
+log_message() {
+    echo "[$DATE] $1" >> "$LOGFILE"
+}
+
+# Function to check for changes in persistence locations
+check_persistence_location() {
+    local location="$1"
+    local name="$2"
+    local baseline_file="$BASELINE_DIR/${name}.baseline"
+    local current_file="/tmp/${name}.current"
+    
+    if [ -d "$location" ] || [ -f "$location" ]; then
+        # Create current state
+        find "$location" -type f -exec stat -c "%n %Y %s" {} \; 2>/dev/null | sort > "$current_file"
+        
+        # Check if baseline exists
+        if [ -f "$baseline_file" ]; then
+            # Compare with baseline
+            if ! diff -q "$baseline_file" "$current_file" >/dev/null 2>&1; then
+                log_message "ALERT: Changes detected in $name ($location)"
+                echo "PERSISTENCE ALERT: Changes detected in $name on bastion host $(hostname)" | mail -s "BASTION ALERT: Persistence Detection" root
+                
+                # Show differences
+                diff "$baseline_file" "$current_file" >> "$LOGFILE" 2>/dev/null || true
+            else
+                log_message "INFO: No changes in $name"
+            fi
+        else
+            # Create initial baseline
+            cp "$current_file" "$baseline_file"
+            log_message "INFO: Created baseline for $name"
+        fi
+        
+        # Cleanup
+        rm -f "$current_file"
+    fi
+}
+
+# Check common persistence locations
+check_persistence_location "/etc/init.d" "init-scripts"
+check_persistence_location "/etc/systemd/system" "systemd-services"
+check_persistence_location "/etc/cron.d" "cron-jobs"
+check_persistence_location "/etc/cron.daily" "cron-daily"
+check_persistence_location "/etc/cron.hourly" "cron-hourly"
+check_persistence_location "/etc/cron.weekly" "cron-weekly"
+check_persistence_location "/etc/cron.monthly" "cron-monthly"
+check_persistence_location "/var/spool/cron/crontabs" "user-crontabs"
+check_persistence_location "/home/*/.*rc" "user-rc-files"
+check_persistence_location "/home/*/.profile" "user-profiles"
+check_persistence_location "/home/*/.bash_profile" "bash-profiles"
+check_persistence_location "/etc/profile.d" "system-profiles"
+check_persistence_location "/etc/rc.local" "rc-local"
+
+# Check for new SUID/SGID binaries
+find /usr /bin /sbin -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | sort > /tmp/suid-sgid.current
+SUID_BASELINE="$BASELINE_DIR/suid-sgid.baseline"
+
+if [ -f "$SUID_BASELINE" ]; then
+    if ! diff -q "$SUID_BASELINE" /tmp/suid-sgid.current >/dev/null 2>&1; then
+        log_message "ALERT: SUID/SGID binary changes detected"
+        echo "SECURITY ALERT: SUID/SGID binary changes on bastion host $(hostname)" | mail -s "BASTION ALERT: SUID/SGID Changes" root
+        diff "$SUID_BASELINE" /tmp/suid-sgid.current >> "$LOGFILE" 2>/dev/null || true
+    fi
+else
+    cp /tmp/suid-sgid.current "$SUID_BASELINE"
+    log_message "INFO: Created SUID/SGID baseline"
+fi
+
+rm -f /tmp/suid-sgid.current
+
+log_message "Persistence check completed"
+EOF
+
+chmod 755 /etc/cron.daily/persistence-check
+
+# Run initial persistence check to create baselines
+echo "Creating initial persistence baselines..."
+/etc/cron.daily/persistence-check
+echo "✅ Enhanced persistence detection configured"
+
+echo "===== 14.6 Setting up disk space protection for logging ====="
 # Create emergency disk space protection system
 
 # Add disk usage monitoring to prevent full disk scenarios
