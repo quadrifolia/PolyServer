@@ -37,8 +37,10 @@ mkdir -p "${OUTPUT_DIR}/unbound"
 # Load environment variables
 source "$ENV_FILE"
 
-# Check deployment mode
-DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-baremetal}"
+# Check deployment mode (ensure it's set, default to baremetal if not)
+if [ -z "$DEPLOYMENT_MODE" ]; then
+    DEPLOYMENT_MODE="baremetal"
+fi
 echo "Deployment mode: $DEPLOYMENT_MODE"
 
 # Function to replace variables in a template

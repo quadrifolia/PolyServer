@@ -85,9 +85,9 @@ jobs:
     - name: Test deployment mode configurations
       run: |
         echo "🐳 Testing Docker mode configuration..."
-        # Test Docker mode
+        # Test Docker mode - exclude DEPLOYMENT_MODE from defaults to avoid override
         echo "DEPLOYMENT_MODE=docker" > test-docker.env
-        cat templates/defaults.env >> test-docker.env
+        grep -v "^DEPLOYMENT_MODE=" templates/defaults.env >> test-docker.env
         ./scripts/generate-configs.sh test-docker.env test-docker-output/
         
         # Verify Docker-specific nginx configs
@@ -95,9 +95,9 @@ jobs:
         grep -q "upstream backend" test-docker-output/nginx/nginx.conf || { echo "❌ Docker mode upstream not found"; exit 1; }
         
         echo "🔧 Testing Bare Metal mode configuration..."
-        # Test Bare Metal mode
+        # Test Bare Metal mode - exclude DEPLOYMENT_MODE from defaults to avoid override
         echo "DEPLOYMENT_MODE=baremetal" > test-baremetal.env
-        cat templates/defaults.env >> test-baremetal.env
+        grep -v "^DEPLOYMENT_MODE=" templates/defaults.env >> test-baremetal.env
         ./scripts/generate-configs.sh test-baremetal.env test-baremetal-output/
         
         # Verify bare metal nginx configs
