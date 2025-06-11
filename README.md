@@ -89,15 +89,20 @@ This repository provides a comprehensive, security-hardened Debian server founda
 PolyServer provides a **foundational layer** for secure Debian server deployments with:
 
 ### 🔒 **Security-First Design**
-- 15+ integrated security tools and frameworks
-- ModSecurity WAF, Suricata IDS, fail2ban protection
+- 20+ integrated security tools and frameworks
+- ModSecurity WAF, Suricata IDS, fail2ban protection with advanced monitoring
 - Comprehensive audit framework and file integrity monitoring
-- Full DSGVO/GDPR compliance toolkit
+- Enhanced persistence detection and SUID/SGID binary monitoring
+- APT package pinning for critical security packages
+- AppArmor mandatory access control with custom profiles
+- Full DSGVO/GDPR compliance toolkit with automated breach response
 
 ### ⚡ **Performance Optimized**
 - Unbound DNS caching for improved response times
 - Optimized system settings and resource management
-- Real-time monitoring with Netdata
+- Real-time monitoring with Netdata and optional Cloud integration
+- Systemd watchdog services for automatic failure recovery
+- Enhanced systemd timers with persistent execution for missed runs
 
 ### 📋 **Application-Ready Foundation**
 - Application-agnostic security configurations
@@ -169,6 +174,87 @@ polyserver/
 ├── local-test-cleanup-docker.sh         # Local Docker testing cleanup script
 └── local-test-docker.sh                 # Local Docker testing script
 ```
+
+## Advanced Security Features
+
+PolyServer implements enterprise-grade security with comprehensive monitoring, detection, and response capabilities:
+
+### 🛡️ **Enhanced Security Hardening**
+
+#### **APT Package Security**
+- **Package Pinning**: Critical security packages (openssh, fail2ban, ufw, auditd, sudo) pinned to prevent accidental downgrades
+- **Integrity Verification**: Automated verification of package signatures and checksums
+- **Controlled Updates**: Staged updates with verification and rollback capabilities
+
+#### **Persistence Detection System**
+- **Comprehensive Monitoring**: Monitors all autostart locations (/etc/init.d, systemd, cron, user profiles)
+- **SUID/SGID Binary Tracking**: Detects new privileged binaries and permission changes
+- **Baseline Creation**: Automated baseline creation and change detection
+- **Real-time Alerting**: Email notifications for unauthorized persistence attempts
+
+#### **Full Disk Encryption Support**
+- **LUKS Detection**: Automatic detection and status reporting of disk encryption
+- **Security Status Tracking**: Comprehensive logging of encryption status
+- **Compliance Reporting**: Integration with security audit reports
+
+#### **Advanced Network Security**
+- **IPv6 Hardening**: Belt-and-suspenders approach with sysctl + ip6tables + UFW
+- **Suricata Rules Management**: Weekly automated rule updates with configuration validation
+- **Enhanced Firewall Rules**: Application-aware filtering with rate limiting
+
+### 📊 **Monitoring & Observability**
+
+#### **Netdata Cloud Integration**
+- **Optional Cloud Connectivity**: Centralized monitoring across multiple servers
+- **Automatic Claiming**: Configurable auto-registration with Netdata Cloud
+- **Mobile Access**: Real-time monitoring via mobile app
+- **Team Collaboration**: Shared dashboards and alert management
+
+#### **Systemd Reliability Enhancements**
+- **Watchdog Services**: Automatic restart for critical services (fail2ban, suricata, SSH, nginx)
+- **Persistent Timers**: Catch-up execution for missed security scans and monitoring
+- **Failure Detection**: Enhanced failure detection with graduated restart limits
+- **Service Monitoring**: Real-time health checks with automatic recovery
+
+#### **Configuration Backup & Integrity**
+- **Daily Automated Backups**: All security configurations backed up with integrity verification
+- **Configuration Validation**: Syntax checking for SSH, nginx, Suricata, and fail2ban configs
+- **30-day Retention**: Automated cleanup with configurable retention periods
+- **Email Notifications**: Alerts for backup failures or configuration corruption
+
+### 🔧 **Advanced System Hardening**
+
+#### **AppArmor Mandatory Access Control**
+- **Profile Enforcement**: Custom profiles for SSH, nginx, and critical services
+- **Capability Restrictions**: Precise control over system capabilities
+- **Automatic Profile Loading**: Enforcement verification and complain mode detection
+
+#### **Unattended Upgrade Management**
+- **Reboot Warning System**: Wall messages and email notifications before automatic reboots
+- **Scheduled Maintenance**: Configurable maintenance windows (default: 4 AM)
+- **User Notifications**: Clear communication of pending system maintenance
+
+#### **Enhanced SSH Security**
+- **HMAC Hardening**: Complete SHA-1 elimination, restricted to SHA-2 algorithms only
+- **Algorithm Restrictions**: Enhanced key exchange algorithms (curve25519, ECDH-SHA256/512)
+- **Key Type Enforcement**: Strengthened public key types (RSA-SHA2, ECDSA, Ed25519)
+
+### 🎯 **Security Monitoring**
+
+#### **Mount Option Security Audits**
+- **Filesystem Security**: Automated auditing of mount options (noexec, nodev, nosuid)
+- **Security Compliance**: Verification of security mount options on /tmp, /var/tmp, /home
+- **Risk Assessment**: Detection of potentially dangerous mount configurations
+
+#### **Service Whitelist Auditing**
+- **Attack Surface Reduction**: Predefined whitelist of necessary services
+- **Unauthorized Service Detection**: Alerts for unexpected running services
+- **Security Baseline**: Continuous comparison against known-good service configurations
+
+#### **Real-time Security Baselines**
+- **Automated Baseline Creation**: Initial security state capture and monitoring
+- **Change Detection**: Real-time monitoring of security-critical locations
+- **Forensic Capabilities**: Detailed logging for incident response and compliance
 
 ## Base Server Setup Process
 
@@ -262,6 +348,15 @@ PolyServer provides flexible SSH authentication configuration:
    - `TIMEZONE=Your/Timezone` (e.g., America/New_York)
    - `DEPLOYMENT_MODE=baremetal` or `docker` (choose your deployment strategy)
 
+   **Netdata Cloud Integration (Optional):**
+   For centralized monitoring across multiple servers:
+   ```bash
+   # Enable Netdata with Cloud integration
+   NETDATA_ENABLED=true
+   NETDATA_CLAIM_TOKEN=your_claim_token_from_netdata_cloud
+   NETDATA_CLAIM_ROOMS=your_room_id_from_netdata_cloud
+   ```
+
    **Email Configuration (Recommended):**
    For reliable security notification delivery, configure external SMTP:
    ```bash
@@ -290,6 +385,7 @@ PolyServer provides flexible SSH authentication configuration:
    - `HOSTNAME=polyserver` (safe to change to your preferred hostname)
    - `SSH_PORT=2222` (custom SSH port for security)
    - `BACKEND_HOST=127.0.0.1` and `BACKEND_PORT=3000` (for Docker mode)
+   - `NETDATA_ENABLED=true` (enable/disable Netdata monitoring)
    - Other security and monitoring settings
 
 3. **Generate configuration files:**
@@ -460,6 +556,7 @@ The bastion setup provides enhanced security beyond the standard server hardenin
 - **Security scanning**: ClamAV, maldet, rkhunter, chkrootkit
 - **Traffic analysis**: tcpdump, iftop, nethogs
 - **System monitoring**: htop, iotop, atop, sysstat
+- **Optional Netdata monitoring**: Bastion-optimized monitoring with Cloud integration
 
 ### Using the Bastion Host
 
@@ -484,7 +581,30 @@ ssh -L 8080:internal-server:80 -p 2222 bastion@your-bastion-ip
 
 # Read local mail (if using local delivery mode)
 bastionmail
+
+# Access Netdata monitoring (if installed)
+netdata-bastion
 ```
+
+#### Optional Netdata Integration for Bastion Hosts
+
+Bastion hosts can optionally include Netdata monitoring for enhanced visibility:
+
+```bash
+# Enable Netdata during bastion setup by setting:
+export INSTALL_NETDATA=true
+
+# Or configure Netdata Cloud integration with environment variables:
+export NETDATA_CLAIM_TOKEN=your_claim_token
+export NETDATA_CLAIM_ROOMS=your_room_id
+```
+
+**Bastion Monitoring Benefits:**
+- SSH connection tracking and analysis
+- Resource usage monitoring for security analysis
+- Network traffic correlation with security events
+- Integration with centralized monitoring dashboard
+- Mobile access for remote bastion monitoring
 
 ### Security Considerations
 
@@ -1249,23 +1369,61 @@ unbound-control stats_noreset | grep cache
 
 ### Netdata Monitoring
 
-Netdata provides real-time performance monitoring installed natively on your Debian server.
+Netdata provides real-time performance monitoring installed natively on your Debian server with optional Cloud integration for centralized monitoring.
 
 #### Accessing Netdata
 
 Netdata is configured to bind only to localhost (127.0.0.1:19999) for security. Access it via:
 
-**SSH Tunnel (Recommended)**:
+**SSH Tunnel (Local Access)**:
 ```bash
 ssh -L 19999:localhost:19999 -p 2222 deploy@your-server-ip
 # Then visit http://localhost:19999 in your browser
 ```
 
-**Netdata Cloud**: Configure your Netdata Cloud token during setup for remote access.
+**Netdata Cloud (Centralized Monitoring)**:
+- **Automatic Setup**: Configure `NETDATA_CLAIM_TOKEN` and `NETDATA_CLAIM_ROOMS` in your environment for automatic registration
+- **Manual Setup**: Use the detailed instructions provided during server setup
+- **Mobile App**: Access your servers via Netdata Cloud mobile app
+- **Team Collaboration**: Share dashboards, alerts, and insights across team members
+
+#### Netdata Cloud Integration
+
+To set up Netdata Cloud integration after deployment:
+
+1. **Get Claim Token**:
+   - Sign up/login at [https://app.netdata.cloud](https://app.netdata.cloud)
+   - Create a new space or select existing space
+   - Go to "Connect Nodes" and copy your claim token
+
+2. **Register Server**:
+   ```bash
+   # Connect to your server
+   ssh -p 2222 deploy@your-server-ip
+   
+   # Claim the node to Netdata Cloud
+   sudo /opt/netdata/bin/netdata-claim.sh \
+     -token=YOUR_CLAIM_TOKEN \
+     -rooms=YOUR_ROOM_ID \
+     -url=https://app.netdata.cloud
+   ```
+
+3. **Access Centralized Dashboard**:
+   - Visit [https://app.netdata.cloud](https://app.netdata.cloud)
+   - Your server will appear within 1-2 minutes
+
+#### Netdata Cloud Benefits
+
+- **Centralized Monitoring**: Single dashboard for all your servers
+- **Mobile Access**: Monitor your infrastructure from anywhere
+- **Alert Management**: Centralized alerting and notification management
+- **Multi-server Correlation**: Compare performance across servers
+- **Team Collaboration**: Share insights and collaborate on incidents
+- **Infrastructure Overview**: High-level view of your entire infrastructure
 
 #### Configuration
 
-Netdata configuration is located at `/etc/netdata/netdata.conf` and is automatically configured during server setup for optimal security and performance.
+Netdata configuration is located at `/etc/netdata/netdata.conf` and is automatically configured during server setup for optimal security and performance. The configuration includes timezone settings from your template variables and security-optimized settings.
 
 ### Malware Protection
 

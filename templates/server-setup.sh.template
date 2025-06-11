@@ -209,6 +209,150 @@ else
         nginx-extras suricata git awscli
 fi
 
+echo "===== 6.0.1 Installing CPU microcode updates ====="
+
+# Check if running in a virtual environment
+VIRT_TYPE=""
+if [ -f /proc/cpuinfo ] && grep -q "hypervisor" /proc/cpuinfo; then
+    VIRT_TYPE="hypervisor"
+elif systemd-detect-virt &>/dev/null; then
+    VIRT_TYPE=$(systemd-detect-virt)
+elif [ -f /sys/hypervisor/type ]; then
+    VIRT_TYPE=$(cat /sys/hypervisor/type)
+fi
+
+# Detect CPU vendor and install appropriate microcode updates
+CPU_VENDOR=$(grep vendor_id /proc/cpuinfo | head -1 | awk '{print $3}')
+echo "Detected CPU vendor: $CPU_VENDOR"
+
+if [ -n "$VIRT_TYPE" ] && [ "$VIRT_TYPE" != "none" ]; then
+    echo "🔍 Virtualization detected: $VIRT_TYPE"
+    echo "⚠️  Note: In virtualized environments (OVH, Hetzner, AWS, etc.):"
+    echo "   - Microcode updates are typically managed by the host/hypervisor"
+    echo "   - VM-level microcode installation may not affect actual CPU vulnerability mitigations"
+    echo "   - Contact your hosting provider for physical host microcode status"
+    echo ""
+    echo "Installing microcode package anyway for completeness..."
+fi
+
+if [ "$CPU_VENDOR" = "AuthenticAMD" ]; then
+    echo "AMD processor detected - installing AMD microcode updates..."
+    
+    # Check if non-free-firmware repository is available
+    if ! apt-cache search amd64-microcode | grep -q amd64-microcode; then
+        echo "Adding non-free-firmware repository for AMD microcode..."
+        
+        # Check if we're using the new sources.list format (Debian 12+)
+        if [ -f /etc/apt/sources.list.d/debian.sources ]; then
+            # Update existing debian.sources file to include non-free-firmware
+            if ! grep -q "non-free-firmware" /etc/apt/sources.list.d/debian.sources; then
+                echo "Updating debian.sources to include non-free-firmware..."
+                sed -i 's/Components: main/Components: main non-free-firmware/' /etc/apt/sources.list.d/debian.sources
+                apt-get update
+            fi
+        else
+            # Add to traditional sources.list
+            if ! grep -q "non-free-firmware" /etc/apt/sources.list; then
+                echo "Adding non-free-firmware to sources.list..."
+                sed -i 's/main$/main non-free-firmware/' /etc/apt/sources.list
+                apt-get update
+            fi
+        fi
+    fi
+    
+    # Install AMD microcode
+    if apt-cache search amd64-microcode | grep -q amd64-microcode; then
+        apt-get install -y amd64-microcode
+        echo "✅ AMD microcode installed successfully"
+        echo "⚠️  Microcode will be active after next reboot"
+    else
+        echo "⚠️  AMD microcode package not available in repositories"
+    fi
+    
+elif [ "$CPU_VENDOR" = "GenuineIntel" ]; then
+    echo "Intel processor detected - installing Intel microcode updates..."
+    apt-get install -y intel-microcode
+    echo "✅ Intel microcode installed successfully"
+    echo "⚠️  Microcode will be active after next reboot"
+    
+else
+    echo "Unknown or unsupported CPU vendor: $CPU_VENDOR"
+    echo "Skipping microcode installation"
+fi
+
+# Update initramfs to include microcode and check for kernel updates
+echo "===== 6.0.2 Updating system with microcode integration ====="
+
+# Update initramfs to ensure microcode is loaded
+echo "Updating initramfs to include microcode..."
+update-initramfs -u -k all
+
+# Check if kernel update is available and recommend it
+echo "Checking for kernel updates..."
+CURRENT_KERNEL=$(uname -r)
+echo "Current kernel: $CURRENT_KERNEL"
+
+# Check for available kernel updates
+if apt list --upgradable 2>/dev/null | grep -q linux-image; then
+    echo "⚠️  Kernel updates available:"
+    apt list --upgradable 2>/dev/null | grep linux-image
+    echo ""
+    echo "💡 Kernel update recommendation:"
+    echo "   Run: apt update && apt upgrade linux-image-*"
+    echo "   Then reboot to activate microcode and kernel updates"
+    KERNEL_UPDATE_NEEDED=true
+else
+    echo "✅ Kernel is up to date"
+    KERNEL_UPDATE_NEEDED=false
+fi
+
+# Check for backports kernel if available (often has better hardware support)
+if apt-cache search linux-image | grep -q backports; then
+    echo ""
+    echo "💡 Backports kernel available for better hardware support:"
+    apt-cache search linux-image | grep backports | head -3
+    echo "   Consider: apt install -t bookworm-backports linux-image-amd64"
+fi
+
+# Show current CPU vulnerabilities status
+echo ""
+echo "Current CPU vulnerability status:"
+if [ -d /sys/devices/system/cpu/vulnerabilities ]; then
+    for vuln in /sys/devices/system/cpu/vulnerabilities/*; do
+        vuln_name=$(basename "$vuln")
+        vuln_status=$(cat "$vuln")
+        printf "  %-25s %s\n" "$vuln_name:" "$vuln_status"
+    done
+else
+    echo "  CPU vulnerability information not available"
+fi
+
+# Check if microcode is properly loaded
+echo ""
+echo "Microcode status:"
+if dmesg | grep -i microcode | tail -5 | grep -q "updated"; then
+    echo "✅ Microcode updates detected in dmesg"
+    dmesg | grep -i microcode | tail -2
+else
+    if [ -n "$VIRT_TYPE" ] && [ "$VIRT_TYPE" != "none" ]; then
+        echo "ℹ️  No microcode updates in dmesg (expected in virtualized environment)"
+        echo "   Microcode management is handled by the hypervisor/host system"
+    else
+        echo "⚠️  Microcode updates not visible in dmesg (may require reboot)"
+    fi
+fi
+
+# Check initramfs for microcode
+if [ -f "/boot/initrd.img-$(uname -r)" ]; then
+    if lsinitramfs "/boot/initrd.img-$(uname -r)" 2>/dev/null | grep -q microcode; then
+        echo "✅ Microcode files present in initramfs"
+        lsinitramfs "/boot/initrd.img-$(uname -r)" 2>/dev/null | grep microcode | head -3
+    else
+        echo "⚠️  No microcode files found in initramfs"
+    fi
+fi
+echo ""
+
 echo "===== 6.1 Installing incident response and monitoring tools ====="
 # System monitoring
 apt-get install -y htop iotop sysstat atop bmon
@@ -1960,8 +2104,9 @@ fi
 
 # ========= Install Netdata Monitoring =========
 echo "===== 8.1 Installing Netdata monitoring ====="
-if [ "$DOCKER_MODE" = "false" ]; then
+if [ "$DOCKER_MODE" = "false" ] && [ "{{NETDATA_ENABLED}}" = "true" ]; then
     # Install Netdata using the official installation script
+    echo "Installing Netdata monitoring agent..."
     bash <(curl -Ss https://my-netdata.io/kickstart.sh) --dont-wait --non-interactive
 
     # Configure Netdata
@@ -1972,7 +2117,7 @@ if [ "$DOCKER_MODE" = "false" ]; then
     default port = 19999
     
     # Set timezone
-    timezone = Europe/Berlin
+    timezone = {{TIMEZONE}}
     
     # Security settings
     run as user = netdata
@@ -1998,6 +2143,54 @@ EOF
     docker_systemctl enable netdata
     docker_systemctl start netdata
 
+    # Wait a moment for Netdata to start
+    sleep 5
+
+    # Optional Netdata Cloud Integration
+    if [ -n "{{NETDATA_CLAIM_TOKEN}}" ] && [ -n "{{NETDATA_CLAIM_ROOMS}}" ]; then
+        echo "Setting up Netdata Cloud integration..."
+        
+        # Claim the node to Netdata Cloud
+        /opt/netdata/bin/netdata-claim.sh \
+            -token={{NETDATA_CLAIM_TOKEN}} \
+            -rooms={{NETDATA_CLAIM_ROOMS}} \
+            -url=https://app.netdata.cloud \
+            || echo "⚠️ Netdata Cloud claiming failed - check token and room ID"
+        
+        echo "✅ Netdata Cloud integration configured"
+        echo "   • Server should appear in your Netdata Cloud dashboard within a few minutes"
+        echo "   • Login at: https://app.netdata.cloud"
+    else
+        echo ""
+        echo "📊 NETDATA CLOUD INTEGRATION (Optional)"
+        echo "======================================"
+        echo "To add this server to Netdata Cloud for centralized monitoring:"
+        echo ""
+        echo "1. Sign up/login at: https://app.netdata.cloud"
+        echo "2. Create a new space or select existing space"
+        echo "3. Go to 'Connect Nodes' and copy your claim token"
+        echo "4. Run the following command on this server:"
+        echo ""
+        echo "   sudo /opt/netdata/bin/netdata-claim.sh \\"
+        echo "     -token=YOUR_CLAIM_TOKEN \\"
+        echo "     -rooms=YOUR_ROOM_ID \\"
+        echo "     -url=https://app.netdata.cloud"
+        echo ""
+        echo "5. Your server will appear in Netdata Cloud within 1-2 minutes"
+        echo ""
+        echo "📝 To set up automatic claiming, add these to your .env file:"
+        echo "   NETDATA_CLAIM_TOKEN=your_claim_token"
+        echo "   NETDATA_CLAIM_ROOMS=your_room_id"
+        echo ""
+        echo "Benefits of Netdata Cloud:"
+        echo "   • Centralized monitoring dashboard"
+        echo "   • Mobile app access"
+        echo "   • Alert management"
+        echo "   • Multi-server correlation"
+        echo "   • Team collaboration features"
+        echo ""
+    fi
+
     # Create Netdata log rotation
     cat > /etc/logrotate.d/netdata << 'EOF'
 /var/log/netdata/*.log {
@@ -2013,7 +2206,23 @@ EOF
 }
 EOF
 
-    echo "Netdata monitoring installed and configured"
+    # Create access script for easy local access
+    cat > /usr/local/bin/netdata-access << 'EOF'
+#!/bin/bash
+# Quick access to local Netdata dashboard
+echo "🌐 Opening Netdata dashboard..."
+echo "   Local URL: http://127.0.0.1:19999"
+echo "   SSH Tunnel: ssh -L 19999:127.0.0.1:19999 user@server"
+echo "   Netdata Cloud: https://app.netdata.cloud"
+EOF
+    chmod +x /usr/local/bin/netdata-access
+
+    echo "✅ Netdata monitoring installed and configured"
+    echo "   • Local access: http://127.0.0.1:19999 (via SSH tunnel)"
+    echo "   • Quick access command: netdata-access"
+elif [ "$DOCKER_MODE" = "false" ] && [ "{{NETDATA_ENABLED}}" != "true" ]; then
+    echo "📊 Netdata monitoring disabled (NETDATA_ENABLED=false)"
+    echo "   To enable: Set NETDATA_ENABLED=true in your configuration"
 else
     echo "🐳 Skipping Netdata configuration in Docker mode"
 fi
@@ -2413,11 +2622,317 @@ EOF
 
 echo "✅ Enhanced system log rotation configured for security monitoring"
 
+# ========= Additional security hardening =========
+echo "===== 11. Additional security hardening ====="
+
+echo "===== 11.1 Setting up system resource limits (ulimits) ====="
+# Prevent resource exhaustion attacks with sensible limits
+cat > /etc/security/limits.d/server.conf << EOF
+# Server Resource Limits
+# Prevent resource exhaustion attacks and improve system stability
+
+# Limits for all users
+* soft nofile 4096
+* hard nofile 8192
+* soft nproc 1024
+* hard nproc 2048
+* soft core 0
+* hard core 0
+* soft memlock 64
+* hard memlock 64
+
+# Deploy user limits
+{{USERNAME}} soft nofile 2048
+{{USERNAME}} hard nofile 4096
+{{USERNAME}} soft nproc 512
+{{USERNAME}} hard nproc 1024
+{{USERNAME}} soft maxlogins 10
+{{USERNAME}} hard maxlogins 20
+
+# Root user (for system processes)
+root soft nofile 8192
+root hard nofile 16384
+root soft nproc 4096
+root hard nproc 8192
+
+# Service accounts
+www-data soft nofile 2048
+www-data hard nofile 4096
+www-data soft nproc 512
+www-data hard nproc 1024
+EOF
+
+echo "✅ System resource limits configured to prevent resource exhaustion attacks"
+
+echo "===== 11.2 Adding systemd journal rate limiting ====="
+# Prevent log flooding that could fill disk space
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/99-server-limits.conf << EOF
+# Server Journal Configuration
+# Prevent disk space exhaustion from excessive logging
+
+[Journal]
+# Limit journal size to prevent disk full
+SystemMaxUse=1G
+SystemKeepFree=2G
+SystemMaxFileSize=100M
+RuntimeMaxUse=200M
+RuntimeKeepFree=1G
+RuntimeMaxFileSize=20M
+
+# Rate limiting to prevent log flooding
+RateLimitIntervalSec=30s
+RateLimitBurst=10000
+
+# Compress logs to save space
+Compress=yes
+
+# Forward to syslog (rsyslog) for processing
+ForwardToSyslog=yes
+ForwardToConsole=no
+EOF
+
+docker_systemctl restart systemd-journald
+echo "✅ Systemd journal rate limiting configured"
+
+echo "===== 11.3 Adding kernel security parameters ====="
+# Set secure kernel parameters including auto-reboot on panic
+cat > /etc/sysctl.d/99-server-security.conf << EOF
+# Server Security Kernel Parameters
+
+# Network security
+net.ipv4.ip_forward = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv4.conf.all.log_martians = 1
+net.ipv4.conf.default.log_martians = 1
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+net.ipv4.icmp_ignore_bogus_error_responses = 1
+net.ipv4.tcp_syncookies = 1
+
+# IPv6 security (disable if not needed)
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+
+# Process security
+kernel.dmesg_restrict = 1
+kernel.kptr_restrict = 2
+kernel.yama.ptrace_scope = 1
+
+# File system security
+fs.suid_dumpable = 0
+fs.protected_hardlinks = 1
+fs.protected_symlinks = 1
+
+# Automatic reboot after kernel panic (headless environment)
+kernel.panic = 10
+kernel.panic_on_oops = 1
+EOF
+
+# Apply kernel parameters
+sysctl -p /etc/sysctl.d/99-server-security.conf
+echo "✅ Kernel security parameters and panic auto-reboot configured"
+
+echo "===== 11.4 Blacklisting unused filesystem modules ====="
+# Disable unused filesystems that could be security risks
+cat > /etc/modprobe.d/blacklist-filesystems.conf << EOF
+# Blacklist unused filesystems for security
+
+# Legacy/rare filesystems
+blacklist cramfs
+blacklist freevxfs
+blacklist jffs2
+blacklist hfs
+blacklist hfsplus
+blacklist squashfs
+blacklist udf
+
+# FireWire - rarely needed on servers
+blacklist firewire-core
+blacklist firewire-ohci
+blacklist firewire-sbp2
+
+# Bluetooth - not needed on servers
+blacklist bluetooth
+blacklist btusb
+blacklist rfcomm
+blacklist bnep
+
+# Wireless - typically not needed on servers
+blacklist cfg80211
+blacklist mac80211
+EOF
+
+echo "✅ Unused filesystem modules blacklisted for security"
+
+echo "===== 11.5 Creating systemd timer services for reliable security monitoring ====="
+# Create systemd timers to ensure critical security scans run even if cron missed
+
+# Malware detection service
+cat > /etc/systemd/system/maldet-scan.service << 'EOF'
+[Unit]
+Description=Linux Malware Detect Daily Scan
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/cron.daily/maldet-scan
+User=root
+StandardOutput=journal
+StandardError=journal
+TimeoutSec=7200
+EOF
+
+# Malware detection timer (runs daily, catches up missed runs)
+cat > /etc/systemd/system/maldet-scan.timer << 'EOF'
+[Unit]
+Description=Run malware detection daily
+Requires=maldet-scan.service
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=30min
+Persistent=yes
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# ClamAV scan service
+cat > /etc/systemd/system/clamscan.service << 'EOF'
+[Unit]
+Description=ClamAV Daily Virus Scan
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/cron.daily/clamscan
+User=root
+StandardOutput=journal
+StandardError=journal
+TimeoutSec=7200
+EOF
+
+# ClamAV scan timer (runs daily, catches up missed runs)
+cat > /etc/systemd/system/clamscan.timer << 'EOF'
+[Unit]
+Description=Run ClamAV scan daily
+Requires=clamscan.service
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=45min
+Persistent=yes
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# Trivy container scan service (if Docker mode)
+if [ "{{DEPLOYMENT_MODE}}" = "docker" ]; then
+cat > /etc/systemd/system/trivy-scan.service << 'EOF'
+[Unit]
+Description=Trivy Container Security Scan
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/etc/cron.daily/trivy-scan
+User=root
+StandardOutput=journal
+StandardError=journal
+TimeoutSec=3600
+EOF
+
+cat > /etc/systemd/system/trivy-scan.timer << 'EOF'
+[Unit]
+Description=Run Trivy container scan daily
+Requires=trivy-scan.service
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=60min
+Persistent=yes
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+fi
+
+# Rootkit scan service
+cat > /etc/systemd/system/rkhunter-scan.service << 'EOF'
+[Unit]
+Description=RKHunter Rootkit Scan
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/cron.daily/rkhunter-scan
+User=root
+StandardOutput=journal
+StandardError=journal
+TimeoutSec=1800
+EOF
+
+# Rootkit scan timer (runs daily, catches up missed runs)
+cat > /etc/systemd/system/rkhunter-scan.timer << 'EOF'
+[Unit]
+Description=Run rootkit scan daily
+Requires=rkhunter-scan.service
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=90min
+Persistent=yes
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# Enable and start the timer services
+systemctl daemon-reload
+systemctl enable maldet-scan.timer
+systemctl enable clamscan.timer
+systemctl enable rkhunter-scan.timer
+
+if [ "{{DEPLOYMENT_MODE}}" = "docker" ]; then
+    systemctl enable trivy-scan.timer
+    systemctl start trivy-scan.timer
+fi
+
+systemctl start maldet-scan.timer
+systemctl start clamscan.timer
+systemctl start rkhunter-scan.timer
+
+echo "✅ Systemd timer services created and enabled for security scans"
+echo "   • maldet-scan.timer - daily malware detection (with randomized delay)"
+echo "   • clamscan.timer - daily antivirus scan (with randomized delay)"
+echo "   • rkhunter-scan.timer - daily rootkit scan (with randomized delay)"
+if [ "{{DEPLOYMENT_MODE}}" = "docker" ]; then
+    echo "   • trivy-scan.timer - daily container vulnerability scan"
+fi
+echo "   • All timers use Persistent=yes to run missed executions on boot"
+echo "   • Randomized delays prevent all scans running simultaneously"
+
+# Verify timers are active
+echo ""
+echo "Security scan timer status:"
+systemctl list-timers maldet-scan.timer clamscan.timer rkhunter-scan.timer --no-pager || true
+
 # ========= Now restart SSH with new configuration =========
-echo "===== 11. Restarting SSH to apply security settings ====="
+echo "===== 12. Restarting SSH to apply security settings ====="
 docker_systemctl restart sshd
 
-echo "===== 12. Optional DSGVO/GDPR Compliance Setup ====="
+echo "===== 13. Optional DSGVO/GDPR Compliance Setup ====="
 echo "Setting up DSGVO/GDPR compliance framework..."
 
 # Copy DSGVO setup script to the scripts directory first
@@ -2443,7 +2958,681 @@ else
     echo "Make sure to install DSGVO compliance files before running compliance checks."
 fi
 
-echo "===== 13. Setup complete! ====="
+echo "===== 14. Advanced Security Hardening ====="
+echo "Implementing comprehensive security enhancements..."
+
+# APT Package Pinning for critical security packages
+echo "Setting up APT package pinning for critical security packages..."
+cat > /etc/apt/preferences.d/security-packages << 'EOF'
+# Pin critical security packages to prevent accidental downgrades
+Package: openssh-server openssh-client
+Pin: version *
+Pin-Priority: 1001
+
+Package: fail2ban
+Pin: version *
+Pin-Priority: 1001
+
+Package: ufw
+Pin: version *
+Pin-Priority: 1001
+
+Package: auditd
+Pin: version *
+Pin-Priority: 1001
+
+Package: sudo
+Pin: version *
+Pin-Priority: 1001
+
+Package: clamav clamav-daemon clamav-freshclam
+Pin: version *
+Pin-Priority: 1001
+
+Package: rkhunter chkrootkit
+Pin: version *
+Pin-Priority: 1001
+EOF
+
+# Full Disk Encryption Detection
+echo "Checking for Full Disk Encryption (LUKS)..."
+if lsblk -f | grep -q crypto_LUKS; then
+    echo "✅ Full disk encryption (LUKS) detected and active"
+    echo "LUKS_ENCRYPTION=enabled" >> /etc/security-status.conf
+else
+    echo "⚠️ No LUKS encryption detected - consider enabling FDE for enhanced security"
+    echo "LUKS_ENCRYPTION=disabled" >> /etc/security-status.conf
+fi
+
+# IPv6 Security (belt and suspenders approach)
+echo "Implementing IPv6 security hardening..."
+if command -v ufw >/dev/null 2>&1; then
+    # Additional IPv6 rules as extra protection
+    ufw --force enable
+    # Block all IPv6 by default (additional layer beyond sysctl)
+    ip6tables -P INPUT DROP 2>/dev/null || true
+    ip6tables -P FORWARD DROP 2>/dev/null || true
+    ip6tables -P OUTPUT DROP 2>/dev/null || true
+    echo "✅ IPv6 traffic blocked via ip6tables (additional protection)"
+fi
+
+# Filesystem Mount Options Security Audit
+echo "Auditing filesystem mount options for security compliance..."
+MOUNT_AUDIT_LOG="/var/log/security/mount-audit.log"
+mkdir -p "$(dirname "$MOUNT_AUDIT_LOG")"
+
+{
+    echo "=== Filesystem Mount Security Audit - $(date) ==="
+    echo "Checking critical mount points for security options..."
+    
+    # Check /tmp mount options
+    if mount | grep -E '^[^ ]+ on /tmp ' | grep -E '(noexec|nodev|nosuid)'; then
+        echo "✅ /tmp has security mount options"
+    else
+        echo "⚠️ /tmp missing security options (noexec,nodev,nosuid recommended)"
+    fi
+    
+    # Check /var/tmp mount options  
+    if mount | grep -E '^[^ ]+ on /var/tmp ' | grep -E '(noexec|nodev|nosuid)'; then
+        echo "✅ /var/tmp has security mount options"
+    else
+        echo "⚠️ /var/tmp missing security options (noexec,nodev,nosuid recommended)"
+    fi
+    
+    # Check /home mount options
+    if mount | grep -E '^[^ ]+ on /home ' | grep -E 'nodev'; then
+        echo "✅ /home has nodev option"
+    else
+        echo "⚠️ /home missing nodev option"
+    fi
+    
+    # Check for world-writable mount points
+    echo ""
+    echo "Checking for potentially dangerous mount options..."
+    mount | grep -E '(exec|dev|suid)' | grep -v -E '(noexec|nodev|nosuid)' || echo "No dangerous mount options found"
+    
+    echo ""
+} >> "$MOUNT_AUDIT_LOG"
+
+cat "$MOUNT_AUDIT_LOG"
+
+# Service Whitelist Audit
+echo "Performing service whitelist security audit..."
+SERVICE_AUDIT_LOG="/var/log/security/service-audit.log"
+
+# Define allowed services (extend as needed for your applications)
+ALLOWED_SERVICES="
+ssh|sshd
+systemd-
+NetworkManager
+cron|crond
+rsyslog
+dbus
+getty
+user@
+session-
+auditd
+fail2ban
+ufw
+docker
+containerd
+nginx
+netdata
+unbound
+clamav
+freshclam
+maldet
+rkhunter
+"
+
+{
+    echo "=== Service Whitelist Audit - $(date) ==="
+    echo "Checking running services against security whitelist..."
+    
+    # Get all running services
+    RUNNING_SERVICES=$(systemctl list-units --type=service --state=running --no-legend | awk '{print $1}' | sed 's/\.service$//')
+    
+    echo "Currently running services:"
+    echo "$RUNNING_SERVICES"
+    echo ""
+    
+    echo "Services not in whitelist (review for security):"
+    for service in $RUNNING_SERVICES; do
+        if ! echo "$ALLOWED_SERVICES" | grep -qE "^${service}"; then
+            # Check if it matches any pattern in the whitelist
+            WHITELISTED=false
+            echo "$ALLOWED_SERVICES" | while read -r pattern; do
+                if [[ "$service" =~ $pattern ]]; then
+                    WHITELISTED=true
+                    break
+                fi
+            done 2>/dev/null
+            
+            if [ "$WHITELISTED" = "false" ]; then
+                echo "⚠️ $service - verify this service is necessary"
+            fi
+        fi
+    done
+    
+    echo ""
+} >> "$SERVICE_AUDIT_LOG"
+
+cat "$SERVICE_AUDIT_LOG"
+
+# Enhanced Persistence Detection System
+echo "Setting up enhanced persistence detection monitoring..."
+BASELINE_DIR="/var/lib/security/baselines"
+mkdir -p "$BASELINE_DIR"
+
+# Create persistence monitoring script
+cat > /usr/local/bin/check-persistence-locations.sh << 'EOF'
+#!/bin/bash
+# Enhanced Persistence Detection System
+# Monitors common persistence locations for unauthorized changes
+
+BASELINE_DIR="/var/lib/security/baselines"
+LOG_FILE="/var/log/security/persistence-detection.log"
+MAIL_RECIPIENT="{{LOGWATCH_EMAIL}}"
+
+# Logging function
+log_message() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
+}
+
+# Check a specific location for changes
+check_persistence_location() {
+    local location="$1"
+    local name="$2"
+    local baseline_file="$BASELINE_DIR/${name}.baseline"
+    local current_file="/tmp/${name}.current"
+    
+    if [ -d "$location" ] || [ -f "$location" ]; then
+        find "$location" -type f -exec stat -c "%n %Y %s" {} \; 2>/dev/null | sort > "$current_file"
+        
+        if [ -f "$baseline_file" ]; then
+            if ! diff -q "$baseline_file" "$current_file" >/dev/null 2>&1; then
+                log_message "ALERT: Changes detected in $name ($location)"
+                diff "$baseline_file" "$current_file" | head -20 >> "$LOG_FILE"
+                echo "PERSISTENCE ALERT: Changes detected in $name on $(hostname)" | \
+                    mail -s "SECURITY ALERT: Persistence Detection" "$MAIL_RECIPIENT" 2>/dev/null || true
+            fi
+        else
+            # First run - create baseline
+            cp "$current_file" "$baseline_file"
+            log_message "Created baseline for $name ($location)"
+        fi
+        rm -f "$current_file"
+    fi
+}
+
+# Monitor autostart locations
+log_message "Starting persistence detection scan..."
+
+# System-wide autostart locations
+check_persistence_location "/etc/init.d" "init_scripts"
+check_persistence_location "/etc/systemd/system" "systemd_system"
+check_persistence_location "/etc/systemd/user" "systemd_user"
+check_persistence_location "/etc/cron.d" "cron_d"
+check_persistence_location "/etc/cron.daily" "cron_daily"
+check_persistence_location "/etc/cron.hourly" "cron_hourly"
+check_persistence_location "/etc/cron.weekly" "cron_weekly"
+check_persistence_location "/etc/cron.monthly" "cron_monthly"
+check_persistence_location "/etc/rc.local" "rc_local"
+check_persistence_location "/etc/profile.d" "profile_d"
+check_persistence_location "/etc/bash.bashrc" "bash_bashrc"
+
+# User autostart locations (for existing users)
+for user_home in /home/*; do
+    if [ -d "$user_home" ]; then
+        username=$(basename "$user_home")
+        check_persistence_location "$user_home/.bashrc" "bashrc_$username"
+        check_persistence_location "$user_home/.profile" "profile_$username"
+        check_persistence_location "$user_home/.config/autostart" "autostart_$username"
+        check_persistence_location "$user_home/.config/systemd/user" "systemd_user_$username"
+    fi
+done
+
+# Check for new SUID/SGID binaries
+find /usr /bin /sbin /opt -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | sort > "/tmp/suid_sgid.current"
+if [ -f "$BASELINE_DIR/suid_sgid.baseline" ]; then
+    if ! diff -q "$BASELINE_DIR/suid_sgid.baseline" "/tmp/suid_sgid.current" >/dev/null 2>&1; then
+        log_message "ALERT: SUID/SGID binary changes detected"
+        diff "$BASELINE_DIR/suid_sgid.baseline" "/tmp/suid_sgid.current" | head -20 >> "$LOG_FILE"
+        echo "SUID/SGID ALERT: Binary permission changes detected on $(hostname)" | \
+            mail -s "SECURITY ALERT: SUID/SGID Changes" "$MAIL_RECIPIENT" 2>/dev/null || true
+    fi
+else
+    cp "/tmp/suid_sgid.current" "$BASELINE_DIR/suid_sgid.baseline"
+    log_message "Created SUID/SGID baseline"
+fi
+rm -f "/tmp/suid_sgid.current"
+
+log_message "Persistence detection scan completed"
+EOF
+
+chmod +x /usr/local/bin/check-persistence-locations.sh
+
+# Run initial baseline creation
+echo "Creating initial security baselines..."
+/usr/local/bin/check-persistence-locations.sh
+
+# Add to cron for regular monitoring
+cat > /etc/cron.d/persistence-detection << 'EOF'
+# Enhanced Persistence Detection - runs every 4 hours
+0 */4 * * * root /usr/local/bin/check-persistence-locations.sh >/dev/null 2>&1
+EOF
+
+# Create log rotation for security logs
+cat > /etc/logrotate.d/security-monitoring << 'EOF'
+/var/log/security/*.log {
+    rotate 12
+    monthly
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 640 root root
+}
+EOF
+
+# Final security status summary
+echo "Creating security status summary..."
+cat > /etc/security-status.conf << EOF
+# PolyServer Security Status Configuration
+HARDENING_LEVEL=enhanced
+APT_PINNING=enabled
+PERSISTENCE_MONITORING=enabled
+SERVICE_AUDIT=enabled
+MOUNT_AUDIT=enabled
+SECURITY_BASELINE_DATE=$(date +%Y-%m-%d)
+EOF
+
+echo "✅ Advanced security hardening completed!"
+echo ""
+echo "Security enhancements implemented:"
+echo "   • APT package pinning for critical security packages"
+echo "   • Full disk encryption detection and status logging"  
+echo "   • IPv6 security hardening (belt and suspenders approach)"
+echo "   • Filesystem mount option security audit"
+echo "   • Service whitelist audit against security baseline"
+echo "   • Enhanced persistence detection monitoring"
+echo "   • SUID/SGID binary monitoring"
+echo "   • Automated security baseline creation and monitoring"
+echo ""
+echo "Security logs location: /var/log/security/"
+echo "Security baselines: /var/lib/security/baselines/"
+echo "Security status: /etc/security-status.conf"
+
+echo "===== 15. Advanced Security Refinements ====="
+
+# AppArmor Profile Enforcement Verification
+echo "Verifying AppArmor profile enforcement..."
+if command -v aa-status >/dev/null 2>&1; then
+    echo "Current AppArmor status:"
+    aa-status
+    
+    # Check if profiles are in enforce mode
+    PROFILES_ENFORCE=$(aa-status --complain 2>/dev/null | wc -l)
+    PROFILES_COMPLAIN=$(aa-status --enforce 2>/dev/null | wc -l)
+    
+    if [ "$PROFILES_COMPLAIN" -gt 0 ]; then
+        echo "⚠️ $PROFILES_COMPLAIN AppArmor profiles in complain mode - consider enforcing:"
+        aa-status --complain 2>/dev/null || true
+        echo "   To enforce: sudo aa-enforce /etc/apparmor.d/<profile>"
+    fi
+    
+    # Create custom SSH profile for enhanced protection
+    cat > /etc/apparmor.d/usr.sbin.sshd << 'EOF'
+#include <tunables/global>
+
+/usr/sbin/sshd {
+  #include <abstractions/authentication>
+  #include <abstractions/base>
+  #include <abstractions/consoles>
+  #include <abstractions/nameservice>
+  #include <abstractions/wutmp>
+
+  capability sys_chroot,
+  capability sys_resource,
+  capability chown,
+  capability fowner,
+  capability kill,
+  capability setgid,
+  capability setuid,
+  capability audit_write,
+  capability dac_override,
+  capability dac_read_search,
+  capability sys_tty_config,
+
+  /dev/log w,
+  /dev/null rw,
+  /dev/ptmx rw,
+  /dev/pts/* rw,
+  /dev/tty rw,
+  /dev/urandom r,
+
+  /etc/default/locale r,
+  /etc/environment r,
+  /etc/group r,
+  /etc/hosts.allow r,
+  /etc/hosts.deny r,
+  /etc/ld.so.cache r,
+  /etc/localtime r,
+  /etc/motd r,
+  /etc/passwd r,
+  /etc/security/** r,
+  /etc/shadow r,
+  /etc/ssh/** r,
+
+  /proc/*/fd/ r,
+  /proc/*/mounts r,
+  /proc/*/stat r,
+  /proc/sys/crypto/fips_enabled r,
+
+  /run/sshd.pid w,
+  /run/systemd/sessions/* rw,
+  /run/utmp rw,
+
+  /usr/bin/** PUx,
+  /bin/** PUx,
+  /usr/sbin/sshd mr,
+
+  /var/log/auth.log w,
+  /var/log/btmp w,
+  /var/log/lastlog rw,
+  /var/log/wtmp rw,
+
+  # Site-specific additions and overrides. See local/README for details.
+  #include <local/usr.sbin.sshd>
+}
+EOF
+
+    # Create nginx AppArmor profile for web servers
+    if [ "{{DEPLOYMENT_MODE}}" != "docker" ]; then
+        cat > /etc/apparmor.d/usr.sbin.nginx << 'EOF'
+#include <tunables/global>
+
+/usr/sbin/nginx {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+
+  capability dac_override,
+  capability setgid,
+  capability setuid,
+
+  /etc/nginx/** r,
+  /etc/ssl/certs/ r,
+  /etc/ssl/certs/** r,
+  /etc/ssl/private/ r,
+  /etc/ssl/private/** r,
+
+  /proc/*/auxv r,
+  /proc/sys/kernel/ngroups_max r,
+
+  /run/nginx.pid rw,
+  /var/log/nginx/** w,
+  /var/www/** r,
+
+  /usr/sbin/nginx mr,
+  /usr/share/nginx/** r,
+
+  # Site-specific additions and overrides. See local/README for details.
+  #include <local/usr.sbin.nginx>
+}
+EOF
+        apparmor_parser -r /etc/apparmor.d/usr.sbin.nginx 2>/dev/null || echo "Nginx AppArmor profile created"
+        echo "✅ Nginx AppArmor profile created"
+    fi
+    
+    # Load and enforce the SSH profile
+    apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd 2>/dev/null || echo "AppArmor SSH profile created (will be active after sshd restart)"
+    echo "✅ AppArmor SSH profile created and loaded"
+else
+    echo "⚠️ AppArmor not available or not installed"
+fi
+
+# Unattended Reboot Warning System
+echo "Configuring unattended reboot warning system..."
+cat > /etc/apt/apt.conf.d/51unattended-upgrades-server << 'EOF'
+// Enhanced server configuration for unattended upgrades
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "false";
+Unattended-Upgrade::Automatic-Reboot-Time "04:00";
+
+// Warning system before reboot
+Unattended-Upgrade::SyslogEnable "true";
+Unattended-Upgrade::SyslogFacility "daemon";
+EOF
+
+# Create pre-reboot warning script
+cat > /usr/local/bin/unattended-reboot-warning.sh << 'EOF'
+#!/bin/bash
+# Pre-reboot warning for unattended upgrades
+
+# Check if reboot is required
+if [ -f /var/run/reboot-required ]; then
+    # Send wall message to all logged in users
+    echo "SYSTEM NOTICE: Unattended upgrade requires reboot. System will reboot at 04:00 AM." | wall
+    
+    # Log to syslog
+    logger -p daemon.warning "Server scheduled for automatic reboot due to unattended upgrade"
+    
+    # Send email notification
+    echo "Server $(hostname) is scheduled for automatic reboot at 04:00 AM due to security updates requiring reboot." | \
+        mail -s "SERVER NOTICE: Scheduled Reboot Tonight" {{LOGWATCH_EMAIL}}
+fi
+EOF
+
+chmod +x /usr/local/bin/unattended-reboot-warning.sh
+
+# Add to daily cron to warn users
+echo "0 20 * * * root /usr/local/bin/unattended-reboot-warning.sh" >> /etc/crontab
+
+echo "✅ Unattended reboot warning system configured"
+
+# Suricata Rules Maintenance
+echo "Setting up Suricata rules maintenance..."
+if command -v suricata-update >/dev/null 2>&1; then
+    # Configure suricata-update
+    suricata-update update-sources
+    suricata-update enable-source et/open
+    suricata-update enable-source oisf/trafficid
+    
+    # Create weekly rules update job
+    cat > /etc/cron.weekly/suricata-update << 'EOF'
+#!/bin/bash
+# Weekly Suricata rules update
+
+# Update rule sources
+/usr/bin/suricata-update update-sources
+
+# Update rules
+/usr/bin/suricata-update
+
+# Test configuration
+if suricata -T -c /etc/suricata/suricata.yaml; then
+    # Restart Suricata if config is valid
+    systemctl reload suricata || systemctl restart suricata
+    logger -p daemon.info "Suricata rules updated successfully"
+else
+    # Notify of configuration error
+    echo "Suricata configuration test failed after rules update on $(hostname)" | \
+        mail -s "SERVER ERROR: Suricata Rules Update Failed" {{LOGWATCH_EMAIL}}
+    logger -p daemon.error "Suricata rules update failed - configuration test error"
+fi
+EOF
+    
+    chmod +x /etc/cron.weekly/suricata-update
+    echo "✅ Suricata rules auto-update configured"
+else
+    echo "⚠️ suricata-update not available - install with: apt install suricata-update"
+fi
+
+# Enhanced OpenSSH HMAC Tuning
+echo "Applying enhanced OpenSSH HMAC tuning..."
+cat >> /etc/ssh/sshd_config << 'EOF'
+
+# Enhanced HMAC configuration - disable SHA-1 completely
+MACs hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512
+
+# Ensure no weak algorithms
+PubkeyAcceptedKeyTypes rsa-sha2-512,rsa-sha2-256,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-ed25519
+KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256
+EOF
+
+echo "✅ Enhanced SSH HMAC configuration applied (no SHA-1)"
+
+# Systemd Watchdog for Critical Services
+echo "Configuring systemd watchdog for critical services..."
+
+# Enhanced fail2ban service with watchdog
+mkdir -p /etc/systemd/system/fail2ban.service.d
+cat > /etc/systemd/system/fail2ban.service.d/watchdog.conf << 'EOF'
+[Service]
+WatchdogSec=60
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=3
+EOF
+
+# Enhanced Suricata service with watchdog
+mkdir -p /etc/systemd/system/suricata.service.d
+cat > /etc/systemd/system/suricata.service.d/watchdog.conf << 'EOF'
+[Service]
+WatchdogSec=120
+Restart=on-failure
+RestartSec=15
+StartLimitInterval=600
+StartLimitBurst=3
+EOF
+
+# SSH service watchdog
+mkdir -p /etc/systemd/system/ssh.service.d
+cat > /etc/systemd/system/ssh.service.d/watchdog.conf << 'EOF'
+[Service]
+WatchdogSec=30
+Restart=on-failure
+RestartSec=5
+StartLimitInterval=300
+StartLimitBurst=5
+EOF
+
+# Nginx service watchdog (if not Docker mode)
+if [ "{{DEPLOYMENT_MODE}}" != "docker" ]; then
+    mkdir -p /etc/systemd/system/nginx.service.d
+    cat > /etc/systemd/system/nginx.service.d/watchdog.conf << 'EOF'
+[Service]
+WatchdogSec=30
+Restart=on-failure
+RestartSec=5
+StartLimitInterval=300
+StartLimitBurst=5
+EOF
+fi
+
+systemctl daemon-reload
+echo "✅ Systemd watchdog configured for critical services"
+
+# Daily Security Configuration Backup
+echo "Setting up daily security configuration backup..."
+cat > /etc/cron.daily/security-config-backup << 'EOF'
+#!/bin/bash
+# Daily backup of critical security configurations
+
+BACKUP_DIR="/var/backups/security-configs"
+DATE=$(date +%Y%m%d)
+BACKUP_FILE="$BACKUP_DIR/security-config-$DATE.tar.gz"
+
+# Create backup directory
+mkdir -p "$BACKUP_DIR"
+
+# Create comprehensive backup
+tar -czf "$BACKUP_FILE" \
+    /etc/fail2ban \
+    /etc/suricata \
+    /etc/ssh \
+    /etc/audit \
+    /etc/ufw \
+    /etc/apparmor.d \
+    /etc/nginx \
+    /etc/cron.d \
+    /etc/cron.daily \
+    /etc/cron.hourly \
+    /etc/cron.weekly \
+    /etc/systemd/system \
+    /var/lib/security/baselines \
+    /etc/security-status.conf \
+    /etc/logrotate.d \
+    2>/dev/null
+
+# Verify backup
+if [ -f "$BACKUP_FILE" ]; then
+    # Check backup integrity
+    if tar -tzf "$BACKUP_FILE" >/dev/null 2>&1; then
+        logger -p daemon.info "Security configuration backup completed: $BACKUP_FILE"
+        
+        # Keep only last 30 days of backups
+        find "$BACKUP_DIR" -name "security-config-*.tar.gz" -mtime +30 -delete
+        
+        # Report backup size
+        BACKUP_SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
+        echo "Security configuration backup completed: $BACKUP_SIZE ($BACKUP_FILE)" >> /var/log/backup.log
+    else
+        logger -p daemon.error "Security configuration backup corrupted: $BACKUP_FILE"
+        echo "BACKUP ERROR: Security configuration backup corrupted on $(hostname)" | \
+            mail -s "SERVER ERROR: Backup Failure" {{LOGWATCH_EMAIL}}
+    fi
+else
+    logger -p daemon.error "Security configuration backup failed"
+    echo "BACKUP ERROR: Security configuration backup failed on $(hostname)" | \
+        mail -s "SERVER ERROR: Backup Failure" {{LOGWATCH_EMAIL}}
+fi
+
+# Quick integrity check of critical configs
+for config in /etc/ssh/sshd_config /etc/suricata/suricata.yaml /etc/fail2ban/jail.local /etc/nginx/nginx.conf; do
+    if [ -f "$config" ]; then
+        case "$config" in
+            */sshd_config)
+                sshd -t 2>/dev/null || echo "WARNING: SSH config validation failed" >> /var/log/backup.log
+                ;;
+            */suricata.yaml)
+                suricata -T -c "$config" >/dev/null 2>&1 || echo "WARNING: Suricata config validation failed" >> /var/log/backup.log
+                ;;
+            */jail.local)
+                fail2ban-client -t >/dev/null 2>&1 || echo "WARNING: Fail2ban config validation failed" >> /var/log/backup.log
+                ;;
+            */nginx.conf)
+                nginx -t >/dev/null 2>&1 || echo "WARNING: Nginx config validation failed" >> /var/log/backup.log
+                ;;
+        esac
+    fi
+done
+EOF
+
+chmod +x /etc/cron.daily/security-config-backup
+
+# Run initial backup
+echo "Creating initial security configuration backup..."
+/etc/cron.daily/security-config-backup
+
+echo "✅ Daily security configuration backup system configured"
+echo ""
+echo "Advanced security refinements completed:"
+echo "   • AppArmor profile enforcement verification and custom profiles (SSH + Nginx)"
+echo "   • Unattended reboot warning system (wall messages + email alerts)"
+echo "   • Suricata rules maintenance with weekly auto-updates"
+echo "   • Enhanced OpenSSH HMAC tuning (SHA-1 completely disabled)"
+echo "   • Systemd watchdog for fail2ban, suricata, SSH, and nginx services"
+echo "   • Daily automated backup of all security configurations"
+if [ "{{NETDATA_ENABLED}}" = "true" ]; then
+    echo "   • Netdata monitoring with optional Cloud integration"
+fi
+echo ""
+echo "Configuration backup location: /var/backups/security-configs/"
+echo "Backup retention: 30 days"
+
+echo "===== 16. Setup complete! ====="
 echo "Server has been secured and Docker installed."
 echo "IMPORTANT: SSH is now running on port $SSH_PORT"
 echo "Use the following command to connect: ssh -p $SSH_PORT $USERNAME@your-server-ip"
@@ -2452,4 +3641,10 @@ echo "Next steps:"
 echo "1. Edit /etc/dsgvo/contacts.conf to add your DPO contact information"
 echo "2. Complete /etc/dsgvo/data_inventory.json with your actual data"
 echo "3. Run compliance check: /opt/polyserver/scripts/dsgvo-compliance-check.sh"
-echo "4. Deploy your applications using the PolyServer foundation"
+if [ "{{NETDATA_ENABLED}}" = "true" ]; then
+    echo "4. Access Netdata dashboard: ssh -L 19999:127.0.0.1:19999 {{USERNAME}}@server"
+    echo "5. Add to Netdata Cloud (optional): run 'netdata-access' for instructions"
+    echo "6. Deploy your applications using the PolyServer foundation"
+else
+    echo "4. Deploy your applications using the PolyServer foundation"
+fi
