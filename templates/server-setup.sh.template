@@ -2557,11 +2557,158 @@ EOF
 
 echo "✅ Enhanced system log rotation configured for security monitoring"
 
+# ========= Additional security hardening =========
+echo "===== 11. Additional security hardening ====="
+
+echo "===== 11.1 Setting up system resource limits (ulimits) ====="
+# Prevent resource exhaustion attacks with sensible limits
+cat > /etc/security/limits.d/server.conf << EOF
+# Server Resource Limits
+# Prevent resource exhaustion attacks and improve system stability
+
+# Limits for all users
+* soft nofile 4096
+* hard nofile 8192
+* soft nproc 1024
+* hard nproc 2048
+* soft core 0
+* hard core 0
+* soft memlock 64
+* hard memlock 64
+
+# Deploy user limits
+{{USERNAME}} soft nofile 2048
+{{USERNAME}} hard nofile 4096
+{{USERNAME}} soft nproc 512
+{{USERNAME}} hard nproc 1024
+{{USERNAME}} soft maxlogins 10
+{{USERNAME}} hard maxlogins 20
+
+# Root user (for system processes)
+root soft nofile 8192
+root hard nofile 16384
+root soft nproc 4096
+root hard nproc 8192
+
+# Service accounts
+www-data soft nofile 2048
+www-data hard nofile 4096
+www-data soft nproc 512
+www-data hard nproc 1024
+EOF
+
+echo "✅ System resource limits configured to prevent resource exhaustion attacks"
+
+echo "===== 11.2 Adding systemd journal rate limiting ====="
+# Prevent log flooding that could fill disk space
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/99-server-limits.conf << EOF
+# Server Journal Configuration
+# Prevent disk space exhaustion from excessive logging
+
+[Journal]
+# Limit journal size to prevent disk full
+SystemMaxUse=1G
+SystemKeepFree=2G
+SystemMaxFileSize=100M
+RuntimeMaxUse=200M
+RuntimeKeepFree=1G
+RuntimeMaxFileSize=20M
+
+# Rate limiting to prevent log flooding
+RateLimitIntervalSec=30s
+RateLimitBurst=10000
+
+# Compress logs to save space
+Compress=yes
+
+# Forward to syslog (rsyslog) for processing
+ForwardToSyslog=yes
+ForwardToConsole=no
+EOF
+
+docker_systemctl restart systemd-journald
+echo "✅ Systemd journal rate limiting configured"
+
+echo "===== 11.3 Adding kernel security parameters ====="
+# Set secure kernel parameters including auto-reboot on panic
+cat > /etc/sysctl.d/99-server-security.conf << EOF
+# Server Security Kernel Parameters
+
+# Network security
+net.ipv4.ip_forward = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv4.conf.all.log_martians = 1
+net.ipv4.conf.default.log_martians = 1
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+net.ipv4.icmp_ignore_bogus_error_responses = 1
+net.ipv4.tcp_syncookies = 1
+
+# IPv6 security (disable if not needed)
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+
+# Process security
+kernel.dmesg_restrict = 1
+kernel.kptr_restrict = 2
+kernel.yama.ptrace_scope = 1
+
+# File system security
+fs.suid_dumpable = 0
+fs.protected_hardlinks = 1
+fs.protected_symlinks = 1
+
+# Automatic reboot after kernel panic (headless environment)
+kernel.panic = 10
+kernel.panic_on_oops = 1
+EOF
+
+# Apply kernel parameters
+sysctl -p /etc/sysctl.d/99-server-security.conf
+echo "✅ Kernel security parameters and panic auto-reboot configured"
+
+echo "===== 11.4 Blacklisting unused filesystem modules ====="
+# Disable unused filesystems that could be security risks
+cat > /etc/modprobe.d/blacklist-filesystems.conf << EOF
+# Blacklist unused filesystems for security
+
+# Legacy/rare filesystems
+blacklist cramfs
+blacklist freevxfs
+blacklist jffs2
+blacklist hfs
+blacklist hfsplus
+blacklist squashfs
+blacklist udf
+
+# FireWire - rarely needed on servers
+blacklist firewire-core
+blacklist firewire-ohci
+blacklist firewire-sbp2
+
+# Bluetooth - not needed on servers
+blacklist bluetooth
+blacklist btusb
+blacklist rfcomm
+blacklist bnep
+
+# Wireless - typically not needed on servers
+blacklist cfg80211
+blacklist mac80211
+EOF
+
+echo "✅ Unused filesystem modules blacklisted for security"
+
 # ========= Now restart SSH with new configuration =========
-echo "===== 11. Restarting SSH to apply security settings ====="
+echo "===== 12. Restarting SSH to apply security settings ====="
 docker_systemctl restart sshd
 
-echo "===== 12. Optional DSGVO/GDPR Compliance Setup ====="
+echo "===== 13. Optional DSGVO/GDPR Compliance Setup ====="
 echo "Setting up DSGVO/GDPR compliance framework..."
 
 # Copy DSGVO setup script to the scripts directory first

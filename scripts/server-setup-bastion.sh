@@ -1094,6 +1094,15 @@ action = iptables-multiport[name=recidive, port="all"]
 bantime = 86400
 findtime = 86400
 maxretry = 5
+
+[systemd]
+enabled = true
+filter = systemd
+logpath = /var/log/syslog
+action = iptables-multiport[name=systemd, port="all"]
+bantime = 3600
+findtime = 600
+maxretry = 5
 EOF
 
     # Create custom filter for SSH brute force detection
@@ -1104,6 +1113,20 @@ failregex = sshd\[<pid>\]: Did not receive identification string from <HOST>
             sshd\[<pid>\]: Connection closed by <HOST> port \d+ \[preauth\]
             sshd\[<pid>\]: Disconnected from <HOST> port \d+ \[preauth\]
             sshd\[<pid>\]: Connection reset by <HOST> port \d+ \[preauth\]
+ignoreregex =
+EOF
+
+    # Create systemd filter for service monitoring
+    cat > /etc/fail2ban/filter.d/systemd.conf << EOF
+# Fail2ban filter for systemd service failures
+# Monitors for repeated service failures that could indicate attacks
+
+[Definition]
+failregex = ^.* <HOST>.*systemd.*: Failed to start .*
+            ^.* <HOST>.*systemd.*: Unit .* failed\.
+            ^.* <HOST>.*systemd.*: .* failed with result 'exit-code'\.
+            ^.* <HOST>.*systemd.*: Service .* has failed .*
+
 ignoreregex =
 EOF
 
@@ -1320,17 +1343,26 @@ systemctl enable auditd
 systemctl restart auditd
 
 echo "===== 9. Setting up Suricata IDS for bastion network monitoring ====="
-# Get primary network interface
+# Get primary network interface and bastion IP more robustly
 INTERFACE=$(ip -o -4 route show to default | awk '{print $5}')
+
+# Get bastion IP more reliably (avoid multiple IPs and whitespace issues)
+BASTION_IP=$(ip -4 addr show "$INTERFACE" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
+if [ -z "$BASTION_IP" ]; then
+    # Fallback method
+    BASTION_IP=$(hostname -I | awk '{print $1}')
+fi
+
+echo "Configuring Suricata for interface: $INTERFACE, IP: $BASTION_IP"
     
-    # Configure Suricata for bastion host monitoring
+    # Configure Suricata for bastion host monitoring with fixed HOME_NET
     cat > /etc/suricata/suricata.yaml << EOF
 %YAML 1.1
 ---
 # Suricata configuration for bastion host monitoring
 vars:
   address-groups:
-    HOME_NET: "[$(hostname -I | tr -d ' ')]"
+    HOME_NET: "[$BASTION_IP]"
     EXTERNAL_NET: "!$HOME_NET"
     INTERNAL_NET: "[$INTERNAL_NETWORK]"
     
@@ -2189,6 +2221,245 @@ EOF
 
 # Apply kernel parameters
 sysctl -p /etc/sysctl.d/99-bastion-security.conf
+
+echo "===== 14.1 Setting up system resource limits (ulimits) ====="
+# Prevent resource exhaustion attacks with sensible limits
+cat > /etc/security/limits.d/bastion.conf << EOF
+# Bastion Host Resource Limits
+# Prevent resource exhaustion attacks and improve system stability
+
+# Limits for all users
+* soft nofile 4096
+* hard nofile 8192
+* soft nproc 1024
+* hard nproc 2048
+* soft core 0
+* hard core 0
+* soft memlock 64
+* hard memlock 64
+
+# More restrictive limits for bastion user (non-root)
+$USERNAME soft nofile 2048
+$USERNAME hard nofile 4096
+$USERNAME soft nproc 512
+$USERNAME hard nproc 1024
+$USERNAME soft maxlogins 5
+$USERNAME hard maxlogins 10
+
+# Root user (for system processes)
+root soft nofile 8192
+root hard nofile 16384
+root soft nproc 4096
+root hard nproc 8192
+
+# Service accounts (more restrictive)
+www-data soft nofile 1024
+www-data hard nofile 2048
+www-data soft nproc 256
+www-data hard nproc 512
+EOF
+
+echo "✅ System resource limits configured to prevent resource exhaustion attacks"
+
+echo "===== 14.2 Adding systemd journal rate limiting ====="
+# Prevent log flooding that could fill disk space
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/99-bastion-limits.conf << EOF
+# Bastion Host Journal Configuration
+# Prevent disk space exhaustion from excessive logging
+
+[Journal]
+# Limit journal size to prevent disk full
+SystemMaxUse=500M
+SystemKeepFree=1G
+SystemMaxFileSize=50M
+RuntimeMaxUse=100M
+RuntimeKeepFree=1G
+RuntimeMaxFileSize=10M
+
+# Rate limiting to prevent log flooding
+RateLimitIntervalSec=30s
+RateLimitBurst=5000
+
+# Compress logs to save space
+Compress=yes
+
+# Forward to syslog (rsyslog) for processing
+ForwardToSyslog=yes
+ForwardToConsole=no
+EOF
+
+systemctl restart systemd-journald
+echo "✅ Systemd journal rate limiting configured"
+
+echo "===== 14.3 Adding kernel panic auto-reboot for headless environments ====="
+# Automatically reboot after kernel panic (useful for OVH/cloud environments)
+cat >> /etc/sysctl.d/99-bastion-security.conf << EOF
+
+# Automatic reboot after kernel panic (headless environment)
+kernel.panic = 10
+kernel.panic_on_oops = 1
+EOF
+
+# Reload sysctl configuration
+sysctl -p /etc/sysctl.d/99-bastion-security.conf
+echo "✅ Kernel panic auto-reboot configured (10 second delay)"
+
+echo "===== 14.4 Blacklisting unused filesystem modules ====="
+# Disable unused filesystems that could be security risks
+cat > /etc/modprobe.d/blacklist-filesystems.conf << EOF
+# Blacklist unused filesystems for security
+# These filesystems are typically not needed on bastion hosts
+
+# Network filesystems (if not needed)
+blacklist nfs
+blacklist nfsv3
+blacklist nfsv4
+blacklist cifs
+blacklist smb
+
+# Legacy/rare filesystems
+blacklist cramfs
+blacklist freevxfs
+blacklist jffs2
+blacklist hfs
+blacklist hfsplus
+blacklist squashfs
+blacklist udf
+
+# USB storage (uncomment if USB storage should be blocked)
+# blacklist usb-storage
+# blacklist uas
+
+# FireWire (IEEE 1394) - rarely needed on servers
+blacklist firewire-core
+blacklist firewire-ohci
+blacklist firewire-sbp2
+
+# Bluetooth (not needed on bastion hosts)
+blacklist bluetooth
+blacklist btusb
+blacklist rfcomm
+blacklist bnep
+
+# Wireless (typically not needed on bastion hosts)
+blacklist cfg80211
+blacklist mac80211
+EOF
+
+echo "✅ Unused filesystem modules blacklisted for security"
+
+echo "===== 14.5 Setting up disk space protection for logging ====="
+# Create emergency disk space protection system
+
+# Add disk usage monitoring to prevent full disk scenarios
+cat > /etc/cron.hourly/disk-space-protection << 'EOF'
+#!/bin/bash
+# Emergency disk space protection for bastion host
+# Prevents system failure due to disk space exhaustion
+
+CRITICAL_THRESHOLD=95
+WARNING_THRESHOLD=85
+ROOT_USAGE=$(df / | awk 'NR==2 {print $5}' | sed 's/%//')
+VAR_USAGE=$(df /var | awk 'NR==2 {print $5}' | sed 's/%//')
+
+# Function to clean old logs if disk space critical
+emergency_cleanup() {
+    echo "$(date): EMERGENCY: Disk space at $1% - performing emergency cleanup" >> /var/log/emergency-cleanup.log
+    
+    # Remove old compressed logs first
+    find /var/log -name "*.gz" -mtime +7 -delete 2>/dev/null || true
+    find /var/log -name "*.bz2" -mtime +7 -delete 2>/dev/null || true
+    
+    # Clean old log files
+    find /var/log -name "*.log.*" -mtime +3 -delete 2>/dev/null || true
+    
+    # Truncate large current log files (keep last 1000 lines)
+    for logfile in /var/log/*.log; do
+        if [ -f "$logfile" ] && [ "$(stat -c%s "$logfile" 2>/dev/null)" -gt 104857600 ]; then  # 100MB
+            tail -n 1000 "$logfile" > "$logfile.tmp" && mv "$logfile.tmp" "$logfile"
+            echo "$(date): Truncated large log file: $logfile" >> /var/log/emergency-cleanup.log
+        fi
+    done
+    
+    # Clear old journal logs
+    journalctl --vacuum-time=1d --vacuum-size=100M 2>/dev/null || true
+    
+    # Send alert
+    echo "EMERGENCY: Disk space critical on bastion host $(hostname). Emergency cleanup performed." | mail -s "BASTION CRITICAL: Emergency Disk Cleanup" root
+}
+
+# Check root filesystem
+if [ "$ROOT_USAGE" -ge "$CRITICAL_THRESHOLD" ]; then
+    emergency_cleanup "$ROOT_USAGE"
+elif [ "$ROOT_USAGE" -ge "$WARNING_THRESHOLD" ]; then
+    echo "WARNING: Root filesystem at $ROOT_USAGE% usage" | mail -s "BASTION WARNING: Disk Space" root
+fi
+
+# Check /var filesystem (if separate)
+if [ "$VAR_USAGE" -ge "$CRITICAL_THRESHOLD" ]; then
+    emergency_cleanup "$VAR_USAGE"
+elif [ "$VAR_USAGE" -ge "$WARNING_THRESHOLD" ]; then
+    echo "WARNING: /var filesystem at $VAR_USAGE% usage" | mail -s "BASTION WARNING: /var Disk Space" root
+fi
+EOF
+
+chmod +x /etc/cron.hourly/disk-space-protection
+
+# Add logrotate configuration to be more aggressive about space
+cat >> /etc/logrotate.conf << 'EOF'
+
+# Emergency space management
+# If disk usage goes above 90%, force rotation of large logs
+include /etc/logrotate.d
+size 100M
+EOF
+
+echo "✅ Emergency disk space protection configured"
+
+# Optional: Create tmpfs fallback for critical scenarios (commented out by default)
+cat > /usr/local/bin/setup-log-tmpfs << 'EOF'
+#!/bin/bash
+# Emergency script to move logs to tmpfs if disk space critical
+# WARNING: This will cause logs to be lost on reboot!
+# Only use in emergency situations
+
+if [ "$(df / | awk 'NR==2 {print $5}' | sed 's/%//')" -ge 98 ]; then
+    echo "EMERGENCY: Setting up tmpfs for logs to prevent system failure"
+    
+    # Create tmpfs mount point
+    mkdir -p /tmp/emergency-logs
+    
+    # Mount tmpfs (256MB)
+    mount -t tmpfs -o size=256M tmpfs /tmp/emergency-logs
+    
+    # Stop logging services
+    systemctl stop rsyslog auditd fail2ban 2>/dev/null || true
+    
+    # Backup current logs
+    tar -czf /tmp/logs-backup-$(date +%Y%m%d-%H%M%S).tar.gz /var/log/ 2>/dev/null || true
+    
+    # Move logs to tmpfs
+    mv /var/log /var/log.backup
+    ln -s /tmp/emergency-logs /var/log
+    
+    # Create basic log structure
+    mkdir -p /var/log/audit
+    touch /var/log/syslog /var/log/auth.log /var/log/mail.log
+    chmod 640 /var/log/*.log
+    chown root:adm /var/log/*.log
+    
+    # Restart services
+    systemctl start rsyslog auditd fail2ban 2>/dev/null || true
+    
+    echo "EMERGENCY: Logs moved to tmpfs - LOGS WILL BE LOST ON REBOOT!" | mail -s "BASTION EMERGENCY: Logs on tmpfs" root
+fi
+EOF
+
+chmod +x /usr/local/bin/setup-log-tmpfs
+
+echo "✅ Emergency tmpfs script created (/usr/local/bin/setup-log-tmpfs)"
+echo "💡 Run setup-log-tmpfs only in critical disk space emergencies"
 
 # Restart SSH with new configuration
 echo "===== 15. Restarting SSH service ====="
