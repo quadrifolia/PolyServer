@@ -2200,9 +2200,113 @@ EOF
 
 systemctl daemon-reload
 
-# Enable and start Suricata
-systemctl enable suricata
-systemctl start suricata
+# Test Suricata configuration before starting
+echo "Testing Suricata configuration..."
+if suricata -T -c /etc/suricata/suricata.yaml >/tmp/suricata-test.log 2>&1; then
+    echo "✅ Suricata configuration is valid"
+    
+    # Create log directory with proper permissions
+    mkdir -p /var/log/suricata
+    chown suricata:suricata /var/log/suricata 2>/dev/null || chown root:root /var/log/suricata
+    chmod 755 /var/log/suricata
+    
+    # Reload systemd configuration
+    systemctl daemon-reload
+    
+    # Enable Suricata for automatic startup
+    systemctl enable suricata
+    
+    # Start Suricata with error handling
+    echo "Starting Suricata IDS service..."
+    if systemctl start suricata; then
+        echo "✅ Suricata IDS started successfully"
+        
+        # Wait for service to initialize
+        sleep 5
+        
+        # Verify Suricata is running
+        if systemctl is-active --quiet suricata; then
+            echo "✅ Suricata IDS is running and monitoring network traffic"
+            
+            # Show Suricata status
+            systemctl --no-pager status suricata | head -10
+        else
+            echo "⚠️ Suricata started but may not be fully operational"
+            echo "Checking Suricata logs:"
+            journalctl -u suricata --no-pager -l --since="2 minutes ago" | tail -10
+        fi
+    else
+        echo "❌ Failed to start Suricata IDS"
+        echo "Checking systemctl status:"
+        systemctl --no-pager status suricata
+        echo ""
+        echo "Recent logs:"
+        journalctl -u suricata --no-pager -l --since="2 minutes ago"
+        echo ""
+        echo "⚠️ Suricata IDS disabled due to startup failure"
+        systemctl disable suricata 2>/dev/null || true
+        echo "   Network monitoring will be limited to other security tools"
+    fi
+else
+    echo "❌ Suricata configuration test failed"
+    echo "Configuration errors:"
+    cat /tmp/suricata-test.log
+    
+    echo "Attempting to fix common Suricata issues..."
+    
+    # Check if required directories exist
+    mkdir -p /etc/suricata/rules /var/log/suricata /var/lib/suricata/rules
+    
+    # Check if default rules exist
+    if [ ! -f /etc/suricata/rules/suricata.rules ]; then
+        echo "Creating minimal default rules file..."
+        cat > /etc/suricata/rules/suricata.rules << 'EOF'
+# Minimal default rules for Suricata
+# This file prevents Suricata from failing due to missing default rules
+EOF
+    fi
+    
+    # Check interface exists
+    if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
+        echo "⚠️ Network interface $INTERFACE not found, using fallback configuration"
+        # Get first available interface
+        FALLBACK_INTERFACE=$(ip -o link show | grep -v lo | head -1 | awk -F': ' '{print $2}')
+        echo "Using fallback interface: $FALLBACK_INTERFACE"
+        
+        # Update Suricata config with fallback interface
+        sed -i "s/interface: $INTERFACE/interface: $FALLBACK_INTERFACE/" /etc/suricata/suricata.yaml
+    fi
+    
+    # Retry configuration test
+    echo "Retesting Suricata configuration with fixes..."
+    if suricata -T -c /etc/suricata/suricata.yaml >/tmp/suricata-retest.log 2>&1; then
+        echo "✅ Suricata configuration fixed"
+        
+        systemctl daemon-reload
+        systemctl enable suricata
+        
+        if systemctl start suricata; then
+            echo "✅ Suricata IDS started successfully after fixes"
+        else
+            echo "❌ Suricata still fails to start - disabling"
+            systemctl disable suricata 2>/dev/null || true
+            echo "⚠️ Suricata IDS disabled - network monitoring limited"
+        fi
+    else
+        echo "❌ Suricata configuration still invalid"
+        echo "Final error details:"
+        cat /tmp/suricata-retest.log
+        
+        # Disable Suricata if it can't be fixed
+        systemctl disable suricata 2>/dev/null || true
+        echo "⚠️ Suricata IDS disabled due to configuration errors"
+        echo "   Other security tools (fail2ban, auditd) will provide protection"
+        echo "   Manual Suricata configuration may be required"
+    fi
+fi
+
+# Cleanup test logs
+rm -f /tmp/suricata-test.log /tmp/suricata-retest.log
 
 echo "===== 10. Setting up comprehensive logging and monitoring ====="
 
