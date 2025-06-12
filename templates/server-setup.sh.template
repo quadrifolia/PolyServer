@@ -2366,6 +2366,24 @@ Service = zz-disk_space
 Show_Empty_Sections = yes
 EOF
 
+# Ensure logwatch cron job is properly configured
+cat > /etc/cron.daily/00logwatch << 'EOF'
+#!/bin/bash
+# Daily Logwatch execution
+
+# Run logwatch with configured settings
+/usr/sbin/logwatch --output mail --format html --range yesterday --detail med
+EOF
+
+chmod 755 /etc/cron.daily/00logwatch
+
+# Also add cron.d entry for redundancy
+cat > /etc/cron.d/logwatch << 'EOF'
+# Daily logwatch execution
+# Run at 6:00 AM daily to analyze previous day's logs
+0 6 * * * root /usr/sbin/logwatch --output mail --format html --range yesterday --detail med
+EOF
+
 # Create custom service for lm_sensors
 mkdir -p /etc/logwatch/scripts/services
 cat > /etc/logwatch/scripts/services/zz-lm_sensors << 'EOF'

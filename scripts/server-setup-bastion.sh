@@ -2400,6 +2400,9 @@ echo "📧 Primary reporting via Logwatch (user-friendly daily summaries)"
 echo "🔍 Logcheck provides additional technical details if needed"
 
 # Configure Logwatch for bastion-specific monitoring
+mkdir -p /etc/logwatch/conf/logfiles
+mkdir -p /var/cache/logwatch
+
 cat > /etc/logwatch/conf/logwatch.conf << EOF
 # Bastion Host Logwatch Configuration
 Output = mail
@@ -2418,6 +2421,132 @@ Service = fail2ban
 Service = "-zz-disk_space"
 Service = "-zz-network"
 EOF
+
+# Create logwatch cron job (ensure it runs daily)
+cat > /etc/cron.daily/00logwatch << 'EOF'
+#!/bin/bash
+# Daily Logwatch execution for bastion host
+
+# Run logwatch with bastion-specific configuration
+/usr/sbin/logwatch --output mail --format html --range yesterday --detail high
+EOF
+
+chmod 755 /etc/cron.daily/00logwatch
+
+# Also enable logwatch cron in case it's disabled
+cat > /etc/cron.d/logwatch << 'EOF'
+# Daily logwatch execution
+# Run at 6:00 AM daily to analyze previous day's logs
+0 6 * * * root /usr/sbin/logwatch --output mail --format html --range yesterday --detail high
+EOF
+
+# Create logwatch test script for troubleshooting
+cat > /usr/local/bin/test-logwatch << 'EOF'
+#!/bin/bash
+# Test logwatch configuration and email delivery
+
+echo "Testing logwatch configuration..."
+echo "================================="
+echo ""
+
+echo "1. Checking logwatch installation:"
+if command -v logwatch >/dev/null 2>&1; then
+    echo "✅ Logwatch is installed"
+    logwatch --version 2>/dev/null || echo "Version information not available"
+else
+    echo "❌ Logwatch is not installed"
+    exit 1
+fi
+echo ""
+
+echo "2. Checking logwatch configuration:"
+if [ -f /etc/logwatch/conf/logwatch.conf ]; then
+    echo "✅ Logwatch configuration exists"
+    echo "Email recipient: $(grep '^MailTo' /etc/logwatch/conf/logwatch.conf | cut -d'=' -f2 | tr -d ' ')"
+    echo "Output format: $(grep '^Output' /etc/logwatch/conf/logwatch.conf | cut -d'=' -f2 | tr -d ' ')"
+    echo "Range: $(grep '^Range' /etc/logwatch/conf/logwatch.conf | cut -d'=' -f2 | tr -d ' ')"
+    echo "Detail level: $(grep '^Detail' /etc/logwatch/conf/logwatch.conf | cut -d'=' -f2 | tr -d ' ')"
+else
+    echo "❌ Logwatch configuration not found"
+    exit 1
+fi
+echo ""
+
+echo "3. Checking cron jobs:"
+if [ -f /etc/cron.daily/00logwatch ]; then
+    echo "✅ Daily cron job exists and is executable: $(ls -la /etc/cron.daily/00logwatch | cut -d' ' -f1)"
+else
+    echo "❌ Daily cron job not found"
+fi
+
+if [ -f /etc/cron.d/logwatch ]; then
+    echo "✅ Cron.d entry exists"
+    cat /etc/cron.d/logwatch
+else
+    echo "❌ Cron.d entry not found"
+fi
+echo ""
+
+echo "4. Testing logwatch execution (dry run):"
+echo "Running: logwatch --output stdout --format text --range today --detail low"
+echo "=============================================================="
+timeout 30 logwatch --output stdout --format text --range today --detail low | head -20
+echo ""
+echo "=============================================================="
+echo ""
+
+echo "5. Testing mail system:"
+if command -v mail >/dev/null 2>&1; then
+    echo "✅ Mail command is available"
+    
+    # Test mail delivery
+    echo "Subject: Logwatch Test - $(date)
+
+This is a test email from the logwatch test script.
+If you receive this email, basic mail delivery is working.
+
+Host: $(hostname)
+Date: $(date)
+User: $(whoami)
+" | mail -s "Logwatch Test - $(hostname)" root
+    
+    echo "✅ Test email sent to root"
+    echo "Check /var/mail/root or configured email address"
+else
+    echo "❌ Mail command not available"
+fi
+echo ""
+
+echo "6. Testing full logwatch email (for yesterday):"
+echo "Running: logwatch --output mail --format html --range yesterday --detail high"
+echo "This will send an actual email if mail is configured..."
+read -p "Press Enter to continue or Ctrl+C to cancel: "
+logwatch --output mail --format html --range yesterday --detail high
+echo "✅ Logwatch email command executed"
+echo ""
+
+echo "7. Checking mail logs:"
+echo "Recent mail log entries:"
+tail -10 /var/log/mail.log 2>/dev/null || echo "Mail log not available"
+echo ""
+
+echo "8. Checking mail queue:"
+mailq 2>/dev/null || echo "Mail queue command not available"
+echo ""
+
+echo "Logwatch test complete!"
+echo "If you didn't receive emails, check:"
+echo "- SMTP configuration in /etc/postfix/main.cf"
+echo "- Email aliases in /etc/aliases"  
+echo "- Mail logs in /var/log/mail.log"
+echo "- Logwatch logs in /var/log/syslog"
+EOF
+
+chmod 755 /usr/local/bin/test-logwatch
+
+echo "✅ Logwatch configured with daily email delivery"
+echo "   • Daily reports sent to: $LOGWATCH_EMAIL"
+echo "   • Test script available: sudo test-logwatch"
 
 echo "===== 11. Creating bastion monitoring scripts ====="
 
