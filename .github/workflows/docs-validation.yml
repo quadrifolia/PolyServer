@@ -44,13 +44,13 @@ jobs:
         }
         EOF
         
-        # Check main documentation files
-        markdownlint README.md SECURITY.md DSGVO.md || true
+        # Check main documentation files (allow warnings)
+        markdownlint README.md SECURITY.md DSGVO.md || echo "⚠️ Markdown linting found issues (non-critical)"
         
         # Check template markdown files
         find templates/ -name "*.md" -type f | while read -r md_file; do
           echo "Checking: $md_file"
-          markdownlint "$md_file" || true
+          markdownlint "$md_file" || echo "⚠️ Issues in $md_file (non-critical)"
         done
         
         echo "✅ Markdown syntax validation completed"

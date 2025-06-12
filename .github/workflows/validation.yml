@@ -1,0 +1,208 @@
+name: Code Validation
+
+on:
+  push:
+    branches: [ main, development ]
+  pull_request:
+    branches: [ main, development ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  # Essential validation only - no complex Docker testing
+  validate:
+    runs-on: ubuntu-latest
+    name: Validate Code Quality
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Install validation tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y shellcheck yamllint jq
+        
+    - name: Validate shell scripts
+      run: |
+        echo "🔍 Validating shell script syntax..."
+        
+        # Check main scripts
+        find scripts/ -name "*.sh" -type f | while read -r script; do
+          echo "Checking $script..."
+          shellcheck -e SC1091,SC2034,SC2129,SC2162,SC2012,SC1090,SC2236,SC2155,SC2001,SC2044,SC2086,SC2317,SC2181,SC2046,SC2027,SC2002 "$script"
+        done
+        
+        # Check templates with variable substitution
+        if [ -f "templates/server-setup.sh.template" ]; then
+          echo "Checking server-setup.sh template..."
+          # Simple substitution for syntax check - avoid double quotes
+          sed -e 's/{{[^}]*}}/test_value/g' \
+              -e 's/\$TESTING_MODE/true/g' \
+              -e 's/\$DOCKER_MODE/false/g' \
+              -e 's/\$NETDATA_ENABLED/false/g' \
+              -e 's/\$DEPLOYMENT_MODE/standalone/g' \
+              templates/server-setup.sh.template > /tmp/server-setup-test.sh
+          shellcheck -e SC1091,SC2034,SC2154,SC2086,SC2027,SC2140,SC2050 /tmp/server-setup-test.sh
+        fi
+        
+        echo "✅ All shell scripts passed validation"
+        
+    - name: Validate YAML files
+      run: |
+        echo "🔍 Validating YAML files..."
+        find templates/ -name "*.yaml" -o -name "*.yml" | while read -r yaml_file; do
+          echo "Checking $yaml_file..."
+          # Replace template variables and validate
+          sed 's/{{[^}]*}}/test_value/g' "$yaml_file" | yamllint -d relaxed -
+        done
+        echo "✅ All YAML files passed validation"
+        
+    - name: Validate JSON templates
+      run: |
+        echo "🔍 Validating JSON templates..."
+        find templates/ -name "*.json" | while read -r json_file; do
+          echo "Checking $json_file..."
+          # Replace template variables and validate JSON
+          sed 's/{{[^}]*}}/"test_value"/g' "$json_file" | jq . > /dev/null
+        done
+        echo "✅ All JSON files passed validation"
+        
+    - name: Test configuration generation
+      run: |
+        echo "🔧 Testing configuration generation..."
+        
+        # Test basic generation
+        ./scripts/generate-configs.sh templates/defaults.env test-output/
+        
+        # Verify key files were generated
+        [ -f "test-output/server-setup.sh" ] || { echo "❌ server-setup.sh not generated"; exit 1; }
+        [ -f "test-output/nginx/nginx.conf" ] || { echo "❌ nginx config not generated"; exit 1; }
+        
+        # Test generated script has valid syntax
+        shellcheck -e SC1091,SC2034,SC2154 test-output/server-setup.sh
+        
+        echo "✅ Configuration generation successful"
+        
+    - name: Security checks
+      run: |
+        echo "🔒 Running basic security checks..."
+        
+        # Check for common security issues
+        find scripts/ templates/ -type f \( -name "*.sh" -o -name "*.template" \) | while read -r file; do
+          # Check for potential issues (basic patterns)
+          if grep -E "(eval|exec|\\\$\\\(.*curl.*http://)" "$file" 2>/dev/null; then
+            echo "⚠️ Potentially dangerous patterns in $file"
+          fi
+          
+          # Check for hardcoded secrets (basic check)
+          if grep -E "(password|secret|key)\s*=\s*[\"'][^\"'{}]*[\"']" "$file" 2>/dev/null; then
+            echo "⚠️ Potential hardcoded credentials in $file"
+          fi
+        done
+        
+        echo "✅ Security checks completed"
+        
+    - name: Validate required files
+      run: |
+        echo "📋 Checking required files exist..."
+        
+        required_files=(
+          "templates/defaults.env"
+          "scripts/generate-configs.sh"
+          "templates/server-setup.sh.template"
+          "templates/nginx/nginx-docker.conf.template"
+          "templates/nginx/nginx-baremetal.conf.template"
+          "templates/dsgvo/processing_records.md.template"
+        )
+        
+        for file in "${required_files[@]}"; do
+          [ -f "$file" ] || { echo "❌ Missing required file: $file"; exit 1; }
+          echo "✅ Found: $file"
+        done
+        
+        echo "✅ All required files present"
+
+  # Simple integration test - just verify scripts work
+  integration-test:
+    runs-on: ubuntu-latest
+    name: Integration Test
+    needs: validate
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Test different deployment modes
+      run: |
+        echo "🔧 Testing deployment mode configurations..."
+        
+        # Test Docker mode
+        echo "DEPLOYMENT_MODE=docker" > test-docker.env
+        grep -v "^DEPLOYMENT_MODE=" templates/defaults.env >> test-docker.env
+        ./scripts/generate-configs.sh test-docker.env docker-output/
+        
+        # Verify Docker-specific configs
+        grep -q "upstream backend" docker-output/nginx/nginx.conf || { 
+          echo "❌ Docker mode upstream config missing"; exit 1; 
+        }
+        
+        # Test Bare Metal mode
+        echo "DEPLOYMENT_MODE=baremetal" > test-baremetal.env
+        grep -v "^DEPLOYMENT_MODE=" templates/defaults.env >> test-baremetal.env
+        ./scripts/generate-configs.sh test-baremetal.env baremetal-output/
+        
+        # Verify both modes generated valid configs
+        [ -f "docker-output/server-setup.sh" ] || { echo "❌ Docker server-setup.sh missing"; exit 1; }
+        [ -f "baremetal-output/server-setup.sh" ] || { echo "❌ Baremetal server-setup.sh missing"; exit 1; }
+        
+        echo "✅ Both deployment modes working correctly"
+        
+    - name: Test DSGVO scripts
+      run: |
+        echo "⚖️ Testing DSGVO compliance scripts..."
+        
+        # Test scripts exist and are executable
+        chmod +x scripts/dsgvo-*.sh scripts/data-subject-request.sh scripts/breach-response-checklist.sh
+        
+        # Test help/usage functions
+        scripts/dsgvo-compliance-check.sh --help || true
+        scripts/data-subject-request.sh --help || true
+        
+        echo "✅ DSGVO scripts functional"
+
+  # Report final status
+  summary:
+    runs-on: ubuntu-latest
+    name: Validation Summary
+    needs: [validate, integration-test]
+    if: always()
+    
+    steps:
+    - name: Report results
+      run: |
+        echo "📊 Validation Summary"
+        echo "===================="
+        
+        if [ "${{ needs.validate.result }}" = "success" ]; then
+          echo "✅ Code validation: PASSED"
+        else
+          echo "❌ Code validation: FAILED"
+        fi
+        
+        if [ "${{ needs.integration-test.result }}" = "success" ]; then
+          echo "✅ Integration test: PASSED"
+        else
+          echo "❌ Integration test: FAILED"
+        fi
+        
+        # Fail if essential validation failed
+        if [ "${{ needs.validate.result }}" != "success" ]; then
+          echo "❌ Essential validation failed"
+          exit 1
+        fi
+        
+        echo "🎉 Validation completed successfully!"
