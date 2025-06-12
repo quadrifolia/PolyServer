@@ -2931,24 +2931,11 @@ EOF
 
 echo "Comprehensive log rotation configured for all PolyServer components"
 
-# Enhanced system log rotation (based on bastion host learnings)
-cat > /etc/logrotate.d/enhanced-system-logs << 'EOF'
-# Enhanced system log rotation for authentication and sudo activity
+# Enhanced application-specific log rotation (avoiding system conflicts)
+# Only configure logs that are not managed by default system logrotate
 
-# Authentication logs (keep longer for security analysis)
-/var/log/auth.log {
-    daily
-    rotate 60
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 root adm
-    postrotate
-        systemctl reload rsyslog > /dev/null 2>&1 || true
-    endscript
-}
-
+# Sudo activity logs (extend default retention for security monitoring)
+cat > /etc/logrotate.d/polyserver-sudo << 'EOF'
 # Sudo activity logs (important for privilege escalation monitoring)
 /var/log/sudo.log {
     daily
@@ -2962,37 +2949,12 @@ cat > /etc/logrotate.d/enhanced-system-logs << 'EOF'
         systemctl reload rsyslog > /dev/null 2>&1 || true
     endscript
 }
-
-# System logs (general system activity)
-/var/log/syslog {
-    daily
-    rotate 14
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 syslog adm
-    postrotate
-        systemctl reload rsyslog > /dev/null 2>&1 || true
-    endscript
-}
-
-# Kernel logs
-/var/log/kern.log {
-    daily
-    rotate 14
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 syslog adm
-    postrotate
-        systemctl reload rsyslog > /dev/null 2>&1 || true
-    endscript
-}
 EOF
 
-echo "✅ Enhanced system log rotation configured for security monitoring"
+# Note: auth.log, syslog, and kern.log are already managed by system default logrotate
+# We avoid creating conflicting configurations for these files
+
+echo "✅ Application-specific log rotation configured (avoiding system conflicts)"
 
 # ========= Additional security hardening =========
 echo "===== 11. Additional security hardening ====="

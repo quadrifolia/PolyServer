@@ -2432,11 +2432,15 @@ EOF
 
 chmod 755 /etc/cron.daily/bastion-security-report
 
-echo "===== 12. Setting up comprehensive log rotation for bastion logs ====="
-cat > /etc/logrotate.d/bastion-logs << 'EOF'
-# Bastion host comprehensive log rotation configuration
-# Ensures logs don't fill up disk space while retaining security audit trail
+echo "===== 12. Setting up bastion-specific log rotation (avoiding conflicts) ====="
+# Remove any conflicting logrotate configurations and create bastion-specific ones
+rm -f /etc/logrotate.d/bastion-logs
 
+# Create separate logrotate configs for bastion-specific logs only
+# This avoids conflicts with system default logrotate configurations
+
+# SSH logs (bastion-specific, not managed by default logrotate)
+cat > /etc/logrotate.d/bastion-ssh << 'EOF'
 # SSH logs (critical for bastion security)
 /var/log/ssh.log {
     daily
@@ -2450,21 +2454,10 @@ cat > /etc/logrotate.d/bastion-logs << 'EOF'
         systemctl reload rsyslog > /dev/null 2>&1 || true
     endscript
 }
+EOF
 
-# Authentication logs (keep longer for security analysis)
-/var/log/auth.log {
-    daily
-    rotate 60
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 root adm
-    postrotate
-        systemctl reload rsyslog > /dev/null 2>&1 || true
-    endscript
-}
-
+# Sudo activity logs (extend default retention for bastion)
+cat > /etc/logrotate.d/bastion-sudo << 'EOF'
 # Sudo activity logs (important for privilege escalation monitoring)
 /var/log/sudo.log {
     daily
@@ -2478,50 +2471,10 @@ cat > /etc/logrotate.d/bastion-logs << 'EOF'
         systemctl reload rsyslog > /dev/null 2>&1 || true
     endscript
 }
+EOF
 
-# Audit logs (critical for compliance - keep longer)
-/var/log/audit/audit.log {
-    daily
-    rotate 365
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 root adm
-    copytruncate
-    postrotate
-        /sbin/service auditd restart > /dev/null 2>&1 || true
-    endscript
-}
-
-# Mail logs (for email notification troubleshooting)
-/var/log/mail.log {
-    daily
-    rotate 30
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 root adm
-    postrotate
-        systemctl reload rsyslog > /dev/null 2>&1 || true
-    endscript
-}
-
-# Fail2ban logs (security monitoring)
-/var/log/fail2ban.log {
-    weekly
-    rotate 12
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 root adm
-    postrotate
-        systemctl reload fail2ban > /dev/null 2>&1 || true
-    endscript
-}
-
+# Network activity logs (bastion-specific)
+cat > /etc/logrotate.d/bastion-network << 'EOF'
 # Network activity logs
 /var/log/network.log {
     weekly
@@ -2535,7 +2488,10 @@ cat > /etc/logrotate.d/bastion-logs << 'EOF'
         systemctl reload rsyslog > /dev/null 2>&1 || true
     endscript
 }
+EOF
 
+# Emergency/critical logs (bastion-specific)
+cat > /etc/logrotate.d/bastion-emergency << 'EOF'
 # Emergency/critical logs (keep longer for incident analysis)
 /var/log/emergency.log {
     monthly
@@ -2549,7 +2505,10 @@ cat > /etc/logrotate.d/bastion-logs << 'EOF'
         systemctl reload rsyslog > /dev/null 2>&1 || true
     endscript
 }
+EOF
 
+# Bastion monitoring logs (bastion-specific)
+cat > /etc/logrotate.d/bastion-monitor << 'EOF'
 # Bastion monitoring logs
 /var/log/bastion-monitor.log {
     weekly
@@ -2560,35 +2519,9 @@ cat > /etc/logrotate.d/bastion-logs << 'EOF'
     notifempty
     create 0644 root root
 }
-
-# System logs (general system activity)
-/var/log/syslog {
-    daily
-    rotate 14
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 syslog adm
-    postrotate
-        systemctl reload rsyslog > /dev/null 2>&1 || true
-    endscript
-}
-
-# Kernel logs
-/var/log/kern.log {
-    daily
-    rotate 14
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 syslog adm
-    postrotate
-        systemctl reload rsyslog > /dev/null 2>&1 || true
-    endscript
-}
 EOF
+
+echo "✅ Bastion-specific logrotate configurations created (avoiding system conflicts)"
 
 # Add disk space monitoring to bastion monitoring script
 echo "===== 12.1 Adding disk space monitoring to prevent log overflow ====="
