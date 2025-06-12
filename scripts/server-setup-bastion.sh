@@ -1225,6 +1225,29 @@ export LC_MESSAGES=en_US.UTF-8
 
 echo "Locale configuration updated to resolve environment warnings"
 
+# Configure lm-sensors to suppress warnings on systems without hardware sensors
+echo "===== 6.2.2 Configuring hardware sensors (suppressing warnings) ====="
+if command -v sensors >/dev/null 2>&1; then
+    # Check if sensors are actually detected
+    if ! sensors 2>/dev/null | grep -q "°C\|°F"; then
+        echo "No hardware sensors detected - disabling sensors service to prevent warnings"
+        systemctl disable lm-sensors 2>/dev/null || true
+        systemctl mask lm-sensors 2>/dev/null || true
+        
+        # Create empty sensors config to prevent startup warnings
+        mkdir -p /etc/sensors.d
+        cat > /etc/sensors.d/bastion-no-sensors.conf << 'EOF'
+# No hardware sensors configuration for bastion host
+# This file prevents sensors warnings on systems without hardware monitoring
+EOF
+        echo "✅ Sensors warnings suppressed for VPS/cloud environment"
+    else
+        echo "Hardware sensors detected - sensors will remain active"
+    fi
+else
+    echo "Sensors command not available - skipping configuration"
+fi
+
 # Install Oh My Zsh for bastion user with security-focused plugins
 if id "$USERNAME" &>/dev/null; then
     echo "Installing Oh My Zsh for $USERNAME with security plugins..."
@@ -1452,6 +1475,8 @@ protocol = tcp
 chain = INPUT
 port = 0:65535
 fail2ban_agent = Fail2Ban/%(fail2ban_version)s
+# Explicitly disable IPv6 for bastion hosts (IPv4 only)
+allowipv6 = false
 
 [sshd]
 enabled = true
@@ -1730,7 +1755,6 @@ cat > /etc/audit/rules.d/bastion-audit.rules << 'EOF'
 -w /var/log/wtmp -p wa -k session
 -w /var/log/btmp -p wa -k session
 -w /var/log/utmp -p wa -k session
--w /var/run/utmp -p wa -k session
 -w /var/log/lastlog -p wa -k session
 
 ## Monitor SSH configuration changes
@@ -3759,6 +3783,17 @@ if command -v aa-status >/dev/null 2>&1; then
   # Site-specific additions and overrides. See local/README for details.
   #include <local/usr.sbin.sshd>
 }
+EOF
+    
+    # Create the local include directory and file to prevent parser errors
+    mkdir -p /etc/apparmor.d/local
+    touch /etc/apparmor.d/local/usr.sbin.sshd
+    
+    # Add a comment to the local file
+    cat > /etc/apparmor.d/local/usr.sbin.sshd << 'EOF'
+# Site-specific additions and overrides for /usr/sbin/sshd
+# This file can be used to add additional rules specific to this system
+# Format: standard AppArmor rules
 EOF
     
     # Load and enforce the SSH profile

@@ -366,6 +366,29 @@ apt-get install -y mtr-tiny arp-scan dnsutils net-tools traceroute whois
 # File integrity
 apt-get install -y debsums aide
 
+# Configure lm-sensors to suppress warnings on systems without hardware sensors
+echo "===== 6.1.1 Configuring hardware sensors (suppressing warnings) ====="
+if command -v sensors >/dev/null 2>&1; then
+    # Check if sensors are actually detected
+    if ! sensors 2>/dev/null | grep -q "°C\|°F"; then
+        echo "No hardware sensors detected - disabling sensors service to prevent warnings"
+        systemctl disable lm-sensors 2>/dev/null || true
+        systemctl mask lm-sensors 2>/dev/null || true
+        
+        # Create empty sensors config to prevent startup warnings
+        mkdir -p /etc/sensors.d
+        cat > /etc/sensors.d/no-sensors.conf << 'EOF'
+# No hardware sensors configuration
+# This file prevents sensors warnings on systems without hardware monitoring
+EOF
+        echo "✅ Sensors warnings suppressed for VPS/cloud environment"
+    else
+        echo "Hardware sensors detected - sensors will remain active"
+    fi
+else
+    echo "Sensors command not available - skipping configuration"
+fi
+
 # Log monitoring
 apt-get install -y logcheck logcheck-database
 
@@ -910,6 +933,10 @@ if [ "$DOCKER_MODE" = "false" ]; then
     logger -p auth.info "Server setup: Initializing auth.log for fail2ban"
     
     cat > /etc/fail2ban/jail.local << EOF
+[DEFAULT]
+# Explicitly configure IPv6 support (auto-detect based on system)
+allowipv6 = auto
+
 [sshd]
 enabled = true
 port = $SSH_PORT
@@ -3823,6 +3850,17 @@ EOF
     fi
     
     # Load and enforce the SSH profile
+    # Create the local include directory and file to prevent parser errors
+    mkdir -p /etc/apparmor.d/local
+    touch /etc/apparmor.d/local/usr.sbin.sshd
+    
+    # Add a comment to the local file
+    cat > /etc/apparmor.d/local/usr.sbin.sshd << 'EOF'
+# Site-specific additions and overrides for /usr/sbin/sshd
+# This file can be used to add additional rules specific to this system
+# Format: standard AppArmor rules
+EOF
+    
     apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd 2>/dev/null || echo "AppArmor SSH profile created (will be active after sshd restart)"
     echo "✅ AppArmor SSH profile created and loaded"
 else
