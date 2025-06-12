@@ -11,8 +11,24 @@ SEVERITY="HIGH,CRITICAL"
 CONTAINERS=("app" "nginx" "db")
 TRIVYLOG="${REPORT_DIR}/trivy-${DATE}.log"
 
+# Resource management settings
+LOAD_THRESHOLD=2.0
+MAX_SCAN_TIME=1800  # 30 minutes max total scan time
+
 # Create report directory if it doesn't exist
 mkdir -p $REPORT_DIR
+
+# Check system load before starting scan
+CURRENT_LOAD=$(uptime | awk -F'load average:' '{ print $2 }' | awk '{ print $1 }' | sed 's/,//')
+
+if (( $(echo "$CURRENT_LOAD > $LOAD_THRESHOLD" | bc -l) )); then
+    echo "$(date): System load too high ($CURRENT_LOAD), skipping Trivy scan" > $TRIVYLOG
+    exit 0
+fi
+
+# Set process priority for resource-aware scanning
+renice -n 19 $$ >/dev/null 2>&1
+ionice -c 3 -p $$ >/dev/null 2>&1
 
 # Start log file
 echo "===== Container Vulnerability Scan Report: $DATE =====" > $TRIVYLOG
@@ -41,18 +57,33 @@ if ! command -v trivy &> /dev/null; then
     echo "" >> $TRIVYLOG
 fi
 
-# Update Trivy vulnerability database
+# Update Trivy vulnerability database with timeout
 echo "Updating Trivy vulnerability database..." >> $TRIVYLOG
-trivy image --download-db-only
-echo "Vulnerability database updated." >> $TRIVYLOG
+timeout 300 nice -n 19 ionice -c 3 trivy image --download-db-only
+if [ $? -eq 124 ]; then
+    echo "Database update timed out after 5 minutes" >> $TRIVYLOG
+elif [ $? -ne 0 ]; then
+    echo "Database update failed" >> $TRIVYLOG
+    exit 1
+else
+    echo "Vulnerability database updated." >> $TRIVYLOG
+fi
 echo "" >> $TRIVYLOG
 
-# Scan all running containers
+# Scan all running containers with overall timeout
 FOUND_VULNERABILITIES=0
 TOTAL_HIGH=0
 TOTAL_CRITICAL=0
+SCAN_START_TIME=$(date +%s)
 
 for CONTAINER in "${CONTAINERS[@]}"; do
+    # Check if we've exceeded the maximum scan time
+    CURRENT_TIME=$(date +%s)
+    ELAPSED_TIME=$((CURRENT_TIME - SCAN_START_TIME))
+    if [ $ELAPSED_TIME -gt $MAX_SCAN_TIME ]; then
+        echo "Maximum scan time ($MAX_SCAN_TIME seconds) exceeded. Stopping scan." >> $TRIVYLOG
+        break
+    fi
     # Get the container image
     IMAGE_ID=$(docker inspect --format='{{.Config.Image}}' $CONTAINER 2>/dev/null)
     
@@ -63,8 +94,17 @@ for CONTAINER in "${CONTAINERS[@]}"; do
     
     echo "Scanning container: $CONTAINER (Image: $IMAGE_ID)" >> $TRIVYLOG
     
-    # Scan the container image for vulnerabilities
-    SCAN_RESULT=$(trivy image --no-progress --severity $SEVERITY --timeout 10m $IMAGE_ID)
+    # Scan the container image for vulnerabilities with resource controls
+    SCAN_RESULT=$(timeout 600 nice -n 19 ionice -c 3 trivy image --no-progress --severity $SEVERITY --timeout 8m $IMAGE_ID 2>/dev/null)
+    SCAN_EXIT_CODE=$?
+    
+    if [ $SCAN_EXIT_CODE -eq 124 ]; then
+        echo "Scan for $CONTAINER timed out after 10 minutes" >> $TRIVYLOG
+        continue
+    elif [ $SCAN_EXIT_CODE -ne 0 ]; then
+        echo "Scan for $CONTAINER failed with exit code $SCAN_EXIT_CODE" >> $TRIVYLOG
+        continue
+    fi
     
     # If vulnerabilities found
     if echo "$SCAN_RESULT" | grep -q -E "CRITICAL|HIGH"; then

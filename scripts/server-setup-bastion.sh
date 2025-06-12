@@ -377,7 +377,391 @@ apt-get install -y fail2ban unattended-upgrades apt-listchanges \
     rkhunter chkrootkit unbound apparmor apparmor-utils \
     suricata tcpdump netcat-openbsd mailutils postfix
 
-echo "===== 6.0.1 Installing CPU microcode updates ====="
+echo "===== 6.0.1 Configuring ClamAV with resource optimization for bastion hosts ====="
+# Optimize ClamAV for bastion host environment with limited resources
+# This prevents ClamAV from consuming excessive CPU/memory that could impact critical services
+
+# Stop services during configuration
+systemctl stop clamav-daemon clamav-freshclam 2>/dev/null || true
+
+# Configure ClamAV daemon with resource-conscious settings
+cat > /etc/clamav/clamd.conf << 'EOF'
+# ClamAV Daemon Configuration - Optimized for Bastion Hosts
+User clamav
+LocalSocket /run/clamav/clamd.ctl
+FixStaleSocket true
+LocalSocketGroup clamav
+LocalSocketMode 666
+
+# Reduce resource consumption
+MaxThreads 1
+MaxConnectionQueueLength 5
+MaxQueue 50
+
+# Optimize scanning performance vs resources
+ReadTimeout 120
+CommandReadTimeout 30
+SendBufTimeout 120
+
+# File size and scanning limits to prevent excessive resource usage
+MaxScanSize 50M
+MaxFileSize 10M
+MaxRecursion 8
+MaxFiles 5000
+MaxPartitions 25
+MaxIconsPE 50
+
+# Scan behavior - balance security vs performance
+ScanPE true
+ScanELF true
+ScanOLE2 true
+ScanPDF true
+ScanHTML true
+ScanArchive true
+ArchiveBlockEncrypted false
+MaxDirectoryRecursion 10
+
+# Memory and timeout optimizations
+PCREMatchLimit 5000
+PCRERecMatchLimit 2500
+PCREMaxFileSize 10M
+MaxScanTime 30000
+
+# Logging - lightweight for bastion
+LogFile /var/log/clamav/clamav.log
+LogTime true
+LogClean false
+LogSyslog false
+LogRotate true
+LogVerbose false
+
+# Network and detection settings
+SelfCheck 3600
+DatabaseDirectory /var/lib/clamav
+OfficialDatabaseOnly false
+Foreground false
+Debug false
+
+# Resource-conscious detection
+IdleTimeout 30
+ExitOnOOM true
+LeaveTemporaryFiles false
+DetectPUA false
+CrossFilesystems false
+
+# Heuristic settings - balanced approach
+AlgorithmicDetection true
+Bytecode true
+BytecodeSecurity TrustSigned
+BytecodeTimeout 30000
+
+# Disable potentially resource-intensive features for bastion use
+PhishingSignatures false
+PhishingAlwaysBlockSSLMismatch false
+PhishingAlwaysBlockCloak false
+HeuristicScanPrecedence false
+StructuredDataDetection false
+ScanPartialMessages false
+OLE2BlockMacros false
+EOF
+
+# Configure freshclam with reduced frequency to prevent resource spikes
+cat > /etc/clamav/freshclam.conf << 'EOF'
+# ClamAV Freshclam Configuration - Optimized for Bastion Hosts
+DatabaseOwner clamav
+
+# Reduce update frequency from default 24/day to 2/day to minimize resource impact
+Checks 2
+
+# Database mirrors and sources
+DatabaseMirror db.us.clamav.net
+DatabaseMirror db.local.clamav.net
+
+# Logging
+UpdateLogFile /var/log/clamav/freshclam.log
+LogVerbose false
+LogSyslog false
+LogTime true
+LogRotate true
+
+# Download behavior - be gentle on resources
+MaxAttempts 3
+ConnectTimeout 30
+ReceiveTimeout 30
+
+# Notify clamd of updates
+NotifyClamd /etc/clamav/clamd.conf
+
+# Test database before loading
+TestDatabases yes
+
+# Bytecode updates
+Bytecode true
+EOF
+
+# Create systemd resource limits for ClamAV services
+echo "Setting up systemd resource limits for ClamAV services..."
+
+# ClamAV daemon resource limits
+mkdir -p /etc/systemd/system/clamav-daemon.service.d
+cat > /etc/systemd/system/clamav-daemon.service.d/resource-limits.conf << 'EOF'
+[Service]
+# Resource limits to prevent ClamAV from overwhelming bastion host
+CPUQuota=25%
+MemoryMax=512M
+MemoryHigh=400M
+
+# Process priority and I/O scheduling
+Nice=19
+IOSchedulingClass=3
+IOSchedulingPriority=7
+
+# Smart restart behavior
+Restart=on-failure
+RestartSec=30
+StartLimitInterval=600
+StartLimitBurst=3
+
+# Watchdog configuration - longer timeout for resource-limited scanning
+WatchdogSec=180
+
+# OOM handling - kill ClamAV rather than other services
+OOMPolicy=kill
+OOMScoreAdjust=500
+
+# Security and resource isolation
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/clamav /var/log/clamav /run/clamav
+EOF
+
+# Freshclam resource limits
+mkdir -p /etc/systemd/system/clamav-freshclam.service.d
+cat > /etc/systemd/system/clamav-freshclam.service.d/resource-limits.conf << 'EOF'
+[Service]
+# Resource limits for virus definition updates
+CPUQuota=15%
+MemoryMax=256M
+
+# Process priority
+Nice=19
+IOSchedulingClass=3
+
+# Restart behavior
+Restart=on-failure
+RestartSec=60
+StartLimitInterval=1200
+StartLimitBurst=2
+
+# OOM handling
+OOMPolicy=kill
+OOMScoreAdjust=400
+
+# Security isolation
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/clamav /var/log/clamav
+EOF
+
+# Create log directory with proper permissions
+mkdir -p /var/log/clamav
+chown clamav:clamav /var/log/clamav
+chmod 755 /var/log/clamav
+
+# Set up logrotate for ClamAV logs
+cat > /etc/logrotate.d/clamav << 'EOF'
+/var/log/clamav/*.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 644 clamav clamav
+    postrotate
+        systemctl reload clamav-daemon > /dev/null 2>&1 || true
+    endscript
+}
+EOF
+
+# Reload systemd and start services with new configurations
+systemctl daemon-reload
+
+# Enable services but don't start immediately - let the user decide
+systemctl enable clamav-daemon clamav-freshclam
+
+echo "✅ ClamAV configured with resource optimization for bastion environment"
+echo "   • CPU limited to 25% (daemon) / 15% (updater)"
+echo "   • Memory limited to 512MB (daemon) / 256MB (updater)"
+echo "   • Update frequency: 2x daily (instead of 24x)"
+echo "   • Optimized scan limits and timeouts"
+echo "   • Enhanced OOM protection and process isolation"
+echo ""
+echo "📋 ClamAV Management Commands:"
+echo "   • Start services: systemctl start clamav-daemon clamav-freshclam"
+echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
+echo "   • View logs: journalctl -u clamav-daemon -f"
+echo "   • Manual scan: clamscan -r /path/to/scan"
+echo ""
+echo "⚠️  Note: ClamAV services are enabled but not started automatically"
+echo "   Start them manually after verifying system resources are adequate"
+
+echo "===== 6.0.2 Configuring Unbound DNS with IPv4-only for bastion hosts ====="
+# Configure Unbound DNS resolver with IPv4-only to prevent binding issues
+echo "Configuring Unbound DNS resolver for bastion environment..."
+
+# Stop unbound service during configuration
+systemctl stop unbound unbound-resolvconf 2>/dev/null || true
+
+# Create IPv4-only Unbound configuration optimized for bastion hosts
+cat > /etc/unbound/unbound.conf.d/bastion.conf << 'EOF'
+# Bastion Host Unbound Configuration - IPv4 Only
+server:
+    # Network configuration - IPv4 only to prevent binding issues
+    interface: 127.0.0.1
+    port: 53
+    do-ip4: yes
+    do-ip6: no
+    prefer-ip6: no
+    
+    # Security and access control
+    access-control: 127.0.0.0/8 allow
+    access-control: 0.0.0.0/0 refuse
+    
+    # Performance optimization for bastion host
+    num-threads: 1
+    msg-cache-slabs: 1
+    rrset-cache-slabs: 1
+    infra-cache-slabs: 1
+    key-cache-slabs: 1
+    
+    # Cache settings - smaller cache for bastion
+    msg-cache-size: 16m
+    rrset-cache-size: 32m
+    
+    # Security settings
+    hide-identity: yes
+    hide-version: yes
+    harden-glue: yes
+    harden-dnssec-stripped: yes
+    harden-below-nxdomain: yes
+    harden-referral-path: yes
+    use-caps-for-id: yes
+    
+    # Logging
+    verbosity: 1
+    use-syslog: yes
+    log-queries: no
+    log-replies: no
+    
+    # Performance tuning
+    so-rcvbuf: 4m
+    so-sndbuf: 4m
+    so-reuseport: yes
+    
+    # DNSSEC
+    auto-trust-anchor-file: "/var/lib/unbound/root.key"
+    
+    # Private address handling
+    private-address: 192.168.0.0/16
+    private-address: 172.16.0.0/12
+    private-address: 10.0.0.0/8
+    private-address: 169.254.0.0/16
+    private-address: fd00::/8
+    private-address: fe80::/10
+    
+remote-control:
+    control-enable: no
+EOF
+
+# Create simple main unbound.conf that includes our bastion config
+cat > /etc/unbound/unbound.conf << 'EOF'
+# Unbound configuration for Bastion Host
+# Main configuration file - includes bastion-specific settings
+
+include-toplevel: "/etc/unbound/unbound.conf.d/*.conf"
+EOF
+
+# Disable unbound-resolvconf service (causes issues in bastion environment)
+systemctl disable unbound-resolvconf 2>/dev/null || true
+systemctl mask unbound-resolvconf 2>/dev/null || true
+
+# Create systemd override for Unbound to ensure IPv4-only operation
+mkdir -p /etc/systemd/system/unbound.service.d
+cat > /etc/systemd/system/unbound.service.d/ipv4-only.conf << 'EOF'
+[Service]
+# Force IPv4-only operation to prevent binding issues
+Environment=UNBOUND_DISABLE_IPV6=yes
+
+# Restart configuration
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=4
+
+# Resource limits
+MemoryMax=256M
+Nice=5
+OOMScoreAdjust=100
+EOF
+
+# Ensure unbound directory and permissions are correct
+mkdir -p /var/lib/unbound
+chown unbound:unbound /var/lib/unbound
+chmod 755 /var/lib/unbound
+
+# Initialize root trust anchor if it doesn't exist
+if [ ! -f /var/lib/unbound/root.key ]; then
+    echo "Initializing Unbound root trust anchor..."
+    sudo -u unbound unbound-anchor -a /var/lib/unbound/root.key 2>/dev/null || touch /var/lib/unbound/root.key
+    chown unbound:unbound /var/lib/unbound/root.key
+fi
+
+# Test unbound configuration
+echo "Testing Unbound configuration..."
+if unbound-checkconf; then
+    echo "✅ Unbound configuration is valid"
+    
+    # Reload systemd and start unbound
+    systemctl daemon-reload
+    systemctl enable unbound
+    systemctl start unbound
+    
+    # Wait for service to start
+    sleep 3
+    
+    # Verify Unbound is running and listening
+    if systemctl is-active --quiet unbound; then
+        echo "✅ Unbound DNS resolver started successfully"
+        
+        # Test DNS resolution
+        if dig @127.0.0.1 google.com >/dev/null 2>&1; then
+            echo "✅ Unbound DNS resolution test successful"
+        else
+            echo "⚠️ Unbound DNS resolution test failed - checking logs"
+            systemctl status unbound --no-pager -l
+        fi
+    else
+        echo "⚠️ Unbound failed to start - checking status"
+        systemctl status unbound --no-pager -l
+    fi
+else
+    echo "❌ Unbound configuration test failed"
+    unbound-checkconf
+fi
+
+echo "✅ Unbound DNS configured for bastion environment"
+echo "   • IPv4-only operation (prevents IPv6 binding issues)"
+echo "   • Localhost binding only (127.0.0.1:53)"
+echo "   • Optimized cache settings for bastion use"
+echo "   • DNSSEC validation enabled"
+echo "   • Private address filtering configured"
+
+echo "===== 6.0.3 Installing CPU microcode updates ====="
 
 # Check if running in a virtual environment
 VIRT_TYPE=""
@@ -841,6 +1225,29 @@ export LC_MESSAGES=en_US.UTF-8
 
 echo "Locale configuration updated to resolve environment warnings"
 
+# Configure lm-sensors to suppress warnings on systems without hardware sensors
+echo "===== 6.2.2 Configuring hardware sensors (suppressing warnings) ====="
+if command -v sensors >/dev/null 2>&1; then
+    # Check if sensors are actually detected
+    if ! sensors 2>/dev/null | grep -q "°C\|°F"; then
+        echo "No hardware sensors detected - disabling sensors service to prevent warnings"
+        systemctl disable lm-sensors 2>/dev/null || true
+        systemctl mask lm-sensors 2>/dev/null || true
+        
+        # Create empty sensors config to prevent startup warnings
+        mkdir -p /etc/sensors.d
+        cat > /etc/sensors.d/bastion-no-sensors.conf << 'EOF'
+# No hardware sensors configuration for bastion host
+# This file prevents sensors warnings on systems without hardware monitoring
+EOF
+        echo "✅ Sensors warnings suppressed for VPS/cloud environment"
+    else
+        echo "Hardware sensors detected - sensors will remain active"
+    fi
+else
+    echo "Sensors command not available - skipping configuration"
+fi
+
 # Install Oh My Zsh for bastion user with security-focused plugins
 if id "$USERNAME" &>/dev/null; then
     echo "Installing Oh My Zsh for $USERNAME with security plugins..."
@@ -1068,6 +1475,8 @@ protocol = tcp
 chain = INPUT
 port = 0:65535
 fail2ban_agent = Fail2Ban/%(fail2ban_version)s
+# Explicitly disable IPv6 for bastion hosts (IPv4 only)
+allowipv6 = false
 
 [sshd]
 enabled = true
@@ -1203,6 +1612,100 @@ else
     tail -n 20 /var/log/fail2ban.log 2>/dev/null || echo "No fail2ban log available"
 fi
 
+# Configure AIDE (Advanced Intrusion Detection Environment) for bastion host
+echo "===== 7.5 Configuring AIDE for file integrity monitoring ====="
+
+# Configure AIDE to run properly with mail functionality
+cat > /etc/default/aide << 'EOF'
+# Configuration for AIDE on bastion host
+# Run AIDE checks as root to enable mail functionality
+AIDE_USER="root"
+
+# Mail configuration
+MAILTO="root"
+MAILSUBJECT="AIDE integrity check for bastion host $HOSTNAME"
+
+# Quiet mode - don't output unless there are changes
+QUIETREPORTS="yes"
+
+# Skip the database check if the database doesn't exist yet
+COPYNEWDB="no"
+EOF
+
+# Create custom AIDE check script that handles mail properly
+cat > /usr/local/bin/aide-check << 'EOF'
+#!/bin/bash
+# Custom AIDE check script with proper mail handling for bastion host
+
+# Log file for AIDE output
+AIDE_LOG="/var/log/aide/aide-check.log"
+mkdir -p /var/log/aide
+
+# Run AIDE check and capture output
+echo "AIDE integrity check started at $(date)" > $AIDE_LOG
+echo "=====================================" >> $AIDE_LOG
+
+# Run AIDE check with proper error handling
+if aide --check 2>&1 | tee -a $AIDE_LOG; then
+    # AIDE completed successfully
+    echo "AIDE check completed at $(date)" >> $AIDE_LOG
+    
+    # Check if there were any changes detected
+    if grep -q "found differences" $AIDE_LOG || grep -q "File.*changed" $AIDE_LOG; then
+        # Changes detected - send alert email
+        cat $AIDE_LOG | mail -s "🚨 BASTION AIDE ALERT: File integrity changes detected on $HOSTNAME" root
+    else
+        # No changes - log success
+        echo "No integrity violations detected" >> $AIDE_LOG
+    fi
+else
+    # AIDE failed
+    echo "AIDE check failed at $(date)" >> $AIDE_LOG
+    echo "AIDE integrity check failed on bastion host $HOSTNAME" | mail -s "🚨 BASTION AIDE ERROR: Check failed on $HOSTNAME" root
+    exit 1
+fi
+
+# Rotate old logs
+find /var/log/aide -name "aide-check.log.*" -mtime +30 -delete
+if [ -f $AIDE_LOG ] && [ $(stat -c%s $AIDE_LOG) -gt 10485760 ]; then
+    # Rotate if log is larger than 10MB
+    mv $AIDE_LOG ${AIDE_LOG}.$(date +%Y%m%d)
+    gzip ${AIDE_LOG}.$(date +%Y%m%d)
+fi
+EOF
+
+chmod 755 /usr/local/bin/aide-check
+
+# Override the default AIDE systemd service to use our custom script
+mkdir -p /etc/systemd/system/dailyaidecheck.service.d
+cat > /etc/systemd/system/dailyaidecheck.service.d/override.conf << 'EOF'
+[Service]
+# Override to use our custom AIDE check script
+ExecStart=
+ExecStart=/usr/local/bin/aide-check
+
+# Ensure proper user and environment
+User=root
+Group=root
+
+# Resource limits to prevent AIDE from overwhelming bastion system
+CPUQuota=20%
+MemoryMax=256M
+Nice=19
+IOSchedulingClass=3
+
+# Proper logging
+StandardOutput=journal
+StandardError=journal
+EOF
+
+systemctl daemon-reload
+
+echo "Initializing AIDE database for bastion host - this will take some time..."
+nice -n 19 aideinit
+
+echo "✅ AIDE configured with proper mail functionality for bastion host"
+
 echo "===== 8. Configuring comprehensive audit framework for bastion ====="
 # Enhanced audit configuration for bastion hosts
 cat > /etc/audit/auditd.conf << EOF
@@ -1252,7 +1755,6 @@ cat > /etc/audit/rules.d/bastion-audit.rules << 'EOF'
 -w /var/log/wtmp -p wa -k session
 -w /var/log/btmp -p wa -k session
 -w /var/log/utmp -p wa -k session
--w /var/run/utmp -p wa -k session
 -w /var/log/lastlog -p wa -k session
 
 ## Monitor SSH configuration changes
@@ -1338,6 +1840,39 @@ cat > /etc/audit/rules.d/bastion-audit.rules << 'EOF'
 # -e 2
 EOF
 
+# Configure auditd systemd resource limits for bastion host
+echo "===== 8.1.1 Configuring Auditd Resource Management ====="
+mkdir -p /etc/systemd/system/auditd.service.d
+cat > /etc/systemd/system/auditd.service.d/resource-limits.conf << 'EOF'
+[Service]
+# Resource limits for bastion host audit system
+CPUQuota=15%
+MemoryMax=128M
+MemoryHigh=100M
+Nice=0
+IOSchedulingClass=1
+IOSchedulingPriority=4
+OOMPolicy=continue
+OOMScoreAdjust=-200
+
+# Security and isolation (limited for auditd requirements)
+NoNewPrivileges=true
+ProtectHome=true
+ReadWritePaths=/var/log/audit /etc/audit
+
+# Restart policy for audit reliability
+Restart=always
+RestartSec=30
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+# Watchdog configuration
+WatchdogSec=120
+NotifyAccess=main
+EOF
+
+systemctl daemon-reload
+
 # Enable and start auditd
 systemctl enable auditd
 systemctl restart auditd
@@ -1389,6 +1924,59 @@ detect-engine:
   profile: high
   sgh-mpm-context: auto
   inspection-recursion-limit: 3000
+
+# App layer protocol configuration
+app-layer:
+  protocols:
+    # Essential protocols for bastion host monitoring
+    http:
+      enabled: yes
+    tls:
+      enabled: yes
+    ssh:
+      enabled: yes
+    dns:
+      enabled: yes
+    smtp:
+      enabled: yes
+    ftp:
+      enabled: yes
+    
+    # Disable protocols not needed on bastion hosts
+    dcerpc:
+      enabled: no
+    smb:
+      enabled: no
+    modbus:
+      enabled: no
+    enip:
+      enabled: no
+    dnp3:
+      enabled: no
+    nfs:
+      enabled: no
+    ntp:
+      enabled: no
+    tftp:
+      enabled: no
+    ikev2:
+      enabled: no
+    krb5:
+      enabled: no
+    dhcp:
+      enabled: no
+    snmp:
+      enabled: no
+    sip:
+      enabled: no
+    rfb:
+      enabled: no
+    mqtt:
+      enabled: no
+    rdp:
+      enabled: no
+    http2:
+      enabled: yes
   
 # Comprehensive logging
 outputs:
@@ -1455,6 +2043,41 @@ EOF
     endscript
 }
 EOF
+
+# Configure Suricata systemd resource limits for bastion host
+echo "===== 9.4.1 Configuring Suricata Resource Management ====="
+mkdir -p /etc/systemd/system/suricata.service.d
+cat > /etc/systemd/system/suricata.service.d/resource-limits.conf << 'EOF'
+[Service]
+# Resource limits for bastion host (more conservative than production)
+CPUQuota=30%
+MemoryMax=512M
+MemoryHigh=400M
+Nice=10
+IOSchedulingClass=2
+IOSchedulingPriority=5
+OOMPolicy=kill
+OOMScoreAdjust=300
+
+# Security and isolation
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/log/suricata /var/lib/suricata /run/suricata
+
+# Restart policy for network IDS reliability
+Restart=always
+RestartSec=60
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+# Watchdog configuration
+WatchdogSec=300
+NotifyAccess=main
+EOF
+
+systemctl daemon-reload
 
 # Enable and start Suricata
 systemctl enable suricata
@@ -1777,6 +2400,9 @@ echo "📧 Primary reporting via Logwatch (user-friendly daily summaries)"
 echo "🔍 Logcheck provides additional technical details if needed"
 
 # Configure Logwatch for bastion-specific monitoring
+mkdir -p /etc/logwatch/conf/logfiles
+mkdir -p /var/cache/logwatch
+
 cat > /etc/logwatch/conf/logwatch.conf << EOF
 # Bastion Host Logwatch Configuration
 Output = mail
@@ -1795,6 +2421,132 @@ Service = fail2ban
 Service = "-zz-disk_space"
 Service = "-zz-network"
 EOF
+
+# Create logwatch cron job (ensure it runs daily)
+cat > /etc/cron.daily/00logwatch << 'EOF'
+#!/bin/bash
+# Daily Logwatch execution for bastion host
+
+# Run logwatch with bastion-specific configuration
+/usr/sbin/logwatch --output mail --format html --range yesterday --detail high
+EOF
+
+chmod 755 /etc/cron.daily/00logwatch
+
+# Also enable logwatch cron in case it's disabled
+cat > /etc/cron.d/logwatch << 'EOF'
+# Daily logwatch execution
+# Run at 6:00 AM daily to analyze previous day's logs
+0 6 * * * root /usr/sbin/logwatch --output mail --format html --range yesterday --detail high
+EOF
+
+# Create logwatch test script for troubleshooting
+cat > /usr/local/bin/test-logwatch << 'EOF'
+#!/bin/bash
+# Test logwatch configuration and email delivery
+
+echo "Testing logwatch configuration..."
+echo "================================="
+echo ""
+
+echo "1. Checking logwatch installation:"
+if command -v logwatch >/dev/null 2>&1; then
+    echo "✅ Logwatch is installed"
+    logwatch --version 2>/dev/null || echo "Version information not available"
+else
+    echo "❌ Logwatch is not installed"
+    exit 1
+fi
+echo ""
+
+echo "2. Checking logwatch configuration:"
+if [ -f /etc/logwatch/conf/logwatch.conf ]; then
+    echo "✅ Logwatch configuration exists"
+    echo "Email recipient: $(grep '^MailTo' /etc/logwatch/conf/logwatch.conf | cut -d'=' -f2 | tr -d ' ')"
+    echo "Output format: $(grep '^Output' /etc/logwatch/conf/logwatch.conf | cut -d'=' -f2 | tr -d ' ')"
+    echo "Range: $(grep '^Range' /etc/logwatch/conf/logwatch.conf | cut -d'=' -f2 | tr -d ' ')"
+    echo "Detail level: $(grep '^Detail' /etc/logwatch/conf/logwatch.conf | cut -d'=' -f2 | tr -d ' ')"
+else
+    echo "❌ Logwatch configuration not found"
+    exit 1
+fi
+echo ""
+
+echo "3. Checking cron jobs:"
+if [ -f /etc/cron.daily/00logwatch ]; then
+    echo "✅ Daily cron job exists and is executable: $(ls -la /etc/cron.daily/00logwatch | cut -d' ' -f1)"
+else
+    echo "❌ Daily cron job not found"
+fi
+
+if [ -f /etc/cron.d/logwatch ]; then
+    echo "✅ Cron.d entry exists"
+    cat /etc/cron.d/logwatch
+else
+    echo "❌ Cron.d entry not found"
+fi
+echo ""
+
+echo "4. Testing logwatch execution (dry run):"
+echo "Running: logwatch --output stdout --format text --range today --detail low"
+echo "=============================================================="
+timeout 30 logwatch --output stdout --format text --range today --detail low | head -20
+echo ""
+echo "=============================================================="
+echo ""
+
+echo "5. Testing mail system:"
+if command -v mail >/dev/null 2>&1; then
+    echo "✅ Mail command is available"
+    
+    # Test mail delivery
+    echo "Subject: Logwatch Test - $(date)
+
+This is a test email from the logwatch test script.
+If you receive this email, basic mail delivery is working.
+
+Host: $(hostname)
+Date: $(date)
+User: $(whoami)
+" | mail -s "Logwatch Test - $(hostname)" root
+    
+    echo "✅ Test email sent to root"
+    echo "Check /var/mail/root or configured email address"
+else
+    echo "❌ Mail command not available"
+fi
+echo ""
+
+echo "6. Testing full logwatch email (for yesterday):"
+echo "Running: logwatch --output mail --format html --range yesterday --detail high"
+echo "This will send an actual email if mail is configured..."
+read -p "Press Enter to continue or Ctrl+C to cancel: "
+logwatch --output mail --format html --range yesterday --detail high
+echo "✅ Logwatch email command executed"
+echo ""
+
+echo "7. Checking mail logs:"
+echo "Recent mail log entries:"
+tail -10 /var/log/mail.log 2>/dev/null || echo "Mail log not available"
+echo ""
+
+echo "8. Checking mail queue:"
+mailq 2>/dev/null || echo "Mail queue command not available"
+echo ""
+
+echo "Logwatch test complete!"
+echo "If you didn't receive emails, check:"
+echo "- SMTP configuration in /etc/postfix/main.cf"
+echo "- Email aliases in /etc/aliases"  
+echo "- Mail logs in /var/log/mail.log"
+echo "- Logwatch logs in /var/log/syslog"
+EOF
+
+chmod 755 /usr/local/bin/test-logwatch
+
+echo "✅ Logwatch configured with daily email delivery"
+echo "   • Daily reports sent to: $LOGWATCH_EMAIL"
+echo "   • Test script available: sudo test-logwatch"
 
 echo "===== 11. Creating bastion monitoring scripts ====="
 
@@ -1927,11 +2679,15 @@ EOF
 
 chmod 755 /etc/cron.daily/bastion-security-report
 
-echo "===== 12. Setting up comprehensive log rotation for bastion logs ====="
-cat > /etc/logrotate.d/bastion-logs << 'EOF'
-# Bastion host comprehensive log rotation configuration
-# Ensures logs don't fill up disk space while retaining security audit trail
+echo "===== 12. Setting up bastion-specific log rotation (avoiding conflicts) ====="
+# Remove any conflicting logrotate configurations and create bastion-specific ones
+rm -f /etc/logrotate.d/bastion-logs
 
+# Create separate logrotate configs for bastion-specific logs only
+# This avoids conflicts with system default logrotate configurations
+
+# SSH logs (bastion-specific, not managed by default logrotate)
+cat > /etc/logrotate.d/bastion-ssh << 'EOF'
 # SSH logs (critical for bastion security)
 /var/log/ssh.log {
     daily
@@ -1945,21 +2701,10 @@ cat > /etc/logrotate.d/bastion-logs << 'EOF'
         systemctl reload rsyslog > /dev/null 2>&1 || true
     endscript
 }
+EOF
 
-# Authentication logs (keep longer for security analysis)
-/var/log/auth.log {
-    daily
-    rotate 60
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 root adm
-    postrotate
-        systemctl reload rsyslog > /dev/null 2>&1 || true
-    endscript
-}
-
+# Sudo activity logs (extend default retention for bastion)
+cat > /etc/logrotate.d/bastion-sudo << 'EOF'
 # Sudo activity logs (important for privilege escalation monitoring)
 /var/log/sudo.log {
     daily
@@ -1973,50 +2718,10 @@ cat > /etc/logrotate.d/bastion-logs << 'EOF'
         systemctl reload rsyslog > /dev/null 2>&1 || true
     endscript
 }
+EOF
 
-# Audit logs (critical for compliance - keep longer)
-/var/log/audit/audit.log {
-    daily
-    rotate 365
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 root adm
-    copytruncate
-    postrotate
-        /sbin/service auditd restart > /dev/null 2>&1 || true
-    endscript
-}
-
-# Mail logs (for email notification troubleshooting)
-/var/log/mail.log {
-    daily
-    rotate 30
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 root adm
-    postrotate
-        systemctl reload rsyslog > /dev/null 2>&1 || true
-    endscript
-}
-
-# Fail2ban logs (security monitoring)
-/var/log/fail2ban.log {
-    weekly
-    rotate 12
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 root adm
-    postrotate
-        systemctl reload fail2ban > /dev/null 2>&1 || true
-    endscript
-}
-
+# Network activity logs (bastion-specific)
+cat > /etc/logrotate.d/bastion-network << 'EOF'
 # Network activity logs
 /var/log/network.log {
     weekly
@@ -2030,7 +2735,10 @@ cat > /etc/logrotate.d/bastion-logs << 'EOF'
         systemctl reload rsyslog > /dev/null 2>&1 || true
     endscript
 }
+EOF
 
+# Emergency/critical logs (bastion-specific)
+cat > /etc/logrotate.d/bastion-emergency << 'EOF'
 # Emergency/critical logs (keep longer for incident analysis)
 /var/log/emergency.log {
     monthly
@@ -2044,7 +2752,10 @@ cat > /etc/logrotate.d/bastion-logs << 'EOF'
         systemctl reload rsyslog > /dev/null 2>&1 || true
     endscript
 }
+EOF
 
+# Bastion monitoring logs (bastion-specific)
+cat > /etc/logrotate.d/bastion-monitor << 'EOF'
 # Bastion monitoring logs
 /var/log/bastion-monitor.log {
     weekly
@@ -2055,35 +2766,23 @@ cat > /etc/logrotate.d/bastion-logs << 'EOF'
     notifempty
     create 0644 root root
 }
+EOF
 
-# System logs (general system activity)
-/var/log/syslog {
-    daily
-    rotate 14
+# AIDE logs (bastion-specific)
+cat > /etc/logrotate.d/bastion-aide << 'EOF'
+# AIDE integrity check logs
+/var/log/aide/aide-check.log {
+    weekly
+    rotate 12
     compress
     delaycompress
     missingok
     notifempty
-    create 0640 syslog adm
-    postrotate
-        systemctl reload rsyslog > /dev/null 2>&1 || true
-    endscript
-}
-
-# Kernel logs
-/var/log/kern.log {
-    daily
-    rotate 14
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 syslog adm
-    postrotate
-        systemctl reload rsyslog > /dev/null 2>&1 || true
-    endscript
+    create 0640 root root
 }
 EOF
+
+echo "✅ Bastion-specific logrotate configurations created (avoiding system conflicts)"
 
 # Add disk space monitoring to bastion monitoring script
 echo "===== 12.1 Adding disk space monitoring to prevent log overflow ====="
@@ -3215,6 +3914,17 @@ if command -v aa-status >/dev/null 2>&1; then
 }
 EOF
     
+    # Create the local include directory and file to prevent parser errors
+    mkdir -p /etc/apparmor.d/local
+    touch /etc/apparmor.d/local/usr.sbin.sshd
+    
+    # Add a comment to the local file
+    cat > /etc/apparmor.d/local/usr.sbin.sshd << 'EOF'
+# Site-specific additions and overrides for /usr/sbin/sshd
+# This file can be used to add additional rules specific to this system
+# Format: standard AppArmor rules
+EOF
+    
     # Load and enforce the SSH profile
     apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd 2>/dev/null || echo "AppArmor SSH profile created (will be active after sshd restart)"
     echo "✅ AppArmor SSH profile created and loaded"
@@ -3313,44 +4023,349 @@ EOF
 
 echo "✅ Enhanced SSH HMAC configuration applied (no SHA-1)"
 
-# Systemd Watchdog for Critical Services
-echo "Configuring systemd watchdog for critical services..."
+# Smart Systemd Watchdog for Critical Services
+echo "Configuring smart systemd watchdog for critical services..."
+echo "This configuration balances service monitoring with resource protection"
 
-# Enhanced fail2ban service with watchdog
+# Smart fail2ban service watchdog - increased timeout during high load
 mkdir -p /etc/systemd/system/fail2ban.service.d
 cat > /etc/systemd/system/fail2ban.service.d/watchdog.conf << 'EOF'
 [Service]
-WatchdogSec=60
+# Longer watchdog timeout to survive resource-intensive periods
+WatchdogSec=300
 Restart=on-failure
 RestartSec=10
-StartLimitInterval=300
+StartLimitInterval=600
 StartLimitBurst=3
+
+# Resource awareness
+OOMScoreAdjust=-100
+# Ensure fail2ban has priority over resource-intensive services
+Nice=-5
 EOF
 
-# Enhanced Suricata service with watchdog
+# Smart Suricata service watchdog - adapted for network monitoring load
 mkdir -p /etc/systemd/system/suricata.service.d
 cat > /etc/systemd/system/suricata.service.d/watchdog.conf << 'EOF'
 [Service]
-WatchdogSec=120
+# Extended timeout for network analysis workloads
+WatchdogSec=600
 Restart=on-failure
-RestartSec=15
-StartLimitInterval=600
-StartLimitBurst=3
+RestartSec=30
+StartLimitInterval=1200
+StartLimitBurst=2
+
+# Lower priority than critical access services
+Nice=5
+OOMScoreAdjust=200
 EOF
 
-# SSH service watchdog
+# Smart SSH service watchdog - highest priority for bastion access
 mkdir -p /etc/systemd/system/ssh.service.d
 cat > /etc/systemd/system/ssh.service.d/watchdog.conf << 'EOF'
 [Service]
-WatchdogSec=30
+# Moderate timeout but high priority for critical access service
+WatchdogSec=180
 Restart=on-failure
 RestartSec=5
 StartLimitInterval=300
 StartLimitBurst=5
+
+# Highest priority and OOM protection for SSH access
+OOMScoreAdjust=-500
+Nice=-10
+
+# Security hardening
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/log /var/run /run
+EOF
+
+# AppArmor service watchdog - handle profile loading delays
+mkdir -p /etc/systemd/system/apparmor.service.d
+cat > /etc/systemd/system/apparmor.service.d/watchdog.conf << 'EOF'
+[Service]
+# AppArmor profile loading can take time on large systems
+WatchdogSec=300
+Restart=on-failure
+RestartSec=20
+StartLimitInterval=900
+StartLimitBurst=2
+
+# Standard priority for security service
+OOMScoreAdjust=-50
+EOF
+
+# Unbound DNS watchdog - essential for bastion name resolution
+mkdir -p /etc/systemd/system/unbound.service.d
+cat > /etc/systemd/system/unbound.service.d/watchdog.conf << 'EOF'
+[Service]
+# DNS service timeout - balance responsiveness with stability
+WatchdogSec=120
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=4
+
+# Medium priority for DNS service
+OOMScoreAdjust=100
+Nice=0
+
+# Ensure IPv4-only operation to prevent binding issues
+Environment=UNBOUND_DISABLE_IPV6=yes
 EOF
 
 systemctl daemon-reload
-echo "✅ Systemd watchdog configured for critical services"
+echo "✅ Smart systemd watchdog configured for critical services"
+echo "   • SSH: 180s timeout, highest priority (OOM -500, Nice -10)"
+echo "   • fail2ban: 300s timeout, high priority (OOM -100, Nice -5)"
+echo "   • Suricata: 600s timeout, lower priority (OOM +200, Nice +5)"
+echo "   • Unbound: 120s timeout, medium priority (OOM +100)"
+echo "   • AppArmor: 300s timeout, medium-high priority (OOM -50)"
+echo ""
+echo "Smart watchdog protects critical services during resource contention"
+
+echo "===== 14.7.1 Setting up Resource Guardian System ====="
+# Proactive resource management to prevent service failures
+echo "Installing Resource Guardian for proactive resource management..."
+
+cat > /usr/local/bin/resource-guardian << 'EOF'
+#!/bin/bash
+# Resource Guardian - Proactive Resource Management for Bastion Host
+# Monitors and manages resource usage to prevent service failures
+
+LOGFILE="/var/log/resource-guardian.log"
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+
+# Configuration
+HIGH_CPU_THRESHOLD=80
+SUSTAINED_CPU_TIME=300  # 5 minutes
+HIGH_MEMORY_THRESHOLD=85
+CRITICAL_MEMORY_THRESHOLD=95
+
+# Whitelist of critical processes that should never be killed
+CRITICAL_PROCESSES="sshd|systemd|kernel|init|fail2ban|ufw|auditd|rsyslog|netdata|postfix"
+
+# Function to log with timestamp
+log_message() {
+    echo "[$TIMESTAMP] $1" >> "$LOGFILE"
+}
+
+# Function to check and kill resource hogs
+check_cpu_usage() {
+    log_message "Checking CPU usage..."
+    
+    # Get processes using high CPU for sustained periods
+    while read -r pid cpu_percent command; do
+        if (( $(echo "$cpu_percent > $HIGH_CPU_THRESHOLD" | bc -l) )); then
+            # Check if it's a critical process
+            if ! echo "$command" | grep -qE "$CRITICAL_PROCESSES"; then
+                # Check how long the process has been running
+                process_time=$(ps -o pid,etime -p "$pid" 2>/dev/null | awk 'NR>1 {print $2}')
+                
+                if [ -n "$process_time" ]; then
+                    # Convert time to seconds (simplified for common formats)
+                    if echo "$process_time" | grep -q ":"; then
+                        # Format like MM:SS or HH:MM:SS
+                        time_seconds=$(echo "$process_time" | awk -F: '{if(NF==2) print $1*60+$2; else if(NF==3) print $1*3600+$2*60+$3}')
+                    else
+                        # Just seconds
+                        time_seconds="$process_time"
+                    fi
+                    
+                    # If process has been consuming high CPU for sustained time
+                    if [ "$time_seconds" -gt "$SUSTAINED_CPU_TIME" ]; then
+                        log_message "ACTION: Terminating high-CPU process: PID=$pid CMD=$command CPU=${cpu_percent}% TIME=${process_time}"
+                        
+                        # Send alert email
+                        echo "Resource Guardian terminated high-CPU process on bastion host $(hostname):
+                        
+Process: $command
+PID: $pid  
+CPU Usage: ${cpu_percent}%
+Runtime: $process_time
+Action: Process terminated to protect system stability
+
+This action was taken automatically to prevent system overload." | mail -s "BASTION: Resource Guardian Action - High CPU Process Terminated" root
+                        
+                        # Try graceful termination first
+                        kill -TERM "$pid" 2>/dev/null
+                        sleep 5
+                        
+                        # Force kill if still running
+                        if kill -0 "$pid" 2>/dev/null; then
+                            kill -KILL "$pid" 2>/dev/null
+                            log_message "FORCEKILL: Process $pid required SIGKILL"
+                        fi
+                    fi
+                fi
+            else
+                log_message "INFO: High CPU process $pid ($command) is whitelisted - skipping"
+            fi
+        fi
+    done < <(ps aux --sort=-%cpu | awk 'NR>1 && $3>0 {print $2, $3, $11}' | head -10)
+}
+
+# Function to check memory usage
+check_memory_usage() {
+    local memory_usage=$(free | awk 'NR==2{printf "%.1f", $3*100/$2}')
+    
+    log_message "Current memory usage: ${memory_usage}%"
+    
+    if (( $(echo "$memory_usage > $CRITICAL_MEMORY_THRESHOLD" | bc -l) )); then
+        log_message "CRITICAL: Memory usage at ${memory_usage}% - taking emergency action"
+        
+        # Find biggest memory consumers (excluding critical processes)
+        ps aux --sort=-%mem | awk 'NR>1 {print $2, $4, $11}' | head -5 | while read -r pid mem_percent command; do
+            if ! echo "$command" | grep -qE "$CRITICAL_PROCESSES"; then
+                if (( $(echo "$mem_percent > 10" | bc -l) )); then
+                    log_message "EMERGENCY: Killing high-memory process: PID=$pid CMD=$command MEM=${mem_percent}%"
+                    
+                    echo "EMERGENCY: Resource Guardian terminated high-memory process on bastion host $(hostname):
+                    
+Process: $command
+PID: $pid
+Memory Usage: ${mem_percent}%
+System Memory: ${memory_usage}%
+Action: Emergency termination due to critical memory usage
+
+This emergency action was taken to prevent system failure." | mail -s "BASTION EMERGENCY: Memory Critical - Process Terminated" root
+
+                    kill -KILL "$pid" 2>/dev/null
+                fi
+            fi
+        done
+        
+    elif (( $(echo "$memory_usage > $HIGH_MEMORY_THRESHOLD" | bc -l) )); then
+        log_message "WARNING: Memory usage at ${memory_usage}% - monitoring closely"
+        
+        # Send warning but don't kill processes yet
+        echo "WARNING: High memory usage (${memory_usage}%) detected on bastion host $(hostname). Resource Guardian is monitoring the situation." | mail -s "BASTION WARNING: High Memory Usage" root
+    fi
+}
+
+# Function to check system load
+check_system_load() {
+    local load_avg=$(cat /proc/loadavg | awk '{print $1}')
+    local cpu_count=$(nproc)
+    local load_ratio=$(echo "scale=2; $load_avg / $cpu_count" | bc -l)
+    
+    log_message "Current load average: $load_avg (ratio: $load_ratio per CPU)"
+    
+    # If load is more than 2x CPU count, system is heavily loaded
+    if (( $(echo "$load_ratio > 2.0" | bc -l) )); then
+        log_message "WARNING: High system load detected - load ratio $load_ratio"
+        
+        # Log top processes contributing to load
+        log_message "Top CPU processes during high load:"
+        ps aux --sort=-%cpu | head -6 >> "$LOGFILE"
+        
+        echo "High system load detected on bastion host $(hostname):
+
+Load Average: $load_avg
+CPU Count: $cpu_count  
+Load Ratio: $load_ratio per CPU
+
+Resource Guardian is monitoring the situation and will take action if specific processes exceed thresholds." | mail -s "BASTION ALERT: High System Load" root
+    fi
+}
+
+# Function to check disk I/O
+check_disk_io() {
+    # Simple check using iotop if available
+    if command -v iotop >/dev/null 2>&1; then
+        # Get processes with high I/O (simplified check)
+        local high_io_procs=$(iotop -a -o -d 1 -n 1 2>/dev/null | grep -v TOTAL | awk '$4+$6 > 1000 {print $2, $4+$6, $NF}' | head -3)
+        
+        if [ -n "$high_io_procs" ]; then
+            log_message "High I/O processes detected:"
+            echo "$high_io_procs" >> "$LOGFILE"
+        fi
+    fi
+}
+
+# Main execution
+log_message "Resource Guardian scan started"
+
+# Check if bc is available (required for floating point calculations)
+if ! command -v bc >/dev/null 2>&1; then
+    log_message "ERROR: bc calculator not found - installing..."
+    apt-get update && apt-get install -y bc
+fi
+
+# Perform checks
+check_cpu_usage
+check_memory_usage
+check_system_load
+check_disk_io
+
+log_message "Resource Guardian scan completed"
+
+# Log rotation for resource guardian logs
+if [ $(stat -c%s "$LOGFILE" 2>/dev/null || echo 0) -gt 10485760 ]; then  # 10MB
+    mv "$LOGFILE" "${LOGFILE}.old"
+    touch "$LOGFILE"
+    chmod 644 "$LOGFILE"
+    log_message "Resource Guardian log rotated"
+fi
+EOF
+
+chmod +x /usr/local/bin/resource-guardian
+
+# Install required dependency
+if ! command -v bc >/dev/null 2>&1; then
+    echo "Installing bc calculator for Resource Guardian..."
+    apt-get update && apt-get install -y bc
+fi
+
+# Create systemd service for Resource Guardian
+cat > /etc/systemd/system/resource-guardian.service << 'EOF'
+[Unit]
+Description=Resource Guardian - Proactive Resource Management
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/resource-guardian
+User=root
+StandardOutput=journal
+StandardError=journal
+EOF
+
+# Create systemd timer for Resource Guardian (runs every 2 minutes)
+cat > /etc/systemd/system/resource-guardian.timer << 'EOF'
+[Unit]
+Description=Run Resource Guardian every 2 minutes
+Requires=resource-guardian.service
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# Enable and start Resource Guardian
+systemctl daemon-reload
+systemctl enable resource-guardian.timer
+systemctl start resource-guardian.timer
+
+echo "✅ Resource Guardian system installed and configured"
+echo "   • Monitors CPU usage every 2 minutes"
+echo "   • Protects critical services: sshd, systemd, fail2ban, auditd, rsyslog"
+echo "   • Terminates processes using >80% CPU for >5 minutes"
+echo "   • Emergency memory management at >95% usage"
+echo "   • Logs all actions to /var/log/resource-guardian.log"
+echo "   • Sends email alerts for all actions taken"
+echo ""
+echo "💡 Resource Guardian Configuration:"
+echo "   • CPU Threshold: 80% for 5+ minutes"
+echo "   • Memory Warning: 85%"
+echo "   • Memory Critical: 95%"
+echo "   • Protected Services: SSH, systemd, fail2ban, auditd, etc."
 
 # Daily Security Configuration Backup
 echo "Setting up daily security configuration backup..."

@@ -4,7 +4,38 @@
 # Stop script on any error
 set -e
 
-# Configure maldet for optimal security
+# Configure systemd resource limits for maldet
+mkdir -p /etc/systemd/system/maldet.service.d
+cat > /etc/systemd/system/maldet.service.d/resource-limits.conf << 'EOF'
+[Service]
+# Resource limits to prevent maldet from overwhelming system
+CPUQuota=30%
+MemoryMax=512M
+MemoryHigh=400M
+Nice=15
+IOSchedulingClass=2
+IOSchedulingPriority=4
+OOMPolicy=kill
+OOMScoreAdjust=300
+
+# Security and isolation
+PrivateTmp=true
+ProtectSystem=strict
+NoNewPrivileges=true
+ReadWritePaths=/usr/local/maldetect /var/log/maldet /tmp
+
+# Restart policy
+Restart=on-failure
+RestartSec=60
+TimeoutStartSec=300
+TimeoutStopSec=30
+
+# Watchdog configuration
+WatchdogSec=600
+NotifyAccess=main
+EOF
+
+# Configure maldet for optimal security with resource awareness
 cat > /usr/local/maldetect/conf.maldet << EOF
 # Linux Malware Detect v1.6.x
 # Configuration File
@@ -78,7 +109,8 @@ scan_paths="/home /opt/polyserver /var/www"
 scan_ignore_paths="/proc /sys /dev"
 
 # Total CPU usage threshold (percentage) at which scanning will be suspended until usage drops
-scan_cpumax="75"
+# Reduced from 75% to prevent resource conflicts with ClamAV and other services
+scan_cpumax="60"
 
 # Allow maldet to download and install updated signatures from rfxn.com
 autoupdate="1"
@@ -100,10 +132,10 @@ cron_weekly_hour="3" # Hour in 24h format
 cron_daily_hour="3"  # Hour in 24h format
 EOF
 
-# Create maldet daily scan script with notifications
+# Create maldet daily scan script with resource-aware execution
 cat > /etc/cron.daily/maldet-scan << 'EOF'
 #!/bin/bash
-# Daily maldet scan script
+# Daily maldet scan script with resource management
 
 # Log file
 LOGFILE="/var/log/maldet/daily_scan.log"
@@ -111,11 +143,29 @@ LOGFILE="/var/log/maldet/daily_scan.log"
 # Make sure log directory exists
 mkdir -p /var/log/maldet
 
+# Check system load before starting scan
+LOAD_THRESHOLD=2.0
+CURRENT_LOAD=$(uptime | awk -F'load average:' '{ print $2 }' | awk '{ print $1 }' | sed 's/,//')
+
+if (( $(echo "$CURRENT_LOAD > $LOAD_THRESHOLD" | bc -l) )); then
+    echo "$(date): System load too high ($CURRENT_LOAD), skipping maldet scan" >> $LOGFILE
+    exit 0
+fi
+
 # Start the log
 echo "Linux Malware Detect daily scan started at $(date)" > $LOGFILE
+echo "System load: $CURRENT_LOAD" >> $LOGFILE
 
-# Run scan on important directories
-/usr/local/sbin/maldet --scan-all /home /opt/polyserver /var/www >> $LOGFILE 2>&1
+# Run scan with nice priority and resource limits
+nice -n 19 ionice -c 3 timeout 3600 /usr/local/sbin/maldet --scan-all /home /opt/polyserver /var/www >> $LOGFILE 2>&1
+
+# Check if scan completed or timed out
+SCAN_EXIT_CODE=$?
+if [ $SCAN_EXIT_CODE -eq 124 ]; then
+    echo "$(date): Scan timed out after 1 hour" >> $LOGFILE
+elif [ $SCAN_EXIT_CODE -ne 0 ]; then
+    echo "$(date): Scan failed with exit code $SCAN_EXIT_CODE" >> $LOGFILE
+fi
 
 # Finish log
 echo "Linux Malware Detect daily scan completed at $(date)" >> $LOGFILE
@@ -133,9 +183,15 @@ EOF
 # Make scan script executable
 chmod 755 /etc/cron.daily/maldet-scan
 
-# Force initial maldet signature update
-/usr/local/sbin/maldet --update-sigs
+# Apply systemd resource limits and reload daemon
+systemctl daemon-reload
+systemctl try-restart maldet 2>/dev/null || true
 
-echo "Linux Malware Detect (maldet) configured with secure settings."
+# Force initial maldet signature update with resource limits
+nice -n 19 timeout 300 /usr/local/sbin/maldet --update-sigs
+
+echo "Linux Malware Detect (maldet) configured with resource-aware settings."
+echo "Resource limits: 30% CPU, 512MB memory, nice level 15"
 echo "Daily scans will check /home, /opt/polyserver, and /var/www directories."
+echo "Scans will be skipped if system load exceeds 2.0"
 echo "Email alerts will be sent to root if malware is found."

@@ -366,6 +366,29 @@ apt-get install -y mtr-tiny arp-scan dnsutils net-tools traceroute whois
 # File integrity
 apt-get install -y debsums aide
 
+# Configure lm-sensors to suppress warnings on systems without hardware sensors
+echo "===== 6.1.1 Configuring hardware sensors (suppressing warnings) ====="
+if command -v sensors >/dev/null 2>&1; then
+    # Check if sensors are actually detected
+    if ! sensors 2>/dev/null | grep -q "°C\|°F"; then
+        echo "No hardware sensors detected - disabling sensors service to prevent warnings"
+        systemctl disable lm-sensors 2>/dev/null || true
+        systemctl mask lm-sensors 2>/dev/null || true
+        
+        # Create empty sensors config to prevent startup warnings
+        mkdir -p /etc/sensors.d
+        cat > /etc/sensors.d/no-sensors.conf << 'EOF'
+# No hardware sensors configuration
+# This file prevents sensors warnings on systems without hardware monitoring
+EOF
+        echo "✅ Sensors warnings suppressed for VPS/cloud environment"
+    else
+        echo "Hardware sensors detected - sensors will remain active"
+    fi
+else
+    echo "Sensors command not available - skipping configuration"
+fi
+
 # Log monitoring
 apt-get install -y logcheck logcheck-database
 
@@ -910,6 +933,10 @@ if [ "$DOCKER_MODE" = "false" ]; then
     logger -p auth.info "Server setup: Initializing auth.log for fail2ban"
     
     cat > /etc/fail2ban/jail.local << EOF
+[DEFAULT]
+# Explicitly configure IPv6 support (auto-detect based on system)
+allowipv6 = auto
+
 [sshd]
 enabled = true
 port = $SSH_PORT
@@ -969,12 +996,244 @@ else
     echo "🐳 Skipping hardware sensor detection in Docker mode"
 fi
 
-# Configure ClamAV
-echo "===== 8. Configuring ClamAV ====="
+# Configure ClamAV with resource optimization
+echo "===== 8. Configuring ClamAV with resource optimization ====="
+# Optimize ClamAV for production server environment with resource awareness
+# This prevents ClamAV from consuming excessive CPU/memory that could impact applications
+
+if [ "$DOCKER_MODE" = "false" ]; then
+    # Stop services during configuration (only in non-Docker mode)
+    systemctl stop clamav-daemon clamav-freshclam 2>/dev/null || true
+
+    # Configure ClamAV daemon with resource-conscious settings
+    cat > /etc/clamav/clamd.conf << 'EOF'
+# ClamAV Daemon Configuration - Optimized for Production Servers
+User clamav
+LocalSocket /run/clamav/clamd.ctl
+FixStaleSocket true
+LocalSocketGroup clamav
+LocalSocketMode 666
+
+# Resource-balanced configuration for application servers
+MaxThreads 2
+MaxConnectionQueueLength 10
+MaxQueue 100
+
+# Optimize scanning performance vs resources
+ReadTimeout 180
+CommandReadTimeout 60
+SendBufTimeout 200
+
+# File size and scanning limits - balanced for application servers
+MaxScanSize 100M
+MaxFileSize 25M
+MaxRecursion 10
+MaxFiles 10000
+MaxPartitions 50
+MaxIconsPE 100
+
+# Scan behavior - comprehensive security vs performance
+ScanPE true
+ScanELF true
+ScanOLE2 true
+ScanPDF true
+ScanHTML true
+ScanArchive true
+ArchiveBlockEncrypted false
+MaxDirectoryRecursion 15
+
+# Memory and timeout optimizations
+PCREMatchLimit 10000
+PCRERecMatchLimit 5000
+PCREMaxFileSize 25M
+MaxScanTime 120000
+
+# Logging - standard for production
+LogFile /var/log/clamav/clamav.log
+LogTime true
+LogClean false
+LogSyslog false
+LogRotate true
+LogVerbose false
+
+# Network and detection settings
+SelfCheck 3600
+DatabaseDirectory /var/lib/clamav
+OfficialDatabaseOnly false
+Foreground false
+Debug false
+
+# Production detection settings
+IdleTimeout 30
+ExitOnOOM true
+LeaveTemporaryFiles false
+DetectPUA false
+CrossFilesystems true
+
+# Heuristic settings - balanced approach
+AlgorithmicDetection true
+Bytecode true
+BytecodeSecurity TrustSigned
+BytecodeTimeout 60000
+
+# Enhanced detection for production servers
+PhishingSignatures true
+PhishingAlwaysBlockSSLMismatch false
+PhishingAlwaysBlockCloak false
+HeuristicScanPrecedence false
+StructuredDataDetection false
+ScanPartialMessages false
+OLE2BlockMacros false
+EOF
+
+    # Configure freshclam with reduced frequency for production servers
+    cat > /etc/clamav/freshclam.conf << 'EOF'
+# ClamAV Freshclam Configuration - Optimized for Production Servers
+DatabaseOwner clamav
+
+# Moderate update frequency - 4 times daily for production balance
+Checks 4
+
+# Database mirrors and sources
+DatabaseMirror db.us.clamav.net
+DatabaseMirror db.local.clamav.net
+
+# Logging
+UpdateLogFile /var/log/clamav/freshclam.log
+LogVerbose false
+LogSyslog false
+LogTime true
+LogRotate true
+
+# Download behavior - balanced for production
+MaxAttempts 3
+ConnectTimeout 60
+ReceiveTimeout 60
+
+# Notify clamd of updates
+NotifyClamd /etc/clamav/clamd.conf
+
+# Test database before loading
+TestDatabases yes
+
+# Bytecode updates
+Bytecode true
+EOF
+
+    # Create systemd resource limits for ClamAV services
+    echo "Setting up systemd resource limits for ClamAV services..."
+
+    # ClamAV daemon resource limits for production servers
+    mkdir -p /etc/systemd/system/clamav-daemon.service.d
+    cat > /etc/systemd/system/clamav-daemon.service.d/resource-limits.conf << 'EOF'
+[Service]
+# Resource limits for production server environment
+CPUQuota=40%
+MemoryMax=1G
+MemoryHigh=800M
+
+# Process priority and I/O scheduling
+Nice=10
+IOSchedulingClass=2
+IOSchedulingPriority=4
+
+# Smart restart behavior
+Restart=on-failure
+RestartSec=30
+StartLimitInterval=600
+StartLimitBurst=3
+
+# Watchdog configuration for production workloads
+WatchdogSec=300
+
+# OOM handling - controlled termination
+OOMPolicy=kill
+OOMScoreAdjust=300
+
+# Security and resource isolation
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/clamav /var/log/clamav /run/clamav
+EOF
+
+    # Freshclam resource limits for production servers
+    mkdir -p /etc/systemd/system/clamav-freshclam.service.d
+    cat > /etc/systemd/system/clamav-freshclam.service.d/resource-limits.conf << 'EOF'
+[Service]
+# Resource limits for virus definition updates
+CPUQuota=20%
+MemoryMax=512M
+
+# Process priority
+Nice=15
+IOSchedulingClass=2
+
+# Restart behavior
+Restart=on-failure
+RestartSec=60
+StartLimitInterval=1200
+StartLimitBurst=2
+
+# OOM handling
+OOMPolicy=kill
+OOMScoreAdjust=200
+
+# Security isolation
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/clamav /var/log/clamav
+EOF
+
+    # Create log directory with proper permissions
+    mkdir -p /var/log/clamav
+    chown clamav:clamav /var/log/clamav
+    chmod 755 /var/log/clamav
+
+    # Set up logrotate for ClamAV logs
+    cat > /etc/logrotate.d/clamav << 'EOF'
+/var/log/clamav/*.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 644 clamav clamav
+    postrotate
+        systemctl reload clamav-daemon > /dev/null 2>&1 || true
+    endscript
+}
+EOF
+
+    # Reload systemd and start services with new configurations
+    systemctl daemon-reload
+
+    echo "✅ ClamAV configured with resource optimization for production environment"
+    echo "   • CPU limited to 40% (daemon) / 20% (updater)"
+    echo "   • Memory limited to 1GB (daemon) / 512MB (updater)"
+    echo "   • Update frequency: 4x daily (production balance)"
+    echo "   • Optimized scan limits and timeouts"
+    echo "   • Enhanced security isolation and OOM protection"
+fi
+
+# Enable and start ClamAV services
 docker_systemctl enable clamav-freshclam
 docker_systemctl start clamav-freshclam
 docker_systemctl enable clamav-daemon
 docker_systemctl start clamav-daemon
+
+if [ "$DOCKER_MODE" = "false" ]; then
+    echo ""
+    echo "📋 ClamAV Management Commands:"
+    echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
+    echo "   • View logs: journalctl -u clamav-daemon -f"
+    echo "   • Manual scan: clamscan -r /path/to/scan"
+    echo "   • Monitor resources: systemctl show clamav-daemon --property=CPUUsageNSec,MemoryCurrent"
+fi
 
 # Install Linux Malware Detect (maldet)
 echo "===== 8.1 Installing Linux Malware Detect (maldet) ====="
@@ -1164,10 +1423,100 @@ sed -i "s/^SENDMAILTO=.*/SENDMAILTO=\"${LOGWATCH_EMAIL:-root}\"/" /etc/logcheck/
 sed -i 's/^CRON_DAILY_RUN=.*/CRON_DAILY_RUN="true"/' /etc/logcheck/logcheck.conf
 sed -i 's/^CRON_HOURLY_RUN=.*/CRON_HOURLY_RUN="false"/' /etc/logcheck/logcheck.conf
 
-# Initialize AIDE (Advanced Intrusion Detection Environment)
+# Configure and initialize AIDE (Advanced Intrusion Detection Environment)
 if [ "$DOCKER_MODE" = "false" ]; then
+    echo "Configuring AIDE for file integrity monitoring..."
+    
+    # Configure AIDE to run properly with mail functionality
+    cat > /etc/default/aide << 'EOF'
+# Configuration for AIDE
+# Run AIDE checks as root to enable mail functionality
+AIDE_USER="root"
+
+# Mail configuration
+MAILTO="root"
+MAILSUBJECT="AIDE integrity check for $HOSTNAME"
+
+# Quiet mode - don't output unless there are changes
+QUIETREPORTS="yes"
+
+# Skip the database check if the database doesn't exist yet
+COPYNEWDB="no"
+EOF
+
+    # Create custom AIDE check script that handles mail properly
+    cat > /usr/local/bin/aide-check << 'EOF'
+#!/bin/bash
+# Custom AIDE check script with proper mail handling
+
+# Log file for AIDE output
+AIDE_LOG="/var/log/aide/aide-check.log"
+mkdir -p /var/log/aide
+
+# Run AIDE check and capture output
+echo "AIDE integrity check started at $(date)" > $AIDE_LOG
+echo "=====================================" >> $AIDE_LOG
+
+# Run AIDE check with proper error handling
+if aide --check 2>&1 | tee -a $AIDE_LOG; then
+    # AIDE completed successfully
+    echo "AIDE check completed at $(date)" >> $AIDE_LOG
+    
+    # Check if there were any changes detected
+    if grep -q "found differences" $AIDE_LOG || grep -q "File.*changed" $AIDE_LOG; then
+        # Changes detected - send alert email
+        cat $AIDE_LOG | mail -s "⚠️ AIDE ALERT: File integrity changes detected on $HOSTNAME" root
+    else
+        # No changes - log success
+        echo "No integrity violations detected" >> $AIDE_LOG
+    fi
+else
+    # AIDE failed
+    echo "AIDE check failed at $(date)" >> $AIDE_LOG
+    echo "AIDE integrity check failed on $HOSTNAME" | mail -s "🚨 AIDE ERROR: Check failed on $HOSTNAME" root
+    exit 1
+fi
+
+# Rotate old logs
+find /var/log/aide -name "aide-check.log.*" -mtime +30 -delete
+if [ -f $AIDE_LOG ] && [ $(stat -c%s $AIDE_LOG) -gt 10485760 ]; then
+    # Rotate if log is larger than 10MB
+    mv $AIDE_LOG ${AIDE_LOG}.$(date +%Y%m%d)
+    gzip ${AIDE_LOG}.$(date +%Y%m%d)
+fi
+EOF
+
+    chmod 755 /usr/local/bin/aide-check
+
+    # Override the default AIDE systemd service to use our custom script
+    mkdir -p /etc/systemd/system/dailyaidecheck.service.d
+    cat > /etc/systemd/system/dailyaidecheck.service.d/override.conf << 'EOF'
+[Service]
+# Override to use our custom AIDE check script
+ExecStart=
+ExecStart=/usr/local/bin/aide-check
+
+# Ensure proper user and environment
+User=root
+Group=root
+
+# Resource limits to prevent AIDE from overwhelming system
+CPUQuota=25%
+MemoryMax=512M
+Nice=15
+IOSchedulingClass=3
+
+# Proper logging
+StandardOutput=journal
+StandardError=journal
+EOF
+
+    systemctl daemon-reload
+
     echo "Initializing AIDE database - this will take some time..."
-    aideinit
+    nice -n 19 aideinit
+    
+    echo "✅ AIDE configured with proper mail functionality"
 else
     echo "🐳 Skipping AIDE initialization in Docker mode"
 fi
@@ -1472,6 +1821,39 @@ EOF
 
 chmod 750 /etc/cron.daily/audit-report
 
+# Configure auditd systemd resource limits
+echo "===== 9.1.1 Configuring Auditd Resource Management ====="
+mkdir -p /etc/systemd/system/auditd.service.d
+cat > /etc/systemd/system/auditd.service.d/resource-limits.conf << 'EOF'
+[Service]
+# Resource limits to prevent auditd from overwhelming system
+CPUQuota=20%
+MemoryMax=256M
+MemoryHigh=200M
+Nice=0
+IOSchedulingClass=1
+IOSchedulingPriority=4
+OOMPolicy=continue
+OOMScoreAdjust=-100
+
+# Security and isolation (limited for auditd requirements)
+NoNewPrivileges=true
+ProtectHome=true
+ReadWritePaths=/var/log/audit /etc/audit
+
+# Restart policy for audit reliability
+Restart=always
+RestartSec=30
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+# Watchdog configuration
+WatchdogSec=120
+NotifyAccess=main
+EOF
+
+systemctl daemon-reload
+
 # Enable and start auditd
 docker_systemctl enable auditd
 docker_systemctl restart auditd
@@ -1762,6 +2144,61 @@ detect-engine:
   profile: medium
   sgh-mpm-context: auto
   inspection-recursion-limit: 3000
+
+# App layer protocol configuration
+app-layer:
+  protocols:
+    # Essential protocols for production applications
+    http:
+      enabled: yes
+    tls:
+      enabled: yes
+    ssh:
+      enabled: yes
+    dns:
+      enabled: yes
+    smtp:
+      enabled: yes
+    ftp:
+      enabled: yes
+    http2:
+      enabled: yes
+    
+    # Database and enterprise protocols (might be needed)
+    smb:
+      enabled: yes
+    nfs:
+      enabled: yes
+    
+    # Disable industrial/IoT protocols not needed for web applications
+    dcerpc:
+      enabled: no
+    modbus:
+      enabled: no
+    enip:
+      enabled: no
+    dnp3:
+      enabled: no
+    ntp:
+      enabled: no
+    tftp:
+      enabled: no
+    ikev2:
+      enabled: no
+    krb5:
+      enabled: no
+    dhcp:
+      enabled: no
+    snmp:
+      enabled: no
+    sip:
+      enabled: no
+    rfb:
+      enabled: no
+    mqtt:
+      enabled: no
+    rdp:
+      enabled: no
   
 # Log configuration
 outputs:
@@ -1854,6 +2291,41 @@ EOF
 
 chmod 755 /etc/cron.daily/trivy-scan
 
+    # Configure Suricata systemd resource limits
+    echo "===== 10.4.1 Configuring Suricata Resource Management ====="
+    mkdir -p /etc/systemd/system/suricata.service.d
+    cat > /etc/systemd/system/suricata.service.d/resource-limits.conf << 'EOF'
+[Service]
+# Resource limits to prevent Suricata from overwhelming system
+CPUQuota=50%
+MemoryMax=1G
+MemoryHigh=800M
+Nice=5
+IOSchedulingClass=2
+IOSchedulingPriority=4
+OOMPolicy=kill
+OOMScoreAdjust=200
+
+# Security and isolation
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/log/suricata /var/lib/suricata /run/suricata
+
+# Restart policy for network IDS reliability
+Restart=always
+RestartSec=30
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+# Watchdog configuration
+WatchdogSec=300
+NotifyAccess=main
+EOF
+
+    systemctl daemon-reload
+
     # Enable and start Suricata
     systemctl enable suricata
     systemctl start suricata
@@ -1892,6 +2364,24 @@ Service = zz-disk_space
 
 # Always show empty sections
 Show_Empty_Sections = yes
+EOF
+
+# Ensure logwatch cron job is properly configured
+cat > /etc/cron.daily/00logwatch << 'EOF'
+#!/bin/bash
+# Daily Logwatch execution
+
+# Run logwatch with configured settings
+/usr/sbin/logwatch --output mail --format html --range yesterday --detail med
+EOF
+
+chmod 755 /etc/cron.daily/00logwatch
+
+# Also add cron.d entry for redundancy
+cat > /etc/cron.d/logwatch << 'EOF'
+# Daily logwatch execution
+# Run at 6:00 AM daily to analyze previous day's logs
+0 6 * * * root /usr/sbin/logwatch --output mail --format html --range yesterday --detail med
 EOF
 
 # Create custom service for lm_sensors
@@ -2576,24 +3066,11 @@ EOF
 
 echo "Comprehensive log rotation configured for all PolyServer components"
 
-# Enhanced system log rotation (based on bastion host learnings)
-cat > /etc/logrotate.d/enhanced-system-logs << 'EOF'
-# Enhanced system log rotation for authentication and sudo activity
+# Enhanced application-specific log rotation (avoiding system conflicts)
+# Only configure logs that are not managed by default system logrotate
 
-# Authentication logs (keep longer for security analysis)
-/var/log/auth.log {
-    daily
-    rotate 60
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 root adm
-    postrotate
-        systemctl reload rsyslog > /dev/null 2>&1 || true
-    endscript
-}
-
+# Sudo activity logs (extend default retention for security monitoring)
+cat > /etc/logrotate.d/polyserver-sudo << 'EOF'
 # Sudo activity logs (important for privilege escalation monitoring)
 /var/log/sudo.log {
     daily
@@ -2607,37 +3084,26 @@ cat > /etc/logrotate.d/enhanced-system-logs << 'EOF'
         systemctl reload rsyslog > /dev/null 2>&1 || true
     endscript
 }
+EOF
 
-# System logs (general system activity)
-/var/log/syslog {
-    daily
-    rotate 14
+# AIDE logs (application-specific)
+cat > /etc/logrotate.d/polyserver-aide << 'EOF'
+# AIDE integrity check logs
+/var/log/aide/aide-check.log {
+    weekly
+    rotate 12
     compress
     delaycompress
     missingok
     notifempty
-    create 0640 syslog adm
-    postrotate
-        systemctl reload rsyslog > /dev/null 2>&1 || true
-    endscript
-}
-
-# Kernel logs
-/var/log/kern.log {
-    daily
-    rotate 14
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 syslog adm
-    postrotate
-        systemctl reload rsyslog > /dev/null 2>&1 || true
-    endscript
+    create 0640 root root
 }
 EOF
 
-echo "✅ Enhanced system log rotation configured for security monitoring"
+# Note: auth.log, syslog, and kern.log are already managed by system default logrotate
+# We avoid creating conflicting configurations for these files
+
+echo "✅ Application-specific log rotation configured (avoiding system conflicts)"
 
 # ========= Additional security hardening =========
 echo "===== 11. Additional security hardening ====="
@@ -3402,6 +3868,17 @@ EOF
     fi
     
     # Load and enforce the SSH profile
+    # Create the local include directory and file to prevent parser errors
+    mkdir -p /etc/apparmor.d/local
+    touch /etc/apparmor.d/local/usr.sbin.sshd
+    
+    # Add a comment to the local file
+    cat > /etc/apparmor.d/local/usr.sbin.sshd << 'EOF'
+# Site-specific additions and overrides for /usr/sbin/sshd
+# This file can be used to add additional rules specific to this system
+# Format: standard AppArmor rules
+EOF
+    
     apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd 2>/dev/null || echo "AppArmor SSH profile created (will be active after sshd restart)"
     echo "✅ AppArmor SSH profile created and loaded"
 else
