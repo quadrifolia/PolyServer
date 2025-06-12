@@ -969,12 +969,244 @@ else
     echo "🐳 Skipping hardware sensor detection in Docker mode"
 fi
 
-# Configure ClamAV
-echo "===== 8. Configuring ClamAV ====="
+# Configure ClamAV with resource optimization
+echo "===== 8. Configuring ClamAV with resource optimization ====="
+# Optimize ClamAV for production server environment with resource awareness
+# This prevents ClamAV from consuming excessive CPU/memory that could impact applications
+
+if [ "$DOCKER_MODE" = "false" ]; then
+    # Stop services during configuration (only in non-Docker mode)
+    systemctl stop clamav-daemon clamav-freshclam 2>/dev/null || true
+
+    # Configure ClamAV daemon with resource-conscious settings
+    cat > /etc/clamav/clamd.conf << 'EOF'
+# ClamAV Daemon Configuration - Optimized for Production Servers
+User clamav
+LocalSocket /run/clamav/clamd.ctl
+FixStaleSocket true
+LocalSocketGroup clamav
+LocalSocketMode 666
+
+# Resource-balanced configuration for application servers
+MaxThreads 2
+MaxConnectionQueueLength 10
+MaxQueue 100
+
+# Optimize scanning performance vs resources
+ReadTimeout 180
+CommandReadTimeout 60
+SendBufTimeout 200
+
+# File size and scanning limits - balanced for application servers
+MaxScanSize 100M
+MaxFileSize 25M
+MaxRecursion 10
+MaxFiles 10000
+MaxPartitions 50
+MaxIconsPE 100
+
+# Scan behavior - comprehensive security vs performance
+ScanPE true
+ScanELF true
+ScanOLE2 true
+ScanPDF true
+ScanHTML true
+ScanArchive true
+ArchiveBlockEncrypted false
+MaxDirectoryRecursion 15
+
+# Memory and timeout optimizations
+PCREMatchLimit 10000
+PCRERecMatchLimit 5000
+PCREMaxFileSize 25M
+MaxScanTime 120000
+
+# Logging - standard for production
+LogFile /var/log/clamav/clamav.log
+LogTime true
+LogClean false
+LogSyslog false
+LogRotate true
+LogVerbose false
+
+# Network and detection settings
+SelfCheck 3600
+DatabaseDirectory /var/lib/clamav
+OfficialDatabaseOnly false
+Foreground false
+Debug false
+
+# Production detection settings
+IdleTimeout 30
+ExitOnOOM true
+LeaveTemporaryFiles false
+DetectPUA false
+CrossFilesystems true
+
+# Heuristic settings - balanced approach
+AlgorithmicDetection true
+Bytecode true
+BytecodeSecurity TrustSigned
+BytecodeTimeout 60000
+
+# Enhanced detection for production servers
+PhishingSignatures true
+PhishingAlwaysBlockSSLMismatch false
+PhishingAlwaysBlockCloak false
+HeuristicScanPrecedence false
+StructuredDataDetection false
+ScanPartialMessages false
+OLE2BlockMacros false
+EOF
+
+    # Configure freshclam with reduced frequency for production servers
+    cat > /etc/clamav/freshclam.conf << 'EOF'
+# ClamAV Freshclam Configuration - Optimized for Production Servers
+DatabaseOwner clamav
+
+# Moderate update frequency - 4 times daily for production balance
+Checks 4
+
+# Database mirrors and sources
+DatabaseMirror db.us.clamav.net
+DatabaseMirror db.local.clamav.net
+
+# Logging
+UpdateLogFile /var/log/clamav/freshclam.log
+LogVerbose false
+LogSyslog false
+LogTime true
+LogRotate true
+
+# Download behavior - balanced for production
+MaxAttempts 3
+ConnectTimeout 60
+ReceiveTimeout 60
+
+# Notify clamd of updates
+NotifyClamd /etc/clamav/clamd.conf
+
+# Test database before loading
+TestDatabases yes
+
+# Bytecode updates
+Bytecode true
+EOF
+
+    # Create systemd resource limits for ClamAV services
+    echo "Setting up systemd resource limits for ClamAV services..."
+
+    # ClamAV daemon resource limits for production servers
+    mkdir -p /etc/systemd/system/clamav-daemon.service.d
+    cat > /etc/systemd/system/clamav-daemon.service.d/resource-limits.conf << 'EOF'
+[Service]
+# Resource limits for production server environment
+CPUQuota=40%
+MemoryMax=1G
+MemoryHigh=800M
+
+# Process priority and I/O scheduling
+Nice=10
+IOSchedulingClass=2
+IOSchedulingPriority=4
+
+# Smart restart behavior
+Restart=on-failure
+RestartSec=30
+StartLimitInterval=600
+StartLimitBurst=3
+
+# Watchdog configuration for production workloads
+WatchdogSec=300
+
+# OOM handling - controlled termination
+OOMPolicy=kill
+OOMScoreAdjust=300
+
+# Security and resource isolation
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/clamav /var/log/clamav /run/clamav
+EOF
+
+    # Freshclam resource limits for production servers
+    mkdir -p /etc/systemd/system/clamav-freshclam.service.d
+    cat > /etc/systemd/system/clamav-freshclam.service.d/resource-limits.conf << 'EOF'
+[Service]
+# Resource limits for virus definition updates
+CPUQuota=20%
+MemoryMax=512M
+
+# Process priority
+Nice=15
+IOSchedulingClass=2
+
+# Restart behavior
+Restart=on-failure
+RestartSec=60
+StartLimitInterval=1200
+StartLimitBurst=2
+
+# OOM handling
+OOMPolicy=kill
+OOMScoreAdjust=200
+
+# Security isolation
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/clamav /var/log/clamav
+EOF
+
+    # Create log directory with proper permissions
+    mkdir -p /var/log/clamav
+    chown clamav:clamav /var/log/clamav
+    chmod 755 /var/log/clamav
+
+    # Set up logrotate for ClamAV logs
+    cat > /etc/logrotate.d/clamav << 'EOF'
+/var/log/clamav/*.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 644 clamav clamav
+    postrotate
+        systemctl reload clamav-daemon > /dev/null 2>&1 || true
+    endscript
+}
+EOF
+
+    # Reload systemd and start services with new configurations
+    systemctl daemon-reload
+
+    echo "✅ ClamAV configured with resource optimization for production environment"
+    echo "   • CPU limited to 40% (daemon) / 20% (updater)"
+    echo "   • Memory limited to 1GB (daemon) / 512MB (updater)"
+    echo "   • Update frequency: 4x daily (production balance)"
+    echo "   • Optimized scan limits and timeouts"
+    echo "   • Enhanced security isolation and OOM protection"
+fi
+
+# Enable and start ClamAV services
 docker_systemctl enable clamav-freshclam
 docker_systemctl start clamav-freshclam
 docker_systemctl enable clamav-daemon
 docker_systemctl start clamav-daemon
+
+if [ "$DOCKER_MODE" = "false" ]; then
+    echo ""
+    echo "📋 ClamAV Management Commands:"
+    echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
+    echo "   • View logs: journalctl -u clamav-daemon -f"
+    echo "   • Manual scan: clamscan -r /path/to/scan"
+    echo "   • Monitor resources: systemctl show clamav-daemon --property=CPUUsageNSec,MemoryCurrent"
+fi
 
 # Install Linux Malware Detect (maldet)
 echo "===== 8.1 Installing Linux Malware Detect (maldet) ====="
