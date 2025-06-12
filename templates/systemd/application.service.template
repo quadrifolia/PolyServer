@@ -48,13 +48,25 @@ PrivateDevices=true
 # Resource limits (adjust per application needs)
 LimitNOFILE=65536
 MemoryMax={{APPLICATION_MEMORY_MAX:-2G}}
+MemoryHigh={{APPLICATION_MEMORY_HIGH:-1.6G}}
 CPUQuota={{APPLICATION_CPU_QUOTA:-100%}}
+Nice={{APPLICATION_NICE:-0}}
+IOSchedulingClass={{APPLICATION_IO_CLASS:-2}}
+IOSchedulingPriority={{APPLICATION_IO_PRIORITY:-4}}
+
+# OOM and resource management
+OOMPolicy={{APPLICATION_OOM_POLICY:-kill}}
+OOMScoreAdjust={{APPLICATION_OOM_SCORE:-0}}
 
 # Restart policy
 Restart=always
 RestartSec=30
 TimeoutStartSec=300
 TimeoutStopSec=30
+
+# Watchdog configuration
+WatchdogSec={{APPLICATION_WATCHDOG_SEC:-300}}
+NotifyAccess={{APPLICATION_NOTIFY_ACCESS:-main}}
 
 # Logging
 StandardOutput=journal

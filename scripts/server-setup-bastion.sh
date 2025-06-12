@@ -1722,6 +1722,39 @@ cat > /etc/audit/rules.d/bastion-audit.rules << 'EOF'
 # -e 2
 EOF
 
+# Configure auditd systemd resource limits for bastion host
+echo "===== 8.1.1 Configuring Auditd Resource Management ====="
+mkdir -p /etc/systemd/system/auditd.service.d
+cat > /etc/systemd/system/auditd.service.d/resource-limits.conf << 'EOF'
+[Service]
+# Resource limits for bastion host audit system
+CPUQuota=15%
+MemoryMax=128M
+MemoryHigh=100M
+Nice=0
+IOSchedulingClass=1
+IOSchedulingPriority=4
+OOMPolicy=continue
+OOMScoreAdjust=-200
+
+# Security and isolation (limited for auditd requirements)
+NoNewPrivileges=true
+ProtectHome=true
+ReadWritePaths=/var/log/audit /etc/audit
+
+# Restart policy for audit reliability
+Restart=always
+RestartSec=30
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+# Watchdog configuration
+WatchdogSec=120
+NotifyAccess=main
+EOF
+
+systemctl daemon-reload
+
 # Enable and start auditd
 systemctl enable auditd
 systemctl restart auditd
@@ -1839,6 +1872,41 @@ EOF
     endscript
 }
 EOF
+
+# Configure Suricata systemd resource limits for bastion host
+echo "===== 9.4.1 Configuring Suricata Resource Management ====="
+mkdir -p /etc/systemd/system/suricata.service.d
+cat > /etc/systemd/system/suricata.service.d/resource-limits.conf << 'EOF'
+[Service]
+# Resource limits for bastion host (more conservative than production)
+CPUQuota=30%
+MemoryMax=512M
+MemoryHigh=400M
+Nice=10
+IOSchedulingClass=2
+IOSchedulingPriority=5
+OOMPolicy=kill
+OOMScoreAdjust=300
+
+# Security and isolation
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/log/suricata /var/lib/suricata /run/suricata
+
+# Restart policy for network IDS reliability
+Restart=always
+RestartSec=60
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+# Watchdog configuration
+WatchdogSec=300
+NotifyAccess=main
+EOF
+
+systemctl daemon-reload
 
 # Enable and start Suricata
 systemctl enable suricata

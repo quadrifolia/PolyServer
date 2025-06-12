@@ -1704,6 +1704,39 @@ EOF
 
 chmod 750 /etc/cron.daily/audit-report
 
+# Configure auditd systemd resource limits
+echo "===== 9.1.1 Configuring Auditd Resource Management ====="
+mkdir -p /etc/systemd/system/auditd.service.d
+cat > /etc/systemd/system/auditd.service.d/resource-limits.conf << 'EOF'
+[Service]
+# Resource limits to prevent auditd from overwhelming system
+CPUQuota=20%
+MemoryMax=256M
+MemoryHigh=200M
+Nice=0
+IOSchedulingClass=1
+IOSchedulingPriority=4
+OOMPolicy=continue
+OOMScoreAdjust=-100
+
+# Security and isolation (limited for auditd requirements)
+NoNewPrivileges=true
+ProtectHome=true
+ReadWritePaths=/var/log/audit /etc/audit
+
+# Restart policy for audit reliability
+Restart=always
+RestartSec=30
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+# Watchdog configuration
+WatchdogSec=120
+NotifyAccess=main
+EOF
+
+systemctl daemon-reload
+
 # Enable and start auditd
 docker_systemctl enable auditd
 docker_systemctl restart auditd
@@ -2085,6 +2118,41 @@ find $REPORT_DIR -name "trivy-*.log" -mtime +30 -delete
 EOF
 
 chmod 755 /etc/cron.daily/trivy-scan
+
+    # Configure Suricata systemd resource limits
+    echo "===== 10.4.1 Configuring Suricata Resource Management ====="
+    mkdir -p /etc/systemd/system/suricata.service.d
+    cat > /etc/systemd/system/suricata.service.d/resource-limits.conf << 'EOF'
+[Service]
+# Resource limits to prevent Suricata from overwhelming system
+CPUQuota=50%
+MemoryMax=1G
+MemoryHigh=800M
+Nice=5
+IOSchedulingClass=2
+IOSchedulingPriority=4
+OOMPolicy=kill
+OOMScoreAdjust=200
+
+# Security and isolation
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/log/suricata /var/lib/suricata /run/suricata
+
+# Restart policy for network IDS reliability
+Restart=always
+RestartSec=30
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+# Watchdog configuration
+WatchdogSec=300
+NotifyAccess=main
+EOF
+
+    systemctl daemon-reload
 
     # Enable and start Suricata
     systemctl enable suricata
