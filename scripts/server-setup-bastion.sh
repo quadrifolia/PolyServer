@@ -607,8 +607,47 @@ echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
 echo "   • View logs: journalctl -u clamav-daemon -f"
 echo "   • Manual scan: clamscan -r /path/to/scan"
 echo ""
-echo "⚠️  Note: ClamAV services are enabled but not started automatically"
+echo "⚠️  IMPORTANT: ClamAV services are enabled but not started automatically"
 echo "   Start them manually after verifying system resources are adequate"
+echo ""
+echo "📋 ClamAV Resource Requirements:"
+echo "   • Memory: Minimum 512MB available RAM"
+echo "   • CPU: Will use up to 25% CPU during scans"
+echo "   • Disk: ~200MB for virus definitions"
+echo "   • Network: Periodic updates (2x daily)"
+echo ""
+echo "🚀 ClamAV Startup Commands:"
+echo "   • Check system resources: free -h && nproc"
+echo "   • Start freshclam updater: systemctl start clamav-freshclam"
+echo "   • Wait for initial database: journalctl -u clamav-freshclam -f"
+echo "   • Start daemon: systemctl start clamav-daemon"
+echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
+echo "   • Manual scan: clamscan -r /home /tmp"
+echo ""
+echo "⚡ Resource Monitoring:"
+echo "   • CPU usage: htop (ClamAV limited to 25%)"
+echo "   • Memory usage: free -h (daemon uses ~400MB)"
+echo "   • Service status: systemctl status clamav-*"
+echo ""
+echo "🔧 ClamAV Management:"
+echo "   • Update definitions: systemctl restart clamav-freshclam"
+echo "   • View logs: journalctl -u clamav-daemon -f"
+echo "   • Stop services: systemctl stop clamav-daemon clamav-freshclam"
+echo "   • Disable if needed: systemctl disable clamav-daemon clamav-freshclam"
+echo ""
+echo "🔄 Enable ClamAV to Start Automatically After Reboot:"
+echo "   • Start services now: systemctl start clamav-freshclam clamav-daemon"
+echo "   • Enable auto-start: systemctl enable clamav-freshclam clamav-daemon"
+echo "   • Verify enabled: systemctl is-enabled clamav-daemon clamav-freshclam"
+echo "   • Check after reboot: systemctl status clamav-daemon clamav-freshclam"
+echo ""
+echo "💡 Recommended Startup Sequence:"
+echo "   1. Check system resources: free -h"
+echo "   2. Start freshclam first: systemctl start clamav-freshclam"
+echo "   3. Wait for database update: journalctl -u clamav-freshclam -f"
+echo "   4. Start daemon: systemctl start clamav-daemon"
+echo "   5. Enable both services: systemctl enable clamav-freshclam clamav-daemon"
+echo "   6. Verify status: systemctl status clamav-daemon clamav-freshclam"
 
 echo "===== 6.0.2 Configuring Unbound DNS with IPv4-only for bastion hosts ====="
 # Configure Unbound DNS resolver with IPv4-only to prevent binding issues
@@ -663,8 +702,8 @@ server:
     so-sndbuf: 4m
     so-reuseport: yes
     
-    # DNSSEC
-    auto-trust-anchor-file: "/var/lib/unbound/root.key"
+    # DNSSEC - use trust-anchor-file instead of auto-trust-anchor-file to prevent duplicates
+    trust-anchor-file: "/var/lib/unbound/root.key"
     
     # Private address handling
     private-address: 192.168.0.0/16
@@ -714,45 +753,127 @@ mkdir -p /var/lib/unbound
 chown unbound:unbound /var/lib/unbound
 chmod 755 /var/lib/unbound
 
-# Initialize root trust anchor if it doesn't exist
-if [ ! -f /var/lib/unbound/root.key ]; then
-    echo "Initializing Unbound root trust anchor..."
-    sudo -u unbound unbound-anchor -a /var/lib/unbound/root.key 2>/dev/null || touch /var/lib/unbound/root.key
+# Clean up any existing problematic trust anchor files
+rm -f /var/lib/unbound/root.key /var/lib/unbound/root.key.* 2>/dev/null || true
+
+# Initialize root trust anchor properly
+echo "Initializing Unbound root trust anchor..."
+if sudo -u unbound unbound-anchor -a /var/lib/unbound/root.key >/dev/null 2>&1; then
+    echo "✅ Unbound trust anchor initialized successfully"
     chown unbound:unbound /var/lib/unbound/root.key
+    chmod 644 /var/lib/unbound/root.key
+else
+    echo "⚠️ unbound-anchor failed, creating minimal trust anchor..."
+    # Create a minimal working trust anchor file
+    cat > /var/lib/unbound/root.key << 'EOF'
+. IN DS 20326 8 2 E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D
+EOF
+    chown unbound:unbound /var/lib/unbound/root.key
+    chmod 644 /var/lib/unbound/root.key
+    echo "✅ Minimal trust anchor created"
 fi
 
 # Test unbound configuration
 echo "Testing Unbound configuration..."
-if unbound-checkconf; then
+
+# First check if the config file is readable
+if [ ! -r /etc/unbound/unbound.conf ]; then
+    echo "❌ Unbound config file not readable"
+    exit 1
+fi
+
+# Test configuration with verbose output for debugging
+echo "Running unbound-checkconf with detailed output..."
+if unbound-checkconf -v >/tmp/unbound-check.log 2>&1; then
     echo "✅ Unbound configuration is valid"
+    
+    # Show configuration summary
+    echo "Unbound configuration summary:"
+    grep -E "(interface|port|do-ip)" /etc/unbound/unbound.conf.d/bastion.conf | head -5
     
     # Reload systemd and start unbound
     systemctl daemon-reload
     systemctl enable unbound
-    systemctl start unbound
     
-    # Wait for service to start
-    sleep 3
+    # Stop any existing unbound process
+    systemctl stop unbound 2>/dev/null || true
+    sleep 2
     
-    # Verify Unbound is running and listening
-    if systemctl is-active --quiet unbound; then
-        echo "✅ Unbound DNS resolver started successfully"
+    # Start unbound
+    if systemctl start unbound; then
+        echo "✅ Unbound service started"
         
-        # Test DNS resolution
-        if dig @127.0.0.1 google.com >/dev/null 2>&1; then
-            echo "✅ Unbound DNS resolution test successful"
+        # Wait for service to initialize
+        sleep 5
+        
+        # Verify Unbound is running and listening
+        if systemctl is-active --quiet unbound; then
+            echo "✅ Unbound DNS resolver started successfully"
+            
+            # Test DNS resolution with timeout
+            if timeout 10 dig @127.0.0.1 google.com >/dev/null 2>&1; then
+                echo "✅ Unbound DNS resolution test successful"
+            else
+                echo "⚠️ Unbound DNS resolution test failed - checking logs"
+                echo "Recent Unbound logs:"
+                journalctl -u unbound --no-pager -l --since="5 minutes ago" | tail -10
+            fi
         else
-            echo "⚠️ Unbound DNS resolution test failed - checking logs"
+            echo "⚠️ Unbound failed to start - checking status"
             systemctl status unbound --no-pager -l
+            echo "Recent logs:"
+            journalctl -u unbound --no-pager -l --since="5 minutes ago"
         fi
     else
-        echo "⚠️ Unbound failed to start - checking status"
+        echo "❌ Failed to start Unbound service"
         systemctl status unbound --no-pager -l
     fi
 else
     echo "❌ Unbound configuration test failed"
-    unbound-checkconf
+    echo "Configuration errors:"
+    cat /tmp/unbound-check.log
+    
+    echo "Attempting to fix common issues..."
+    
+    # Check for permission issues
+    echo "Checking file permissions:"
+    ls -la /var/lib/unbound/root.key /etc/unbound/unbound.conf.d/bastion.conf
+    
+    # Verify trust anchor file format
+    if [ -f /var/lib/unbound/root.key ]; then
+        echo "Trust anchor file content:"
+        head -3 /var/lib/unbound/root.key
+    fi
+    
+    # Try to regenerate trust anchor
+    echo "Regenerating trust anchor..."
+    rm -f /var/lib/unbound/root.key
+    
+    # Create a working trust anchor
+    cat > /var/lib/unbound/root.key << 'EOF'
+; This file contains trusted keys for validating DNSSEC
+. IN DS 20326 8 2 E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D
+EOF
+    chown unbound:unbound /var/lib/unbound/root.key
+    chmod 644 /var/lib/unbound/root.key
+    
+    # Test again
+    echo "Retesting Unbound configuration..."
+    if unbound-checkconf; then
+        echo "✅ Unbound configuration fixed and valid"
+        systemctl daemon-reload
+        systemctl enable unbound
+        systemctl start unbound
+    else
+        echo "❌ Unbound configuration still invalid - will disable"
+        systemctl disable unbound 2>/dev/null || true
+        echo "⚠️ Unbound DNS disabled due to configuration issues"
+        echo "   System will use default DNS resolver"
+    fi
 fi
+
+# Cleanup
+rm -f /tmp/unbound-check.log
 
 echo "✅ Unbound DNS configured for bastion environment"
 echo "   • IPv4-only operation (prevents IPv6 binding issues)"
