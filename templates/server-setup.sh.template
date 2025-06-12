@@ -1396,10 +1396,100 @@ sed -i "s/^SENDMAILTO=.*/SENDMAILTO=\"${LOGWATCH_EMAIL:-root}\"/" /etc/logcheck/
 sed -i 's/^CRON_DAILY_RUN=.*/CRON_DAILY_RUN="true"/' /etc/logcheck/logcheck.conf
 sed -i 's/^CRON_HOURLY_RUN=.*/CRON_HOURLY_RUN="false"/' /etc/logcheck/logcheck.conf
 
-# Initialize AIDE (Advanced Intrusion Detection Environment)
+# Configure and initialize AIDE (Advanced Intrusion Detection Environment)
 if [ "$DOCKER_MODE" = "false" ]; then
+    echo "Configuring AIDE for file integrity monitoring..."
+    
+    # Configure AIDE to run properly with mail functionality
+    cat > /etc/default/aide << 'EOF'
+# Configuration for AIDE
+# Run AIDE checks as root to enable mail functionality
+AIDE_USER="root"
+
+# Mail configuration
+MAILTO="root"
+MAILSUBJECT="AIDE integrity check for $HOSTNAME"
+
+# Quiet mode - don't output unless there are changes
+QUIETREPORTS="yes"
+
+# Skip the database check if the database doesn't exist yet
+COPYNEWDB="no"
+EOF
+
+    # Create custom AIDE check script that handles mail properly
+    cat > /usr/local/bin/aide-check << 'EOF'
+#!/bin/bash
+# Custom AIDE check script with proper mail handling
+
+# Log file for AIDE output
+AIDE_LOG="/var/log/aide/aide-check.log"
+mkdir -p /var/log/aide
+
+# Run AIDE check and capture output
+echo "AIDE integrity check started at $(date)" > $AIDE_LOG
+echo "=====================================" >> $AIDE_LOG
+
+# Run AIDE check with proper error handling
+if aide --check 2>&1 | tee -a $AIDE_LOG; then
+    # AIDE completed successfully
+    echo "AIDE check completed at $(date)" >> $AIDE_LOG
+    
+    # Check if there were any changes detected
+    if grep -q "found differences" $AIDE_LOG || grep -q "File.*changed" $AIDE_LOG; then
+        # Changes detected - send alert email
+        cat $AIDE_LOG | mail -s "⚠️ AIDE ALERT: File integrity changes detected on $HOSTNAME" root
+    else
+        # No changes - log success
+        echo "No integrity violations detected" >> $AIDE_LOG
+    fi
+else
+    # AIDE failed
+    echo "AIDE check failed at $(date)" >> $AIDE_LOG
+    echo "AIDE integrity check failed on $HOSTNAME" | mail -s "🚨 AIDE ERROR: Check failed on $HOSTNAME" root
+    exit 1
+fi
+
+# Rotate old logs
+find /var/log/aide -name "aide-check.log.*" -mtime +30 -delete
+if [ -f $AIDE_LOG ] && [ $(stat -c%s $AIDE_LOG) -gt 10485760 ]; then
+    # Rotate if log is larger than 10MB
+    mv $AIDE_LOG ${AIDE_LOG}.$(date +%Y%m%d)
+    gzip ${AIDE_LOG}.$(date +%Y%m%d)
+fi
+EOF
+
+    chmod 755 /usr/local/bin/aide-check
+
+    # Override the default AIDE systemd service to use our custom script
+    mkdir -p /etc/systemd/system/dailyaidecheck.service.d
+    cat > /etc/systemd/system/dailyaidecheck.service.d/override.conf << 'EOF'
+[Service]
+# Override to use our custom AIDE check script
+ExecStart=
+ExecStart=/usr/local/bin/aide-check
+
+# Ensure proper user and environment
+User=root
+Group=root
+
+# Resource limits to prevent AIDE from overwhelming system
+CPUQuota=25%
+MemoryMax=512M
+Nice=15
+IOSchedulingClass=3
+
+# Proper logging
+StandardOutput=journal
+StandardError=journal
+EOF
+
+    systemctl daemon-reload
+
     echo "Initializing AIDE database - this will take some time..."
-    aideinit
+    nice -n 19 aideinit
+    
+    echo "✅ AIDE configured with proper mail functionality"
 else
     echo "🐳 Skipping AIDE initialization in Docker mode"
 fi
@@ -2948,6 +3038,20 @@ cat > /etc/logrotate.d/polyserver-sudo << 'EOF'
     postrotate
         systemctl reload rsyslog > /dev/null 2>&1 || true
     endscript
+}
+EOF
+
+# AIDE logs (application-specific)
+cat > /etc/logrotate.d/polyserver-aide << 'EOF'
+# AIDE integrity check logs
+/var/log/aide/aide-check.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root root
 }
 EOF
 

@@ -1587,6 +1587,100 @@ else
     tail -n 20 /var/log/fail2ban.log 2>/dev/null || echo "No fail2ban log available"
 fi
 
+# Configure AIDE (Advanced Intrusion Detection Environment) for bastion host
+echo "===== 7.5 Configuring AIDE for file integrity monitoring ====="
+
+# Configure AIDE to run properly with mail functionality
+cat > /etc/default/aide << 'EOF'
+# Configuration for AIDE on bastion host
+# Run AIDE checks as root to enable mail functionality
+AIDE_USER="root"
+
+# Mail configuration
+MAILTO="root"
+MAILSUBJECT="AIDE integrity check for bastion host $HOSTNAME"
+
+# Quiet mode - don't output unless there are changes
+QUIETREPORTS="yes"
+
+# Skip the database check if the database doesn't exist yet
+COPYNEWDB="no"
+EOF
+
+# Create custom AIDE check script that handles mail properly
+cat > /usr/local/bin/aide-check << 'EOF'
+#!/bin/bash
+# Custom AIDE check script with proper mail handling for bastion host
+
+# Log file for AIDE output
+AIDE_LOG="/var/log/aide/aide-check.log"
+mkdir -p /var/log/aide
+
+# Run AIDE check and capture output
+echo "AIDE integrity check started at $(date)" > $AIDE_LOG
+echo "=====================================" >> $AIDE_LOG
+
+# Run AIDE check with proper error handling
+if aide --check 2>&1 | tee -a $AIDE_LOG; then
+    # AIDE completed successfully
+    echo "AIDE check completed at $(date)" >> $AIDE_LOG
+    
+    # Check if there were any changes detected
+    if grep -q "found differences" $AIDE_LOG || grep -q "File.*changed" $AIDE_LOG; then
+        # Changes detected - send alert email
+        cat $AIDE_LOG | mail -s "🚨 BASTION AIDE ALERT: File integrity changes detected on $HOSTNAME" root
+    else
+        # No changes - log success
+        echo "No integrity violations detected" >> $AIDE_LOG
+    fi
+else
+    # AIDE failed
+    echo "AIDE check failed at $(date)" >> $AIDE_LOG
+    echo "AIDE integrity check failed on bastion host $HOSTNAME" | mail -s "🚨 BASTION AIDE ERROR: Check failed on $HOSTNAME" root
+    exit 1
+fi
+
+# Rotate old logs
+find /var/log/aide -name "aide-check.log.*" -mtime +30 -delete
+if [ -f $AIDE_LOG ] && [ $(stat -c%s $AIDE_LOG) -gt 10485760 ]; then
+    # Rotate if log is larger than 10MB
+    mv $AIDE_LOG ${AIDE_LOG}.$(date +%Y%m%d)
+    gzip ${AIDE_LOG}.$(date +%Y%m%d)
+fi
+EOF
+
+chmod 755 /usr/local/bin/aide-check
+
+# Override the default AIDE systemd service to use our custom script
+mkdir -p /etc/systemd/system/dailyaidecheck.service.d
+cat > /etc/systemd/system/dailyaidecheck.service.d/override.conf << 'EOF'
+[Service]
+# Override to use our custom AIDE check script
+ExecStart=
+ExecStart=/usr/local/bin/aide-check
+
+# Ensure proper user and environment
+User=root
+Group=root
+
+# Resource limits to prevent AIDE from overwhelming bastion system
+CPUQuota=20%
+MemoryMax=256M
+Nice=19
+IOSchedulingClass=3
+
+# Proper logging
+StandardOutput=journal
+StandardError=journal
+EOF
+
+systemctl daemon-reload
+
+echo "Initializing AIDE database for bastion host - this will take some time..."
+nice -n 19 aideinit
+
+echo "✅ AIDE configured with proper mail functionality for bastion host"
+
 echo "===== 8. Configuring comprehensive audit framework for bastion ====="
 # Enhanced audit configuration for bastion hosts
 cat > /etc/audit/auditd.conf << EOF
@@ -2518,6 +2612,20 @@ cat > /etc/logrotate.d/bastion-monitor << 'EOF'
     missingok
     notifempty
     create 0644 root root
+}
+EOF
+
+# AIDE logs (bastion-specific)
+cat > /etc/logrotate.d/bastion-aide << 'EOF'
+# AIDE integrity check logs
+/var/log/aide/aide-check.log {
+    weekly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root root
 }
 EOF
 
