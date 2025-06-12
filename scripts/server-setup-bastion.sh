@@ -607,8 +607,47 @@ echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
 echo "   • View logs: journalctl -u clamav-daemon -f"
 echo "   • Manual scan: clamscan -r /path/to/scan"
 echo ""
-echo "⚠️  Note: ClamAV services are enabled but not started automatically"
+echo "⚠️  IMPORTANT: ClamAV services are enabled but not started automatically"
 echo "   Start them manually after verifying system resources are adequate"
+echo ""
+echo "📋 ClamAV Resource Requirements:"
+echo "   • Memory: Minimum 512MB available RAM"
+echo "   • CPU: Will use up to 25% CPU during scans"
+echo "   • Disk: ~200MB for virus definitions"
+echo "   • Network: Periodic updates (2x daily)"
+echo ""
+echo "🚀 ClamAV Startup Commands:"
+echo "   • Check system resources: free -h && nproc"
+echo "   • Start freshclam updater: systemctl start clamav-freshclam"
+echo "   • Wait for initial database: journalctl -u clamav-freshclam -f"
+echo "   • Start daemon: systemctl start clamav-daemon"
+echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
+echo "   • Manual scan: clamscan -r /home /tmp"
+echo ""
+echo "⚡ Resource Monitoring:"
+echo "   • CPU usage: htop (ClamAV limited to 25%)"
+echo "   • Memory usage: free -h (daemon uses ~400MB)"
+echo "   • Service status: systemctl status clamav-*"
+echo ""
+echo "🔧 ClamAV Management:"
+echo "   • Update definitions: systemctl restart clamav-freshclam"
+echo "   • View logs: journalctl -u clamav-daemon -f"
+echo "   • Stop services: systemctl stop clamav-daemon clamav-freshclam"
+echo "   • Disable if needed: systemctl disable clamav-daemon clamav-freshclam"
+echo ""
+echo "🔄 Enable ClamAV to Start Automatically After Reboot:"
+echo "   • Start services now: systemctl start clamav-freshclam clamav-daemon"
+echo "   • Enable auto-start: systemctl enable clamav-freshclam clamav-daemon"
+echo "   • Verify enabled: systemctl is-enabled clamav-daemon clamav-freshclam"
+echo "   • Check after reboot: systemctl status clamav-daemon clamav-freshclam"
+echo ""
+echo "💡 Recommended Startup Sequence:"
+echo "   1. Check system resources: free -h"
+echo "   2. Start freshclam first: systemctl start clamav-freshclam"
+echo "   3. Wait for database update: journalctl -u clamav-freshclam -f"
+echo "   4. Start daemon: systemctl start clamav-daemon"
+echo "   5. Enable both services: systemctl enable clamav-freshclam clamav-daemon"
+echo "   6. Verify status: systemctl status clamav-daemon clamav-freshclam"
 
 echo "===== 6.0.2 Configuring Unbound DNS with IPv4-only for bastion hosts ====="
 # Configure Unbound DNS resolver with IPv4-only to prevent binding issues
@@ -663,8 +702,8 @@ server:
     so-sndbuf: 4m
     so-reuseport: yes
     
-    # DNSSEC
-    auto-trust-anchor-file: "/var/lib/unbound/root.key"
+    # DNSSEC - use trust-anchor-file instead of auto-trust-anchor-file to prevent duplicates
+    trust-anchor-file: "/var/lib/unbound/root.key"
     
     # Private address handling
     private-address: 192.168.0.0/16
@@ -714,45 +753,127 @@ mkdir -p /var/lib/unbound
 chown unbound:unbound /var/lib/unbound
 chmod 755 /var/lib/unbound
 
-# Initialize root trust anchor if it doesn't exist
-if [ ! -f /var/lib/unbound/root.key ]; then
-    echo "Initializing Unbound root trust anchor..."
-    sudo -u unbound unbound-anchor -a /var/lib/unbound/root.key 2>/dev/null || touch /var/lib/unbound/root.key
+# Clean up any existing problematic trust anchor files
+rm -f /var/lib/unbound/root.key /var/lib/unbound/root.key.* 2>/dev/null || true
+
+# Initialize root trust anchor properly
+echo "Initializing Unbound root trust anchor..."
+if sudo -u unbound unbound-anchor -a /var/lib/unbound/root.key >/dev/null 2>&1; then
+    echo "✅ Unbound trust anchor initialized successfully"
     chown unbound:unbound /var/lib/unbound/root.key
+    chmod 644 /var/lib/unbound/root.key
+else
+    echo "⚠️ unbound-anchor failed, creating minimal trust anchor..."
+    # Create a minimal working trust anchor file
+    cat > /var/lib/unbound/root.key << 'EOF'
+. IN DS 20326 8 2 E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D
+EOF
+    chown unbound:unbound /var/lib/unbound/root.key
+    chmod 644 /var/lib/unbound/root.key
+    echo "✅ Minimal trust anchor created"
 fi
 
 # Test unbound configuration
 echo "Testing Unbound configuration..."
-if unbound-checkconf; then
+
+# First check if the config file is readable
+if [ ! -r /etc/unbound/unbound.conf ]; then
+    echo "❌ Unbound config file not readable"
+    exit 1
+fi
+
+# Test configuration with verbose output for debugging
+echo "Running unbound-checkconf with detailed output..."
+if unbound-checkconf -v >/tmp/unbound-check.log 2>&1; then
     echo "✅ Unbound configuration is valid"
+    
+    # Show configuration summary
+    echo "Unbound configuration summary:"
+    grep -E "(interface|port|do-ip)" /etc/unbound/unbound.conf.d/bastion.conf | head -5
     
     # Reload systemd and start unbound
     systemctl daemon-reload
     systemctl enable unbound
-    systemctl start unbound
     
-    # Wait for service to start
-    sleep 3
+    # Stop any existing unbound process
+    systemctl stop unbound 2>/dev/null || true
+    sleep 2
     
-    # Verify Unbound is running and listening
-    if systemctl is-active --quiet unbound; then
-        echo "✅ Unbound DNS resolver started successfully"
+    # Start unbound
+    if systemctl start unbound; then
+        echo "✅ Unbound service started"
         
-        # Test DNS resolution
-        if dig @127.0.0.1 google.com >/dev/null 2>&1; then
-            echo "✅ Unbound DNS resolution test successful"
+        # Wait for service to initialize
+        sleep 5
+        
+        # Verify Unbound is running and listening
+        if systemctl is-active --quiet unbound; then
+            echo "✅ Unbound DNS resolver started successfully"
+            
+            # Test DNS resolution with timeout
+            if timeout 10 dig @127.0.0.1 google.com >/dev/null 2>&1; then
+                echo "✅ Unbound DNS resolution test successful"
+            else
+                echo "⚠️ Unbound DNS resolution test failed - checking logs"
+                echo "Recent Unbound logs:"
+                journalctl -u unbound --no-pager -l --since="5 minutes ago" | tail -10
+            fi
         else
-            echo "⚠️ Unbound DNS resolution test failed - checking logs"
+            echo "⚠️ Unbound failed to start - checking status"
             systemctl status unbound --no-pager -l
+            echo "Recent logs:"
+            journalctl -u unbound --no-pager -l --since="5 minutes ago"
         fi
     else
-        echo "⚠️ Unbound failed to start - checking status"
+        echo "❌ Failed to start Unbound service"
         systemctl status unbound --no-pager -l
     fi
 else
     echo "❌ Unbound configuration test failed"
-    unbound-checkconf
+    echo "Configuration errors:"
+    cat /tmp/unbound-check.log
+    
+    echo "Attempting to fix common issues..."
+    
+    # Check for permission issues
+    echo "Checking file permissions:"
+    ls -la /var/lib/unbound/root.key /etc/unbound/unbound.conf.d/bastion.conf
+    
+    # Verify trust anchor file format
+    if [ -f /var/lib/unbound/root.key ]; then
+        echo "Trust anchor file content:"
+        head -3 /var/lib/unbound/root.key
+    fi
+    
+    # Try to regenerate trust anchor
+    echo "Regenerating trust anchor..."
+    rm -f /var/lib/unbound/root.key
+    
+    # Create a working trust anchor
+    cat > /var/lib/unbound/root.key << 'EOF'
+; This file contains trusted keys for validating DNSSEC
+. IN DS 20326 8 2 E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D
+EOF
+    chown unbound:unbound /var/lib/unbound/root.key
+    chmod 644 /var/lib/unbound/root.key
+    
+    # Test again
+    echo "Retesting Unbound configuration..."
+    if unbound-checkconf; then
+        echo "✅ Unbound configuration fixed and valid"
+        systemctl daemon-reload
+        systemctl enable unbound
+        systemctl start unbound
+    else
+        echo "❌ Unbound configuration still invalid - will disable"
+        systemctl disable unbound 2>/dev/null || true
+        echo "⚠️ Unbound DNS disabled due to configuration issues"
+        echo "   System will use default DNS resolver"
+    fi
 fi
+
+# Cleanup
+rm -f /tmp/unbound-check.log
 
 echo "✅ Unbound DNS configured for bastion environment"
 echo "   • IPv4-only operation (prevents IPv6 binding issues)"
@@ -964,7 +1085,7 @@ admin@bastion   $LOGWATCH_EMAIL
 security@bastion $LOGWATCH_EMAIL
 postmaster@bastion $LOGWATCH_EMAIL
 webmaster@bastion $LOGWATCH_EMAIL
-logcheck@@bastion $LOGWATCH_EMAIL
+logcheck@bastion $LOGWATCH_EMAIL
 root@\$(hostname)    $LOGWATCH_EMAIL
 bastion@\$(hostname) $LOGWATCH_EMAIL
 admin@\$(hostname)   $LOGWATCH_EMAIL
@@ -1873,9 +1994,34 @@ EOF
 
 systemctl daemon-reload
 
-# Enable and start auditd
+# Enable and start auditd with improved error handling
+echo "Starting audit system..."
 systemctl enable auditd
-systemctl restart auditd
+
+# Check if auditd is already running and stop it cleanly if needed
+if systemctl is-active --quiet auditd; then
+    echo "Stopping existing auditd service..."
+    systemctl stop auditd
+    sleep 2
+fi
+
+# Start auditd and verify it starts properly
+if systemctl start auditd; then
+    sleep 3
+    if systemctl is-active --quiet auditd; then
+        echo "✅ Audit system started successfully"
+    else
+        echo "⚠️ Audit system start reported success but service not active"
+        echo "Checking audit system status:"
+        systemctl status auditd --no-pager -l || true
+        journalctl -u auditd --no-pager -l -n 10 || true
+    fi
+else
+    echo "❌ Failed to start audit system"
+    echo "Checking audit system status:"
+    systemctl status auditd --no-pager -l || true
+    journalctl -u auditd --no-pager -l -n 10 || true
+fi
 
 echo "===== 9. Setting up Suricata IDS for bastion network monitoring ====="
 # Get primary network interface and bastion IP more robustly
@@ -1898,7 +2044,7 @@ echo "Configuring Suricata for interface: $INTERFACE, IP: $BASTION_IP"
 vars:
   address-groups:
     HOME_NET: "[$BASTION_IP]"
-    EXTERNAL_NET: "!$HOME_NET"
+    EXTERNAL_NET: "![$BASTION_IP]"
     INTERNAL_NET: "[$INTERNAL_NETWORK]"
     
   port-groups:
@@ -2013,7 +2159,7 @@ alert tcp \$EXTERNAL_NET any -> \$HOME_NET \$SSH_PORTS (msg:"BASTION SSH Multipl
 alert tcp \$EXTERNAL_NET any -> \$HOME_NET 22 (msg:"BASTION SSH Scan on Default Port"; flow:established,to_server; classtype:attempted-recon; sid:2000003; rev:1;)
 
 # Detect port scanning targeting bastion
-alert tcp \$EXTERNAL_NET any -> \$HOME_NET ![22,$SSH_PORT,80,443] (msg:"BASTION Port Scan Detected"; flow:established,to_server; threshold:type threshold, track by_src, count 5, seconds 10; classtype:attempted-recon; sid:2000004; rev:1;)
+alert tcp \$EXTERNAL_NET any -> \$HOME_NET ![22,2222,80,443] (msg:"BASTION Port Scan Detected"; flow:established,to_server; threshold:type threshold, track by_src, count 5, seconds 10; classtype:attempted-recon; sid:2000004; rev:1;)
 
 # Detect unusual outbound connections from bastion
 alert tcp \$HOME_NET any -> \$EXTERNAL_NET ![22,53,80,123,443] (msg:"BASTION Unusual Outbound Connection"; flow:established,to_server; threshold:type threshold, track by_dst, count 5, seconds 60; classtype:policy-violation; sid:2000005; rev:1;)
@@ -2079,9 +2225,113 @@ EOF
 
 systemctl daemon-reload
 
-# Enable and start Suricata
-systemctl enable suricata
-systemctl start suricata
+# Test Suricata configuration before starting
+echo "Testing Suricata configuration..."
+if suricata -T -c /etc/suricata/suricata.yaml >/tmp/suricata-test.log 2>&1; then
+    echo "✅ Suricata configuration is valid"
+    
+    # Create log directory with proper permissions
+    mkdir -p /var/log/suricata
+    chown suricata:suricata /var/log/suricata 2>/dev/null || chown root:root /var/log/suricata
+    chmod 755 /var/log/suricata
+    
+    # Reload systemd configuration
+    systemctl daemon-reload
+    
+    # Enable Suricata for automatic startup
+    systemctl enable suricata
+    
+    # Start Suricata with error handling
+    echo "Starting Suricata IDS service..."
+    if systemctl start suricata; then
+        echo "✅ Suricata IDS started successfully"
+        
+        # Wait for service to initialize
+        sleep 5
+        
+        # Verify Suricata is running
+        if systemctl is-active --quiet suricata; then
+            echo "✅ Suricata IDS is running and monitoring network traffic"
+            
+            # Show Suricata status
+            systemctl --no-pager status suricata | head -10
+        else
+            echo "⚠️ Suricata started but may not be fully operational"
+            echo "Checking Suricata logs:"
+            journalctl -u suricata --no-pager -l --since="2 minutes ago" | tail -10
+        fi
+    else
+        echo "❌ Failed to start Suricata IDS"
+        echo "Checking systemctl status:"
+        systemctl --no-pager status suricata
+        echo ""
+        echo "Recent logs:"
+        journalctl -u suricata --no-pager -l --since="2 minutes ago"
+        echo ""
+        echo "⚠️ Suricata IDS disabled due to startup failure"
+        systemctl disable suricata 2>/dev/null || true
+        echo "   Network monitoring will be limited to other security tools"
+    fi
+else
+    echo "❌ Suricata configuration test failed"
+    echo "Configuration errors:"
+    cat /tmp/suricata-test.log
+    
+    echo "Attempting to fix common Suricata issues..."
+    
+    # Check if required directories exist
+    mkdir -p /etc/suricata/rules /var/log/suricata /var/lib/suricata/rules
+    
+    # Check if default rules exist
+    if [ ! -f /etc/suricata/rules/suricata.rules ]; then
+        echo "Creating minimal default rules file..."
+        cat > /etc/suricata/rules/suricata.rules << 'EOF'
+# Minimal default rules for Suricata
+# This file prevents Suricata from failing due to missing default rules
+EOF
+    fi
+    
+    # Check interface exists
+    if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
+        echo "⚠️ Network interface $INTERFACE not found, using fallback configuration"
+        # Get first available interface
+        FALLBACK_INTERFACE=$(ip -o link show | grep -v lo | head -1 | awk -F': ' '{print $2}')
+        echo "Using fallback interface: $FALLBACK_INTERFACE"
+        
+        # Update Suricata config with fallback interface
+        sed -i "s/interface: $INTERFACE/interface: $FALLBACK_INTERFACE/" /etc/suricata/suricata.yaml
+    fi
+    
+    # Retry configuration test
+    echo "Retesting Suricata configuration with fixes..."
+    if suricata -T -c /etc/suricata/suricata.yaml >/tmp/suricata-retest.log 2>&1; then
+        echo "✅ Suricata configuration fixed"
+        
+        systemctl daemon-reload
+        systemctl enable suricata
+        
+        if systemctl start suricata; then
+            echo "✅ Suricata IDS started successfully after fixes"
+        else
+            echo "❌ Suricata still fails to start - disabling"
+            systemctl disable suricata 2>/dev/null || true
+            echo "⚠️ Suricata IDS disabled - network monitoring limited"
+        fi
+    else
+        echo "❌ Suricata configuration still invalid"
+        echo "Final error details:"
+        cat /tmp/suricata-retest.log
+        
+        # Disable Suricata if it can't be fixed
+        systemctl disable suricata 2>/dev/null || true
+        echo "⚠️ Suricata IDS disabled due to configuration errors"
+        echo "   Other security tools (fail2ban, auditd) will provide protection"
+        echo "   Manual Suricata configuration may be required"
+    fi
+fi
+
+# Cleanup test logs
+rm -f /tmp/suricata-test.log /tmp/suricata-retest.log
 
 echo "===== 10. Setting up comprehensive logging and monitoring ====="
 
@@ -3639,12 +3889,34 @@ chmod +x /usr/local/bin/setup-log-tmpfs
 echo "✅ Emergency tmpfs script created (/usr/local/bin/setup-log-tmpfs)"
 echo "💡 Run setup-log-tmpfs only in critical disk space emergencies"
 
+# Fix AppArmor SSH profile to allow authorized_keys access
+echo "===== 15. Configuring AppArmor for SSH authorized_keys access ====="
+if [ -f /etc/apparmor.d/usr.sbin.sshd ]; then
+    echo "Updating AppArmor SSH profile for authorized_keys access..."
+    
+    # Backup original profile
+    cp /etc/apparmor.d/usr.sbin.sshd /etc/apparmor.d/usr.sbin.sshd.backup-$(date +%Y%m%d)
+    
+    # Add authorized_keys access if not already present
+    if ! grep -q "home.*authorized_keys" /etc/apparmor.d/usr.sbin.sshd; then
+        # Add authorized_keys permissions after the /etc/ssh/** r, line
+        sed -i '/\/etc\/ssh\/\*\* r,/a\  # Allow access to user authorized_keys files\n  /home/*/.ssh/authorized_keys r,\n  /home/*/.ssh/authorized_keys2 r,' /etc/apparmor.d/usr.sbin.sshd
+        
+        # Reload AppArmor profile
+        apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd && echo "✅ AppArmor SSH profile updated successfully"
+    else
+        echo "✅ AppArmor SSH profile already allows authorized_keys access"
+    fi
+else
+    echo "ℹ️  AppArmor SSH profile not found - SSH will use default permissions"
+fi
+
 # Restart SSH with new configuration
-echo "===== 15. Restarting SSH service ====="
+echo "===== 16. Restarting SSH service ====="
 systemctl restart sshd
 
 # Final system checks
-echo "===== 16. Final system validation ====="
+echo "===== 17. Final system validation ====="
 echo "Checking SSH configuration..."
 sshd -t && echo "✅ SSH configuration is valid"
 

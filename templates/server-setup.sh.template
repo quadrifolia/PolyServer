@@ -3814,6 +3814,10 @@ if command -v aa-status >/dev/null 2>&1; then
   /etc/shadow r,
   /etc/ssh/** r,
 
+  # Allow access to user authorized_keys files
+  /home/*/.ssh/authorized_keys r,
+  /home/*/.ssh/authorized_keys2 r,
+
   /proc/*/fd/ r,
   /proc/*/mounts r,
   /proc/*/stat r,
