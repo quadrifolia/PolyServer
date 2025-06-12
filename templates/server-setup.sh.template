@@ -2027,6 +2027,61 @@ detect-engine:
   profile: medium
   sgh-mpm-context: auto
   inspection-recursion-limit: 3000
+
+# App layer protocol configuration
+app-layer:
+  protocols:
+    # Essential protocols for production applications
+    http:
+      enabled: yes
+    tls:
+      enabled: yes
+    ssh:
+      enabled: yes
+    dns:
+      enabled: yes
+    smtp:
+      enabled: yes
+    ftp:
+      enabled: yes
+    http2:
+      enabled: yes
+    
+    # Database and enterprise protocols (might be needed)
+    smb:
+      enabled: yes
+    nfs:
+      enabled: yes
+    
+    # Disable industrial/IoT protocols not needed for web applications
+    dcerpc:
+      enabled: no
+    modbus:
+      enabled: no
+    enip:
+      enabled: no
+    dnp3:
+      enabled: no
+    ntp:
+      enabled: no
+    tftp:
+      enabled: no
+    ikev2:
+      enabled: no
+    krb5:
+      enabled: no
+    dhcp:
+      enabled: no
+    snmp:
+      enabled: no
+    sip:
+      enabled: no
+    rfb:
+      enabled: no
+    mqtt:
+      enabled: no
+    rdp:
+      enabled: no
   
 # Log configuration
 outputs:

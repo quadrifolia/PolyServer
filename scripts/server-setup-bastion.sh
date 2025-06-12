@@ -1806,6 +1806,59 @@ detect-engine:
   profile: high
   sgh-mpm-context: auto
   inspection-recursion-limit: 3000
+
+# App layer protocol configuration
+app-layer:
+  protocols:
+    # Essential protocols for bastion host monitoring
+    http:
+      enabled: yes
+    tls:
+      enabled: yes
+    ssh:
+      enabled: yes
+    dns:
+      enabled: yes
+    smtp:
+      enabled: yes
+    ftp:
+      enabled: yes
+    
+    # Disable protocols not needed on bastion hosts
+    dcerpc:
+      enabled: no
+    smb:
+      enabled: no
+    modbus:
+      enabled: no
+    enip:
+      enabled: no
+    dnp3:
+      enabled: no
+    nfs:
+      enabled: no
+    ntp:
+      enabled: no
+    tftp:
+      enabled: no
+    ikev2:
+      enabled: no
+    krb5:
+      enabled: no
+    dhcp:
+      enabled: no
+    snmp:
+      enabled: no
+    sip:
+      enabled: no
+    rfb:
+      enabled: no
+    mqtt:
+      enabled: no
+    rdp:
+      enabled: no
+    http2:
+      enabled: yes
   
 # Comprehensive logging
 outputs:
