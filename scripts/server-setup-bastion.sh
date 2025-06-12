@@ -3864,12 +3864,34 @@ chmod +x /usr/local/bin/setup-log-tmpfs
 echo "✅ Emergency tmpfs script created (/usr/local/bin/setup-log-tmpfs)"
 echo "💡 Run setup-log-tmpfs only in critical disk space emergencies"
 
+# Fix AppArmor SSH profile to allow authorized_keys access
+echo "===== 15. Configuring AppArmor for SSH authorized_keys access ====="
+if [ -f /etc/apparmor.d/usr.sbin.sshd ]; then
+    echo "Updating AppArmor SSH profile for authorized_keys access..."
+    
+    # Backup original profile
+    cp /etc/apparmor.d/usr.sbin.sshd /etc/apparmor.d/usr.sbin.sshd.backup-$(date +%Y%m%d)
+    
+    # Add authorized_keys access if not already present
+    if ! grep -q "home.*authorized_keys" /etc/apparmor.d/usr.sbin.sshd; then
+        # Add authorized_keys permissions after the /etc/ssh/** r, line
+        sed -i '/\/etc\/ssh\/\*\* r,/a\  # Allow access to user authorized_keys files\n  /home/*/.ssh/authorized_keys r,\n  /home/*/.ssh/authorized_keys2 r,' /etc/apparmor.d/usr.sbin.sshd
+        
+        # Reload AppArmor profile
+        apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd && echo "✅ AppArmor SSH profile updated successfully"
+    else
+        echo "✅ AppArmor SSH profile already allows authorized_keys access"
+    fi
+else
+    echo "ℹ️  AppArmor SSH profile not found - SSH will use default permissions"
+fi
+
 # Restart SSH with new configuration
-echo "===== 15. Restarting SSH service ====="
+echo "===== 16. Restarting SSH service ====="
 systemctl restart sshd
 
 # Final system checks
-echo "===== 16. Final system validation ====="
+echo "===== 17. Final system validation ====="
 echo "Checking SSH configuration..."
 sshd -t && echo "✅ SSH configuration is valid"
 
