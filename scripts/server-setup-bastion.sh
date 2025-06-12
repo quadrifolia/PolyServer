@@ -1085,7 +1085,7 @@ admin@bastion   $LOGWATCH_EMAIL
 security@bastion $LOGWATCH_EMAIL
 postmaster@bastion $LOGWATCH_EMAIL
 webmaster@bastion $LOGWATCH_EMAIL
-logcheck@@bastion $LOGWATCH_EMAIL
+logcheck@bastion $LOGWATCH_EMAIL
 root@\$(hostname)    $LOGWATCH_EMAIL
 bastion@\$(hostname) $LOGWATCH_EMAIL
 admin@\$(hostname)   $LOGWATCH_EMAIL
@@ -1994,9 +1994,34 @@ EOF
 
 systemctl daemon-reload
 
-# Enable and start auditd
+# Enable and start auditd with improved error handling
+echo "Starting audit system..."
 systemctl enable auditd
-systemctl restart auditd
+
+# Check if auditd is already running and stop it cleanly if needed
+if systemctl is-active --quiet auditd; then
+    echo "Stopping existing auditd service..."
+    systemctl stop auditd
+    sleep 2
+fi
+
+# Start auditd and verify it starts properly
+if systemctl start auditd; then
+    sleep 3
+    if systemctl is-active --quiet auditd; then
+        echo "✅ Audit system started successfully"
+    else
+        echo "⚠️ Audit system start reported success but service not active"
+        echo "Checking audit system status:"
+        systemctl status auditd --no-pager -l || true
+        journalctl -u auditd --no-pager -l -n 10 || true
+    fi
+else
+    echo "❌ Failed to start audit system"
+    echo "Checking audit system status:"
+    systemctl status auditd --no-pager -l || true
+    journalctl -u auditd --no-pager -l -n 10 || true
+fi
 
 echo "===== 9. Setting up Suricata IDS for bastion network monitoring ====="
 # Get primary network interface and bastion IP more robustly
@@ -2019,7 +2044,7 @@ echo "Configuring Suricata for interface: $INTERFACE, IP: $BASTION_IP"
 vars:
   address-groups:
     HOME_NET: "[$BASTION_IP]"
-    EXTERNAL_NET: "!$HOME_NET"
+    EXTERNAL_NET: "![$BASTION_IP]"
     INTERNAL_NET: "[$INTERNAL_NETWORK]"
     
   port-groups:
@@ -2134,7 +2159,7 @@ alert tcp \$EXTERNAL_NET any -> \$HOME_NET \$SSH_PORTS (msg:"BASTION SSH Multipl
 alert tcp \$EXTERNAL_NET any -> \$HOME_NET 22 (msg:"BASTION SSH Scan on Default Port"; flow:established,to_server; classtype:attempted-recon; sid:2000003; rev:1;)
 
 # Detect port scanning targeting bastion
-alert tcp \$EXTERNAL_NET any -> \$HOME_NET ![22,$SSH_PORT,80,443] (msg:"BASTION Port Scan Detected"; flow:established,to_server; threshold:type threshold, track by_src, count 5, seconds 10; classtype:attempted-recon; sid:2000004; rev:1;)
+alert tcp \$EXTERNAL_NET any -> \$HOME_NET ![22,2222,80,443] (msg:"BASTION Port Scan Detected"; flow:established,to_server; threshold:type threshold, track by_src, count 5, seconds 10; classtype:attempted-recon; sid:2000004; rev:1;)
 
 # Detect unusual outbound connections from bastion
 alert tcp \$HOME_NET any -> \$EXTERNAL_NET ![22,53,80,123,443] (msg:"BASTION Unusual Outbound Connection"; flow:established,to_server; threshold:type threshold, track by_dst, count 5, seconds 60; classtype:policy-violation; sid:2000005; rev:1;)
