@@ -13,6 +13,10 @@ BLOCK_DEVICE="/dev/sdb"                   # Block storage device (adjust if need
 BACKUP_MOUNT="{{BACKUP_MOUNT}}"           # Backup mount point
 LOGWATCH_EMAIL="{{LOGWATCH_EMAIL}}"       # Logwatch notification email
 
+# Optional features configuration
+NETDATA_ENABLED="{{NETDATA_ENABLED}}"     # Enable Netdata monitoring
+DEPLOYMENT_MODE="{{DEPLOYMENT_MODE}}"     # Deployment mode (docker/standalone)
+
 # SMTP Configuration from defaults.env
 SMTP_ENABLED="{{SMTP_ENABLED}}"
 SMTP_SERVER="{{SMTP_SERVER}}"
@@ -2541,7 +2545,6 @@ fi
 
 # ========= Docker Installation =========
 # Check if we need Docker (deployment mode is "docker" or just always install for flexibility)
-DEPLOYMENT_MODE="{{DEPLOYMENT_MODE}}"
 if [ "$DEPLOYMENT_MODE" = "docker" ] || [ "$DOCKER_MODE" = "false" ]; then
     echo "===== 8. Installing Docker and Docker Compose ====="
     echo "Installing Docker for deployment mode: $DEPLOYMENT_MODE"
@@ -2594,7 +2597,7 @@ fi
 
 # ========= Install Netdata Monitoring =========
 echo "===== 8.1 Installing Netdata monitoring ====="
-if [ "$DOCKER_MODE" = "false" ] && [ "{{NETDATA_ENABLED}}" = "true" ]; then
+if [ "$DOCKER_MODE" = "false" ] && [ "$NETDATA_ENABLED" = "true" ]; then
     echo "Installing Netdata monitoring agent..."
     
     # Download and run the official installer
@@ -2637,7 +2640,7 @@ if [ "$DOCKER_MODE" = "false" ] && [ "{{NETDATA_ENABLED}}" = "true" ]; then
     fi
 fi
 
-if [ "$DOCKER_MODE" = "false" ] && [ "{{NETDATA_ENABLED}}" = "true" ] && [ "$NETDATA_ENABLED" != "false" ]; then
+if [ "$DOCKER_MODE" = "false" ] && [ "$NETDATA_ENABLED" = "true" ] && [ "$NETDATA_ENABLED" != "false" ]; then
     # Configure Netdata for secure server monitoring
     echo "Configuring Netdata for secure server monitoring..."
     
@@ -2727,7 +2730,7 @@ EOF
     echo "✅ Netdata monitoring installed and configured"
     echo "   • Local access: http://127.0.0.1:19999 (via SSH tunnel)"
     echo "   • Quick access command: netdata-access"
-elif [ "$DOCKER_MODE" = "false" ] && [ "{{NETDATA_ENABLED}}" != "true" ]; then
+elif [ "$DOCKER_MODE" = "false" ] && [ "$NETDATA_ENABLED" != "true" ]; then
     echo "📊 Netdata monitoring disabled (NETDATA_ENABLED=false)"
     echo "   To enable: Set NETDATA_ENABLED=true in your configuration"
 else
@@ -3217,8 +3220,12 @@ kernel.panic_on_oops = 1
 EOF
 
 # Apply kernel parameters
-sysctl -p /etc/sysctl.d/99-server-security.conf
-echo "✅ Kernel security parameters and panic auto-reboot configured"
+if [ "$DOCKER_MODE" = "false" ]; then
+    sysctl -p /etc/sysctl.d/99-server-security.conf
+    echo "✅ Kernel security parameters and panic auto-reboot configured"
+else
+    echo "🐳 Docker mode: skipping sysctl parameter application (not permitted in containers)"
+fi
 
 echo "===== 11.4 Blacklisting unused filesystem modules ====="
 # Disable unused filesystems that could be security risks
@@ -3318,7 +3325,7 @@ WantedBy=timers.target
 EOF
 
 # Trivy container scan service (if Docker mode)
-if [ "{{DEPLOYMENT_MODE}}" = "docker" ]; then
+if [ "$DEPLOYMENT_MODE" = "docker" ]; then
 cat > /etc/systemd/system/trivy-scan.service << 'EOF'
 [Unit]
 Description=Trivy Container Security Scan
@@ -3387,7 +3394,7 @@ systemctl enable maldet-scan.timer
 systemctl enable clamscan.timer
 systemctl enable rkhunter-scan.timer
 
-if [ "{{DEPLOYMENT_MODE}}" = "docker" ]; then
+if [ "$DEPLOYMENT_MODE" = "docker" ]; then
     systemctl enable trivy-scan.timer
     systemctl start trivy-scan.timer
 fi
@@ -3400,7 +3407,7 @@ echo "✅ Systemd timer services created and enabled for security scans"
 echo "   • maldet-scan.timer - daily malware detection (with randomized delay)"
 echo "   • clamscan.timer - daily antivirus scan (with randomized delay)"
 echo "   • rkhunter-scan.timer - daily rootkit scan (with randomized delay)"
-if [ "{{DEPLOYMENT_MODE}}" = "docker" ]; then
+if [ "$DEPLOYMENT_MODE" = "docker" ]; then
     echo "   • trivy-scan.timer - daily container vulnerability scan"
 fi
 echo "   • All timers use Persistent=yes to run missed executions on boot"
@@ -3584,12 +3591,12 @@ rkhunter
         if ! echo "$ALLOWED_SERVICES" | grep -qE "^${service}"; then
             # Check if it matches any pattern in the whitelist
             WHITELISTED=false
-            echo "$ALLOWED_SERVICES" | while read -r pattern; do
+            while read -r pattern; do
                 if [[ "$service" =~ $pattern ]]; then
                     WHITELISTED=true
                     break
                 fi
-            done 2>/dev/null
+            done <<< "$ALLOWED_SERVICES" 2>/dev/null
             
             if [ "$WHITELISTED" = "false" ]; then
                 echo "⚠️ $service - verify this service is necessary"
@@ -3831,7 +3838,7 @@ if command -v aa-status >/dev/null 2>&1; then
 EOF
 
     # Create nginx AppArmor profile for web servers
-    if [ "{{DEPLOYMENT_MODE}}" != "docker" ]; then
+    if [ "$DEPLOYMENT_MODE" != "docker" ]; then
         cat > /etc/apparmor.d/usr.sbin.nginx << 'EOF'
 #include <tunables/global>
 
@@ -4013,7 +4020,7 @@ StartLimitBurst=5
 EOF
 
 # Nginx service watchdog (if not Docker mode)
-if [ "{{DEPLOYMENT_MODE}}" != "docker" ]; then
+if [ "$DEPLOYMENT_MODE" != "docker" ]; then
     mkdir -p /etc/systemd/system/nginx.service.d
     cat > /etc/systemd/system/nginx.service.d/watchdog.conf << 'EOF'
 [Service]
@@ -4119,7 +4126,7 @@ echo "   • Suricata rules maintenance with weekly auto-updates"
 echo "   • Enhanced OpenSSH HMAC tuning (SHA-1 completely disabled)"
 echo "   • Systemd watchdog for fail2ban, suricata, SSH, and nginx services"
 echo "   • Daily automated backup of all security configurations"
-if [ "{{NETDATA_ENABLED}}" = "true" ]; then
+if [ "$NETDATA_ENABLED" = "true" ]; then
     echo "   • Netdata monitoring with optional Cloud integration"
 fi
 echo ""
@@ -4135,7 +4142,7 @@ echo "Next steps:"
 echo "1. Edit /etc/dsgvo/contacts.conf to add your DPO contact information"
 echo "2. Complete /etc/dsgvo/data_inventory.json with your actual data"
 echo "3. Run compliance check: /opt/polyserver/scripts/dsgvo-compliance-check.sh"
-if [ "{{NETDATA_ENABLED}}" = "true" ]; then
+if [ "$NETDATA_ENABLED" = "true" ]; then
     echo "4. Access Netdata dashboard: ssh -L 19999:127.0.0.1:19999 {{USERNAME}}@server"
     echo "5. Add to Netdata Cloud (optional): run 'netdata-access' for instructions"
     echo "6. Deploy your applications using the PolyServer foundation"
