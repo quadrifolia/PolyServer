@@ -31,14 +31,41 @@ create_rollback_point() {
     mkdir -p "$BACKUP_DIR"
     log_message "Creating rollback point: $checkpoint"
     
-    tar -czf "$rollback_file" \
-        /etc/ssh \
-        /etc/ufw \
-        /etc/fail2ban \
-        /etc/postfix \
-        2>/dev/null || log_message "Some files missing during rollback creation"
-    
-    echo "$rollback_file" > "${BACKUP_DIR}/latest-rollback"
+    # Create encrypted backup if gpg is available (SECURITY ENHANCEMENT)
+    if command -v gpg >/dev/null 2>&1; then
+        local encrypted_file="${rollback_file}.gpg"
+        tar -czf - \
+            /etc/ssh \
+            /etc/ufw \
+            /etc/fail2ban \
+            /etc/postfix \
+            2>/dev/null | gpg --symmetric --cipher-algo AES256 --compress-algo 1 --batch --yes --passphrase "bastion-backup-$(hostname)-$timestamp" > "$encrypted_file" 2>/dev/null
+        
+        if [ -f "$encrypted_file" ]; then
+            echo "$encrypted_file" > "${BACKUP_DIR}/latest-rollback"
+            log_message "Encrypted rollback point created: $checkpoint"
+        else
+            # Fallback to unencrypted backup
+            tar -czf "$rollback_file" \
+                /etc/ssh \
+                /etc/ufw \
+                /etc/fail2ban \
+                /etc/postfix \
+                2>/dev/null || log_message "Some files missing during rollback creation"
+            echo "$rollback_file" > "${BACKUP_DIR}/latest-rollback"
+            log_message "Unencrypted rollback point created: $checkpoint"
+        fi
+    else
+        # Fallback to unencrypted backup
+        tar -czf "$rollback_file" \
+            /etc/ssh \
+            /etc/ufw \
+            /etc/fail2ban \
+            /etc/postfix \
+            2>/dev/null || log_message "Some files missing during rollback creation"
+        echo "$rollback_file" > "${BACKUP_DIR}/latest-rollback"
+        log_message "Unencrypted rollback point created: $checkpoint (gpg not available)"
+    fi
 }
 
 # Enhanced service management (SECURITY FIX)
@@ -156,7 +183,7 @@ validate_critical_configs() {
 
 USERNAME="bastion"                      # Bastion user to create
 HOSTNAME="bastion"                      # Bastion hostname  
-SSH_PORT="2222"                         # Custom SSH port (more secure than default 22)
+SSH_PORT="${SSH_PORT:-2222}"           # Custom SSH port (configurable via environment, default 2222)
 LOGWATCH_EMAIL="root"                   # Security notification email
 MAX_SSH_SESSIONS="5"                    # Maximum concurrent SSH sessions
 SSH_LOGIN_GRACE_TIME="30"               # SSH login grace time
@@ -210,6 +237,20 @@ if [ -z "$SSH_PUBLIC_KEY" ]; then
             break
         else
             echo "Please enter a valid email address"
+        fi
+    done
+    
+    echo ""
+    while true; do
+        read -r -p "Enter SSH port for bastion access (default: 2222): " SSH_PORT_INPUT
+        if [ -z "$SSH_PORT_INPUT" ]; then
+            SSH_PORT="2222"
+            break
+        elif [[ "$SSH_PORT_INPUT" =~ ^[0-9]+$ ]] && [ "$SSH_PORT_INPUT" -ge 1024 ] && [ "$SSH_PORT_INPUT" -le 65535 ]; then
+            SSH_PORT="$SSH_PORT_INPUT"
+            break
+        else
+            echo "Please enter a valid port number (1024-65535)"
         fi
     done
     echo ""
@@ -405,7 +446,7 @@ PasswordAuthentication no
 PermitEmptyPasswords no
 ChallengeResponseAuthentication no
 KbdInteractiveAuthentication no
-UsePAM no
+UsePAM yes
 
 # Forwarding and Tunneling - Essential for bastion functionality
 AllowTcpForwarding yes
@@ -532,9 +573,15 @@ fi
 # Allow outgoing NTP for time synchronization
 ufw allow out 123/udp comment "NTP time sync"
 
-# Allow outgoing connections to established sessions (stateful)
-ufw allow out 1024:65535/tcp comment "Outbound established connections TCP"
-ufw allow out 1024:65535/udp comment "Outbound established connections UDP"
+# Use connection tracking instead of broad port ranges (SECURITY FIX)
+# UFW automatically handles established connections when using stateful rules
+# Only explicitly allow necessary outbound connections
+ufw allow out 53/udp comment "DNS resolution"
+ufw allow out 53/tcp comment "DNS resolution over TCP"
+ufw allow out 80/tcp comment "HTTP for updates"
+ufw allow out 443/tcp comment "HTTPS for updates"
+ufw allow out 22/tcp comment "SSH for bastion connections"
+ufw allow out $SSH_PORT/tcp comment "SSH on custom port"
 
 # Log all denied connections for security monitoring
 ufw logging on
@@ -4649,8 +4696,8 @@ SUSTAINED_CPU_TIME=300  # 5 minutes
 HIGH_MEMORY_THRESHOLD=85
 CRITICAL_MEMORY_THRESHOLD=95
 
-# Whitelist of critical processes that should never be killed
-CRITICAL_PROCESSES="sshd|systemd|kernel|init|fail2ban|ufw|auditd|rsyslog|netdata|postfix"
+# Whitelist of critical processes that should never be killed (ENHANCED FOR SAFETY)
+CRITICAL_PROCESSES="sshd|systemd|kernel|init|fail2ban|ufw|auditd|rsyslog|netdata|postfix|cron|dbus|networkd|resolved|bastion"
 
 # Function to log with timestamp
 log_message() {
@@ -4694,14 +4741,32 @@ Action: Process terminated to protect system stability
 
 This action was taken automatically to prevent system overload." | mail -s "BASTION: Resource Guardian Action - High CPU Process Terminated" root
                         
-                        # Try graceful termination first
-                        kill -TERM "$pid" 2>/dev/null
-                        sleep 5
+                        # SAFETY ENHANCEMENT: Progressive warnings for one-person operations
+                        echo "WARNING: Process $pid ($command) using ${cpu}% CPU for ${sustained_time}s on bastion $(hostname).
+Will terminate in 60 seconds if not manually addressed.
+To prevent: kill $pid or systemctl stop [service]" | mail -s "BASTION WARNING: High CPU - Action Pending" root
                         
-                        # Force kill if still running
+                        sleep 60
+                        
+                        # Check if still problematic before action
                         if kill -0 "$pid" 2>/dev/null; then
-                            kill -KILL "$pid" 2>/dev/null
-                            log_message "FORCEKILL: Process $pid required SIGKILL"
+                            current_cpu=$(ps -p "$pid" -o %cpu= 2>/dev/null | tr -d ' ')
+                            if (( $(echo "$current_cpu > $HIGH_CPU_THRESHOLD" | bc -l) )); then
+                                # Final warning
+                                echo "FINAL WARNING: Process $pid terminating in 30s" | mail -s "BASTION CRITICAL: Final Warning" root
+                                sleep 30
+                                
+                                if kill -0 "$pid" 2>/dev/null; then
+                                    kill -TERM "$pid" 2>/dev/null
+                                    sleep 10
+                                    if kill -0 "$pid" 2>/dev/null; then
+                                        kill -KILL "$pid" 2>/dev/null
+                                        log_message "EMERGENCY: Process $pid force-killed after warnings"
+                                    fi
+                                fi
+                            else
+                                log_message "INFO: Process $pid CPU normalized during warning"
+                            fi
                         fi
                     fi
                 fi
