@@ -1888,7 +1888,6 @@ cat > /etc/audit/rules.d/bastion-audit.rules << 'EOF'
 -w /etc/passwd -p wa -k identity
 -w /etc/gshadow -p wa -k identity
 -w /etc/shadow -p wa -k identity
--w /etc/security/opasswd -p wa -k identity
 
 ## Monitor sudo configuration
 -w /etc/sudoers -p wa -k privilege_escalation
@@ -1960,6 +1959,32 @@ cat > /etc/audit/rules.d/bastion-audit.rules << 'EOF'
 ## WARNING: Requires reboot to make changes after enabling
 # -e 2
 EOF
+
+# Validate audit rules before proceeding
+echo "Validating audit rules..."
+if auditctl -R /etc/audit/rules.d/bastion-audit.rules 2>/dev/null; then
+    echo "✅ Audit rules syntax is valid"
+else
+    echo "⚠️ Audit rules have syntax issues, creating minimal fallback rules..."
+    cat > /etc/audit/rules.d/bastion-audit.rules << 'EOF'
+## Minimal Bastion Audit Rules - Fallback Configuration
+-D
+-b 8192
+-f 1
+
+## Critical authentication monitoring
+-w /var/log/wtmp -p wa -k session
+-w /var/log/btmp -p wa -k session
+-w /etc/passwd -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/ssh/sshd_config -p wa -k ssh_config
+
+## Basic privilege monitoring
+-w /etc/sudoers -p wa -k privilege_escalation
+-a always,exit -F arch=b64 -S execve -F uid>=1000 -F uid!=4294967295 -k user_commands
+EOF
+    echo "✅ Minimal audit rules created as fallback"
+fi
 
 # Configure auditd systemd resource limits for bastion host
 echo "===== 8.1.1 Configuring Auditd Resource Management ====="
