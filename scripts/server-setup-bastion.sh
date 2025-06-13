@@ -5,6 +5,151 @@
 
 set -e
 
+# ========= Enhanced Error Handling and Logging =========
+readonly SCRIPT_NAME="secure-bastion-setup"
+readonly LOG_FILE="/var/log/${SCRIPT_NAME}.log"
+readonly BACKUP_DIR="/var/backups/bastion-setup"
+
+# Enhanced error handling
+set -euo pipefail
+
+# Utility functions
+log_message() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
+}
+
+log_error() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $*" | tee -a "$LOG_FILE" >&2
+}
+
+# Create rollback point (SECURITY FIX)
+create_rollback_point() {
+    local checkpoint="$1"
+    local timestamp=$(date +%s)
+    local rollback_file="${BACKUP_DIR}/rollback-${checkpoint}-${timestamp}.tar.gz"
+    
+    mkdir -p "$BACKUP_DIR"
+    log_message "Creating rollback point: $checkpoint"
+    
+    tar -czf "$rollback_file" \
+        /etc/ssh \
+        /etc/ufw \
+        /etc/fail2ban \
+        /etc/postfix \
+        2>/dev/null || log_message "Some files missing during rollback creation"
+    
+    echo "$rollback_file" > "${BACKUP_DIR}/latest-rollback"
+}
+
+# Enhanced service management (SECURITY FIX)
+start_service_with_retry() {
+    local service="$1"
+    local max_attempts=3
+    local wait_time=5
+    
+    log_message "Starting service: $service"
+    
+    for attempt in $(seq 1 $max_attempts); do
+        if systemctl start "$service"; then
+            sleep "$wait_time"
+            if systemctl is-active --quiet "$service"; then
+                log_message "Service $service started successfully (attempt $attempt)"
+                return 0
+            fi
+        fi
+        log_message "Service $service start attempt $attempt failed, retrying..."
+        sleep $((wait_time * attempt))
+    done
+    
+    log_error "Failed to start service $service after $max_attempts attempts"
+    return 1
+}
+
+# Secure password input (SECURITY FIX)
+secure_password_input() {
+    local prompt="$1"
+    local password
+    
+    echo -n "$prompt"
+    read -s password
+    echo ""
+    
+    if [ ${#password} -lt 8 ]; then
+        log_error "Password too short (minimum 8 characters)"
+        return 1
+    fi
+    
+    echo "$password"
+}
+
+# SSH key validation (SECURITY FIX)
+validate_ssh_key() {
+    local key="$1"
+    local temp_key_file
+    
+    temp_key_file=$(mktemp)
+    trap "rm -f $temp_key_file" RETURN
+    
+    echo "$key" > "$temp_key_file"
+    
+    if ssh-keygen -l -f "$temp_key_file" >/dev/null 2>&1; then
+        local key_bits
+        key_bits=$(ssh-keygen -l -f "$temp_key_file" | awk '{print $1}')
+        
+        if [[ "$key" =~ ^ssh-ed25519 ]] || [ "$key_bits" -ge 2048 ]; then
+            log_message "SSH key validation successful"
+            return 0
+        else
+            log_error "SSH key too weak (minimum 2048 bits for RSA, or use Ed25519)"
+            return 1
+        fi
+    else
+        log_error "Invalid SSH key format"
+        return 1
+    fi
+}
+
+# Email validation (SECURITY FIX)
+validate_email() {
+    local email="$1"
+    if [[ "$email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        return 0
+    else
+        log_error "Invalid email format: $email"
+        return 1
+    fi
+}
+
+# Configuration validation (SECURITY FIX)
+validate_critical_configs() {
+    local errors=0
+    
+    log_message "Validating critical configurations..."
+    
+    if ! sshd -t 2>/dev/null; then
+        log_error "SSH configuration validation failed"
+        errors=$((errors + 1))
+    fi
+    
+    if ! ufw --dry-run enable >/dev/null 2>&1; then
+        log_error "UFW configuration validation failed"
+        errors=$((errors + 1))
+    fi
+    
+    if ! fail2ban-client -t >/dev/null 2>&1; then
+        log_error "Fail2ban configuration validation failed"
+        errors=$((errors + 1))
+    fi
+    
+    if [ $errors -eq 0 ]; then
+        log_message "All critical configurations validated successfully"
+        return 0
+    else
+        log_error "Configuration validation failed with $errors errors"
+        return 1
+    fi
+}
+
 # ========= Fixed Configuration =========
 # This script is designed for production bastion host deployment
 # All parameters are set to secure defaults for bastion use case
@@ -35,21 +180,38 @@ if [ -z "$SSH_PUBLIC_KEY" ]; then
     echo "Please provide your SSH public key for the bastion user."
     echo ""
     echo "You can get your public key with:"
-    echo "  cat ~/.ssh/id_ed25519.pub    (for Ed25519 keys)"
-    echo "  cat ~/.ssh/id_rsa.pub        (for RSA keys)"
+    echo "  cat ~/.ssh/id_ed25519.pub    (for Ed25519 keys - RECOMMENDED)"
+    echo "  cat ~/.ssh/id_rsa.pub        (for RSA keys - minimum 2048 bits)"
     echo ""
-    read -r -p "Enter your SSH public key: " SSH_PUBLIC_KEY
     
-    if [ -z "$SSH_PUBLIC_KEY" ]; then
-        echo "ERROR: SSH public key is required for bastion host setup"
-        exit 1
-    fi
+    while true; do
+        read -r -p "Enter your SSH public key: " SSH_PUBLIC_KEY
+        
+        if [ -z "$SSH_PUBLIC_KEY" ]; then
+            log_error "SSH public key is required for bastion host setup"
+            continue
+        fi
+        
+        if validate_ssh_key "$SSH_PUBLIC_KEY"; then
+            break
+        else
+            echo "Please enter a valid SSH public key (Ed25519 recommended, or RSA ≥2048 bits)"
+        fi
+    done
     
     echo ""
-    read -r -p "Enter email address for security notifications (default: root): " EMAIL_INPUT
-    if [ -n "$EMAIL_INPUT" ]; then
-        LOGWATCH_EMAIL="$EMAIL_INPUT"
-    fi
+    while true; do
+        read -r -p "Enter email address for security notifications (default: root): " EMAIL_INPUT
+        if [ -z "$EMAIL_INPUT" ]; then
+            LOGWATCH_EMAIL="root"
+            break
+        elif validate_email "$EMAIL_INPUT"; then
+            LOGWATCH_EMAIL="$EMAIL_INPUT"
+            break
+        else
+            echo "Please enter a valid email address"
+        fi
+    done
     echo ""
 fi
 
@@ -68,10 +230,30 @@ if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
     read -r -p "SMTP Server (e.g., smtp.gmail.com): " SMTP_SERVER
     read -r -p "SMTP Port (default: 587): " SMTP_PORT
     SMTP_PORT=${SMTP_PORT:-587}
-    read -r -p "SMTP Username: " SMTP_USERNAME
-    read -r -s -p "SMTP Password: " SMTP_PASSWORD
-    echo ""
-    read -r -p "From Email Address (must match SMTP account): " SMTP_FROM_EMAIL
+    
+    while true; do
+        read -r -p "SMTP Username: " SMTP_USERNAME
+        if [ -n "$SMTP_USERNAME" ]; then
+            break
+        fi
+        echo "SMTP username is required"
+    done
+    
+    # SECURITY FIX: Secure password input
+    while true; do
+        SMTP_PASSWORD=$(secure_password_input "SMTP Password: ")
+        if [ $? -eq 0 ] && [ -n "$SMTP_PASSWORD" ]; then
+            break
+        fi
+        echo "Valid SMTP password is required (minimum 8 characters)"
+    done
+    
+    while true; do
+        read -r -p "From Email Address (must match SMTP account): " SMTP_FROM_EMAIL
+        if validate_email "$SMTP_FROM_EMAIL"; then
+            break
+        fi
+    done
     read -r -p "Use TLS/STARTTLS? (y/n, default: y): " SMTP_TLS
     SMTP_TLS=${SMTP_TLS:-y}
     
@@ -190,6 +372,7 @@ chmod 440 /etc/sudoers.d/bastion-$USERNAME
 usermod -aG adm "$USERNAME" 2>/dev/null || true
 
 echo "===== 4. Configuring SSH with bastion-specific hardening ====="
+create_rollback_point "pre-ssh"
 # Backup original SSH config
 cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
     
@@ -293,6 +476,7 @@ EOF
 chmod 644 /etc/ssh/banner
 
 echo "===== 5. Setting up bastion-specific firewall rules ====="
+create_rollback_point "pre-firewall"
 
 # Install UFW if not already installed
 if ! command -v ufw >/dev/null 2>&1; then
@@ -1099,17 +1283,17 @@ EOF
     postconf -e "recipient_canonical_maps = hash:/etc/postfix/recipient_canonical"
     postmap /etc/postfix/recipient_canonical
     
-    # Create SASL password file
-    cat > /etc/postfix/sasl_passwd << EOF
-[$SMTP_SERVER]:$SMTP_PORT    $SMTP_USERNAME:$SMTP_PASSWORD
-EOF
-    
-    # Secure the password file
+    # SECURITY FIX: Create SASL password file securely
+    local temp_sasl_file
+    temp_sasl_file=$(mktemp)
+    echo "[$SMTP_SERVER]:$SMTP_PORT    $SMTP_USERNAME:$SMTP_PASSWORD" > "$temp_sasl_file"
+    mv "$temp_sasl_file" /etc/postfix/sasl_passwd
     chmod 600 /etc/postfix/sasl_passwd
     chown root:root /etc/postfix/sasl_passwd
-    
-    # Create the hash database
     postmap /etc/postfix/sasl_passwd
+    
+    # SECURITY FIX: Clear password from memory
+    unset SMTP_PASSWORD
     
     # Create sender canonical map to rewrite all From addresses
     cat > /etc/postfix/sender_canonical << EOF
@@ -1188,7 +1372,7 @@ fi
 
 # Enable and start postfix with new configuration
 systemctl enable postfix
-systemctl start postfix
+start_service_with_retry postfix
 
 # Wait for postfix to fully start
 sleep 3
@@ -1580,6 +1764,7 @@ Unattended-Upgrade::Allow-downgrade "true";
 EOF
 
 echo "===== 7. Configuring fail2ban for bastion protection ====="
+create_rollback_point "pre-fail2ban"
 # Enhanced fail2ban configuration for bastion hosts
     cat > /etc/fail2ban/jail.local << EOF
 [DEFAULT]
@@ -1666,8 +1851,7 @@ if ! systemctl is-active --quiet rsyslog; then
     echo "Installing rsyslog for enhanced logging..."
     apt-get install -y rsyslog
     systemctl enable rsyslog
-    systemctl start rsyslog
-    sleep 2
+    start_service_with_retry rsyslog
     echo "✅ Rsyslog installed and started"
 else
     echo "✅ Rsyslog already active"
@@ -1706,7 +1890,7 @@ systemctl enable fail2ban
 systemctl stop fail2ban 2>/dev/null || true
 sleep 1
 
-if systemctl start fail2ban; then
+if start_service_with_retry fail2ban; then
     echo "✅ Fail2ban started successfully"
     # Wait a moment for fail2ban to initialize
     sleep 5
@@ -2031,18 +2215,10 @@ if systemctl is-active --quiet auditd; then
 fi
 
 # Start auditd and verify it starts properly
-if systemctl start auditd; then
-    sleep 3
-    if systemctl is-active --quiet auditd; then
-        echo "✅ Audit system started successfully"
-    else
-        echo "⚠️ Audit system start reported success but service not active"
-        echo "Checking audit system status:"
-        systemctl status auditd --no-pager -l || true
-        journalctl -u auditd --no-pager -l -n 10 || true
-    fi
+if start_service_with_retry auditd; then
+    echo "✅ Audit system started successfully"
 else
-    echo "❌ Failed to start audit system"
+    echo "❌ Failed to start audit system after retries"
     echo "Checking audit system status:"
     systemctl status auditd --no-pager -l || true
     journalctl -u auditd --no-pager -l -n 10 || true
@@ -2268,7 +2444,7 @@ if suricata -T -c /etc/suricata/suricata.yaml >/tmp/suricata-test.log 2>&1; then
     
     # Start Suricata with error handling
     echo "Starting Suricata IDS service..."
-    if systemctl start suricata; then
+    if start_service_with_retry suricata; then
         echo "✅ Suricata IDS started successfully"
         
         # Wait for service to initialize
@@ -2335,7 +2511,7 @@ EOF
         systemctl daemon-reload
         systemctl enable suricata
         
-        if systemctl start suricata; then
+        if start_service_with_retry suricata; then
             echo "✅ Suricata IDS started successfully after fixes"
         else
             echo "❌ Suricata still fails to start - disabling"
@@ -3951,6 +4127,23 @@ else
     echo "ℹ️  AppArmor SSH profile not found - SSH will use default permissions"
 fi
 
+echo "===== Final Configuration Validation ====="
+
+# Validate all configurations before final restart
+if ! validate_critical_configs; then
+    log_error "Configuration validation failed - attempting rollback"
+    if [ -f "${BACKUP_DIR}/latest-rollback" ]; then
+        rollback_file=$(cat "${BACKUP_DIR}/latest-rollback")
+        if [ -f "$rollback_file" ]; then
+            echo "Rolling back configuration..."
+            cd / && tar -xzf "$rollback_file"
+            systemctl daemon-reload
+            echo "Rollback completed - please check configurations manually"
+        fi
+    fi
+    exit 1
+fi
+
 # Restart SSH with new configuration
 echo "===== 16. Restarting SSH service ====="
 systemctl restart sshd
@@ -4841,4 +5034,11 @@ if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
     echo "   7. Check your email inbox for the setup completion report"
 fi
 echo ""
+
+# Clear any sensitive variables from memory
+unset SMTP_PASSWORD
+unset SSH_PUBLIC_KEY
+
+log_message "Bastion host setup completed successfully with enhanced security"
+
 echo "🎉 This bastion host is now ready for secure access management!"
