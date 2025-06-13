@@ -2686,15 +2686,14 @@ Format = html
 Range = yesterday
 Detail = High
 
-# Only use specific services (not "All" with additions)
-Service = sshd
-Service = sudo
-Service = secure
-Service = kernel
-Service = postfix
-Service = fail2ban
+# Use All services but exclude unnecessary ones
+Service = All
 Service = "-zz-disk_space"
 Service = "-zz-network"
+Service = "-zz-sys"
+Service = "-named"
+Service = "-http"
+Service = "-ftp"
 EOF
 
 # Create logwatch cron job (ensure it runs daily)
@@ -2921,28 +2920,44 @@ echo "" >> $REPORT_FILE
 
 echo "RECENT SUCCESSFUL LOGINS" >> $REPORT_FILE
 echo "========================" >> $REPORT_FILE
-grep "$(date '+%b %d')" /var/log/auth.log | grep "Accepted publickey" | tail -10 >> $REPORT_FILE
+if grep "$(date '+%b %d')" /var/log/auth.log 2>/dev/null | grep "Accepted publickey" | tail -10 >> $REPORT_FILE; then
+    true
+else
+    echo "No successful SSH logins found for today" >> $REPORT_FILE
+fi
 echo "" >> $REPORT_FILE
 
 echo "FIREWALL STATUS" >> $REPORT_FILE
 echo "===============" >> $REPORT_FILE
-ufw status numbered >> $REPORT_FILE
+ufw status numbered >> $REPORT_FILE 2>/dev/null || echo "UFW status unavailable" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 echo "FAIL2BAN STATUS" >> $REPORT_FILE
 echo "===============" >> $REPORT_FILE
-fail2ban-client status >> $REPORT_FILE
+fail2ban-client status >> $REPORT_FILE 2>/dev/null || echo "Fail2ban status unavailable" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 echo "AUDIT SUMMARY" >> $REPORT_FILE
 echo "=============" >> $REPORT_FILE
-ausearch --start today --end now | aureport --summary >> $REPORT_FILE
+if ausearch --start today --end now 2>/dev/null | aureport --summary >> $REPORT_FILE 2>/dev/null; then
+    true
+else
+    echo "No audit events found for today" >> $REPORT_FILE
+fi
 echo "" >> $REPORT_FILE
 
 echo "CRITICAL SECURITY EVENTS" >> $REPORT_FILE
 echo "========================" >> $REPORT_FILE
-ausearch -k privilege_escalation --start today --end now >> $REPORT_FILE
-ausearch -k user_commands --start today --end now | tail -20 >> $REPORT_FILE
+EVENTS_FOUND=0
+if ausearch -k privilege_escalation --start today --end now >> $REPORT_FILE 2>/dev/null; then
+    EVENTS_FOUND=1
+fi
+if ausearch -k user_commands --start today --end now 2>/dev/null | tail -20 >> $REPORT_FILE; then
+    EVENTS_FOUND=1
+fi
+if [ $EVENTS_FOUND -eq 0 ]; then
+    echo "No critical security events found for today" >> $REPORT_FILE
+fi
 echo "" >> $REPORT_FILE
 
 # Email the report
