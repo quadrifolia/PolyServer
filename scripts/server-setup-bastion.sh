@@ -2412,31 +2412,29 @@ sleep 3
 
 # Try to load the rules and check for success (with timeout)
 echo "Loading audit rules from file..."
-# Capture output to avoid confusing status messages
-AUDIT_LOAD_OUTPUT=$(timeout 30 auditctl -R /etc/audit/rules.d/bastion-audit.rules 2>&1)
-AUDIT_LOAD_STATUS=$?
-
-if [ $AUDIT_LOAD_STATUS -eq 0 ]; then
+if timeout 30 auditctl -R /etc/audit/rules.d/bastion-audit.rules >/dev/null 2>&1; then
     echo "✅ Audit rules file loaded successfully"
 else
-    echo "⚠️ Audit rules loading had issues (exit code: $AUDIT_LOAD_STATUS)"
-    echo "This is often normal during initial setup"
+    echo "⚠️ Audit rules loading had issues"
+    echo "This is often normal during initial setup - continuing"
 fi
 sleep 2
 
 # Check if rules are actually loaded
 echo "Verifying audit rules are active..."
 if command -v auditctl >/dev/null 2>&1; then
-    # Get actual rules (exclude status lines)
-    ACTUAL_RULES=$(timeout 10 auditctl -l 2>/dev/null | grep -v "^enabled\|^failure\|^pid\|^rate_limit\|^backlog" | wc -l || echo "0")
-    TOTAL_LINES=$(timeout 10 auditctl -l 2>/dev/null | wc -l || echo "0")
-    
-    echo "Audit system status: $TOTAL_LINES total lines, $ACTUAL_RULES rule lines"
-    
-    if [ "$ACTUAL_RULES" -gt 5 ]; then
-        echo "✅ Audit rules loaded successfully ($ACTUAL_RULES rules active)"
+    # Simple rule count without complex filtering
+    if timeout 10 auditctl -l >/dev/null 2>&1; then
+        RULE_COUNT=$(timeout 10 auditctl -l 2>/dev/null | wc -l || echo "0")
+        echo "Audit rules check: $RULE_COUNT total lines from auditctl"
+        
+        if [ "$RULE_COUNT" -gt 10 ]; then
+            echo "✅ Audit rules loaded successfully"
+        else
+            echo "⚠️ Limited audit output - may be normal during startup"
+        fi
     else
-        echo "⚠️ Limited audit rules loaded ($ACTUAL_RULES rules) - creating minimal fallback"
+        echo "⚠️ Unable to query audit rules - may be initializing"
     fi
 else
     echo "⚠️ auditctl command not available"
