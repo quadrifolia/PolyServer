@@ -2,7 +2,38 @@
 # server_setup.sh - Secure Debian 12 server setup for PolyServer applications
 # Run as root after fresh Debian 12 (bookworm) instance creation
 
-set -e
+# Enhanced error handling
+set -euo pipefail
+
+# ========= Constants and Logging =========
+readonly SCRIPT_NAME="secure-server-setup"
+readonly LOG_FILE="/var/log/${SCRIPT_NAME}.log"
+readonly BACKUP_DIR="/var/backups/server-setup"
+
+# Ensure log directory exists
+mkdir -p "$(dirname "$LOG_FILE")"
+mkdir -p "$BACKUP_DIR"
+
+# Logging functions
+log_message() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
+}
+
+log_error() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $*" | tee -a "$LOG_FILE" >&2
+}
+
+# Trap to handle script exit
+cleanup() {
+    local exit_code=$?
+    if [ $exit_code -ne 0 ]; then
+        log_error "Script failed with exit code $exit_code"
+        log_message "Check $LOG_FILE for details"
+    fi
+}
+trap cleanup EXIT
+
+log_message "Starting server setup script"
 
 # ========= Variables =========
 USERNAME="{{DEPLOY_USER}}"                # Non-root user to create
@@ -34,6 +65,55 @@ else
     DOCKER_MODE=false
 fi
 
+# ========= Parameter Validation =========
+log_message "🔍 Validating input parameters..."
+
+# Validate SSH port
+if ! validate_port "$SSH_PORT"; then
+    log_error "Invalid SSH port configuration"
+    exit 1
+fi
+
+# Validate SSH public key (if not in testing mode)
+if [ "$TESTING_MODE" != "true" ] && [ -n "$SSH_PUBLIC_KEY" ]; then
+    if ! validate_ssh_key "$SSH_PUBLIC_KEY"; then
+        log_error "Invalid SSH public key configuration"
+        exit 1
+    fi
+elif [ "$TESTING_MODE" != "true" ]; then
+    log_error "SSH public key is required for security"
+    exit 1
+fi
+
+# Validate email addresses
+if [ -n "$LOGWATCH_EMAIL" ] && [ "$LOGWATCH_EMAIL" != "{{LOGWATCH_EMAIL}}" ]; then
+    if ! validate_email "$LOGWATCH_EMAIL"; then
+        log_error "Invalid logwatch email configuration"
+        exit 1
+    fi
+fi
+
+if [ "$SMTP_ENABLED" = "true" ] && [ -n "$SMTP_FROM_EMAIL" ] && [ "$SMTP_FROM_EMAIL" != "{{SMTP_FROM_EMAIL}}" ]; then
+    if ! validate_email "$SMTP_FROM_EMAIL"; then
+        log_error "Invalid SMTP from email configuration"
+        exit 1
+    fi
+fi
+
+# Validate hostname
+if [ -z "$HOSTNAME" ] || [ "$HOSTNAME" = "{{HOSTNAME}}" ]; then
+    log_error "Hostname must be configured"
+    exit 1
+fi
+
+# Validate username
+if [ -z "$USERNAME" ] || [ "$USERNAME" = "{{DEPLOY_USER}}" ]; then
+    log_error "Deploy user must be configured"
+    exit 1
+fi
+
+log_message "✅ Parameter validation completed successfully"
+
 # Helper function for systemctl commands in Docker mode
 docker_systemctl() {
     if [ "$DOCKER_MODE" = "false" ]; then
@@ -44,9 +124,250 @@ docker_systemctl() {
     fi
 }
 
+# Package management functions
+wait_for_dpkg_lock() {
+    local timeout=300  # 5 minutes timeout
+    local count=0
+    
+    log_message "Checking for package management locks..."
+    
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
+        if [ $count -ge $timeout ]; then
+            log_error "Timeout waiting for package management lock - continuing anyway"
+            break
+        fi
+        
+        if [ $((count % 10)) -eq 0 ]; then
+            log_message "Waiting for package management to complete... ($count/$timeout seconds)"
+            # Show what process is holding the lock
+            pgrep -af "(apt|dpkg|unattended)" || true
+        fi
+        
+        sleep 1
+        count=$((count + 1))
+    done
+    
+    if [ $count -gt 0 ]; then
+        log_message "Package management lock released after $count seconds"
+    fi
+}
+
+# Enhanced package management with lock handling
+safe_apt_update() {
+    wait_for_dpkg_lock
+    # Kill any running apt/dpkg processes
+    pkill -f apt-get 2>/dev/null || true
+    pkill -f dpkg 2>/dev/null || true
+    sleep 2
+    # Configure dpkg properly before update
+    dpkg --configure -a
+    apt-get update
+}
+
+safe_apt_install() {
+    wait_for_dpkg_lock
+    apt-get install -y "$@"
+}
+
+# Service management functions
+start_service_with_retry() {
+    local service="$1"
+    local max_attempts=3
+    local wait_time=5
+    
+    log_message "Starting service: $service"
+    
+    # Skip in Docker mode for services that don't work in containers
+    if [ "$DOCKER_MODE" = "true" ]; then
+        case "$service" in
+            ufw|fail2ban|clamav-daemon|suricata)
+                log_message "🐳 Docker mode: skipping service $service"
+                return 0
+                ;;
+        esac
+    fi
+    
+    for attempt in $(seq 1 $max_attempts); do
+        if docker_systemctl start "$service"; then
+            sleep "$wait_time"
+            if docker_systemctl is-active --quiet "$service"; then
+                log_message "✅ Service $service started successfully (attempt $attempt)"
+                return 0
+            fi
+        fi
+        log_message "⚠️ Service $service start attempt $attempt failed, retrying..."
+        sleep $((wait_time * attempt))
+    done
+    
+    log_error "❌ Failed to start service $service after $max_attempts attempts"
+    return 1
+}
+
+enable_and_start_service() {
+    local service="$1"
+    log_message "Enabling and starting service: $service"
+    
+    if [ "$DOCKER_MODE" = "true" ]; then
+        case "$service" in
+            ufw|fail2ban|clamav-daemon|suricata)
+                log_message "🐳 Docker mode: skipping service $service"
+                return 0
+                ;;
+        esac
+    fi
+    
+    docker_systemctl enable "$service"
+    start_service_with_retry "$service"
+}
+
+# Input validation functions
+validate_email() {
+    local email="$1"
+    if [[ "$email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        return 0
+    else
+        log_error "Invalid email format: $email"
+        return 1
+    fi
+}
+
+validate_ssh_key() {
+    local key="$1"
+    local temp_key_file
+    
+    if [ -z "$key" ]; then
+        log_error "SSH key cannot be empty"
+        return 1
+    fi
+    
+    temp_key_file=$(mktemp)
+    trap 'rm -f "$temp_key_file"' RETURN
+    
+    echo "$key" > "$temp_key_file"
+    
+    if ssh-keygen -l -f "$temp_key_file" >/dev/null 2>&1; then
+        local key_bits
+        key_bits=$(ssh-keygen -l -f "$temp_key_file" | awk '{print $1}')
+        
+        if [[ "$key" =~ ^ssh-ed25519 ]] || [ "$key_bits" -ge 2048 ]; then
+            log_message "✅ SSH key validation successful"
+            return 0
+        else
+            log_error "SSH key too weak (minimum 2048 bits for RSA, or use Ed25519)"
+            return 1
+        fi
+    else
+        log_error "Invalid SSH key format"
+        return 1
+    fi
+}
+
+validate_port() {
+    local port="$1"
+    if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
+        return 0
+    else
+        log_error "Invalid port number: $port (must be 1-65535)"
+        return 1
+    fi
+}
+
+# Configuration validation framework
+validate_critical_configs() {
+    local errors=0
+    
+    log_message "🔍 Validating critical configurations..."
+    
+    # SSH configuration validation
+    log_message "Checking SSH configuration..."
+    if [ "$DOCKER_MODE" = "false" ]; then
+        if ! timeout 10 sshd -t 2>/dev/null; then
+            log_error "SSH configuration validation failed"
+            errors=$((errors + 1))
+        else
+            log_message "✅ SSH configuration is valid"
+        fi
+    fi
+    
+    # UFW configuration validation  
+    log_message "Checking UFW configuration..."
+    if [ "$DOCKER_MODE" = "false" ]; then
+        if ! timeout 10 ufw status >/dev/null 2>&1; then
+            log_error "UFW configuration validation failed"
+            errors=$((errors + 1))
+        else
+            log_message "✅ UFW configuration is valid"
+        fi
+    fi
+    
+    # Fail2ban configuration validation
+    log_message "Checking Fail2ban configuration..."
+    if [ "$DOCKER_MODE" = "false" ]; then
+        if ! timeout 15 fail2ban-client -t >/dev/null 2>&1; then
+            log_message "⚠️ Fail2ban configuration validation timed out or failed"
+            if ! docker_systemctl is-active --quiet fail2ban; then
+                errors=$((errors + 1))
+            fi
+        else
+            log_message "✅ Fail2ban configuration is valid"
+        fi
+    fi
+    
+    # Nginx configuration validation (if nginx is installed)
+    if command -v nginx >/dev/null 2>&1; then
+        log_message "Checking Nginx configuration..."
+        if ! nginx -t >/dev/null 2>&1; then
+            log_error "Nginx configuration validation failed"
+            errors=$((errors + 1))
+        else
+            log_message "✅ Nginx configuration is valid"
+        fi
+    fi
+    
+    return $errors
+}
+
+# Backup and rollback system
+create_rollback_point() {
+    local checkpoint="$1"
+    local timestamp
+    timestamp=$(date +%s)
+    local rollback_file="${BACKUP_DIR}/rollback-${checkpoint}-${timestamp}.tar.gz"
+    
+    log_message "📦 Creating rollback point: $checkpoint"
+    
+    # Create encrypted backup if gpg is available
+    if command -v gpg >/dev/null 2>&1; then
+        local encrypted_file="${rollback_file}.gpg"
+        tar -czf - \
+            /etc/ssh \
+            /etc/ufw \
+            /etc/fail2ban \
+            /etc/nginx \
+            /etc/postfix \
+            2>/dev/null | gpg --symmetric --cipher-algo AES256 --compress-algo 1 --batch --yes --passphrase "server-backup-$(hostname)-$timestamp" > "$encrypted_file" 2>/dev/null
+        
+        if [ -f "$encrypted_file" ]; then
+            echo "$encrypted_file" > "${BACKUP_DIR}/latest-rollback"
+            log_message "✅ Encrypted rollback point created: $checkpoint"
+        fi
+    else
+        # Fallback to unencrypted backup
+        tar -czf "$rollback_file" \
+            /etc/ssh \
+            /etc/ufw \
+            /etc/fail2ban \
+            /etc/nginx \
+            /etc/postfix \
+            2>/dev/null || log_message "⚠️ Some files missing during rollback creation"
+        echo "$rollback_file" > "${BACKUP_DIR}/latest-rollback"
+        log_message "✅ Rollback point created: $checkpoint"
+    fi
+}
+
 # ========= Basic server hardening =========
-echo "===== 1. Updating system packages ====="
-apt-get update && apt-get upgrade -y
+log_message "===== 1. Updating system packages ====="
+safe_apt_update && apt-get upgrade -y
 
 echo "===== 2. Setting hostname ====="
 if [ "$DOCKER_MODE" = "false" ]; then
@@ -757,15 +1078,8 @@ EOF
 fi
 
 # Enable and start postfix with new configuration
-systemctl enable postfix
-if systemctl start postfix; then
-    echo "✅ Postfix started successfully"
-else
-    echo "⚠️ Postfix start failed (may be normal in container environments)"
-fi
-
-# Wait for postfix to fully start
-sleep 3
+create_rollback_point "postfix-config"
+enable_and_start_service postfix
 
 # Check if we're in a container environment
 CONTAINER_ENV=""
@@ -960,29 +1274,22 @@ EOF
     fi
     
     # Enable and start fail2ban with error handling
-    docker_systemctl enable fail2ban
+    create_rollback_point "fail2ban-config"
     
     # Stop fail2ban if it's already running to ensure clean start
     docker_systemctl stop fail2ban 2>/dev/null || true
     sleep 1
     
-    if docker_systemctl start fail2ban; then
-        echo "✅ Fail2ban started successfully"
-        # Wait a moment for fail2ban to initialize
-        sleep 3
-        # Verify it's running (only in non-Docker mode)
-        if [ "$DOCKER_MODE" = "false" ] && systemctl is-active --quiet fail2ban; then
-            echo "✅ Fail2ban is active and running"
-            # Test fail2ban client connection
-            if fail2ban-client status >/dev/null 2>&1; then
-                echo "✅ Fail2ban client communication working"
-                fail2ban-client status || true
-            else
-                echo "⚠️ Fail2ban status check failed (may still be initializing)"
-            fi
+    if enable_and_start_service fail2ban; then
+        # Test fail2ban client connection
+        if [ "$DOCKER_MODE" = "false" ] && fail2ban-client status >/dev/null 2>&1; then
+            log_message "✅ Fail2ban client communication working"
+            fail2ban-client status || true
+        else
+            log_message "⚠️ Fail2ban status check failed (may still be initializing)"
         fi
     else
-        echo "❌ Failed to start fail2ban service"
+        log_error "❌ Failed to start fail2ban service"
         if [ "$DOCKER_MODE" = "false" ]; then
             systemctl status fail2ban --no-pager -l || true
         fi
@@ -1225,10 +1532,9 @@ EOF
 fi
 
 # Enable and start ClamAV services
-docker_systemctl enable clamav-freshclam
-docker_systemctl start clamav-freshclam
-docker_systemctl enable clamav-daemon
-docker_systemctl start clamav-daemon
+create_rollback_point "clamav-config"
+enable_and_start_service clamav-freshclam
+enable_and_start_service clamav-daemon
 
 if [ "$DOCKER_MODE" = "false" ]; then
     echo ""
@@ -1426,6 +1732,52 @@ sed -i "s/^SENDMAILTO=.*/SENDMAILTO=\"${LOGWATCH_EMAIL:-root}\"/" /etc/logcheck/
 # Set running frequency to daily (default is hourly)
 sed -i 's/^CRON_DAILY_RUN=.*/CRON_DAILY_RUN="true"/' /etc/logcheck/logcheck.conf
 sed -i 's/^CRON_HOURLY_RUN=.*/CRON_HOURLY_RUN="false"/' /etc/logcheck/logcheck.conf
+
+# Remove hourly logcheck cron job if it exists
+rm -f /etc/cron.hourly/logcheck 2>/dev/null || true
+
+# Add ignore patterns for common application server activity
+log_message "Adding logcheck ignore patterns for UFW and common server activity..."
+cat >> /etc/logcheck/ignore.d.server/application-server-ignore << EOF
+# Application server specific ignore patterns
+# Ignore normal server activity patterns that are not security issues
+
+# Normal SSH connection patterns
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd\[[0-9]+\]: Connection from [.[:digit:]]+ port [0-9]+ on [.[:digit:]]+ port [0-9]+$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd\[[0-9]+\]: Accepted publickey for [[:alnum:]]+ from [.[:digit:]]+ port [0-9]+ ssh2: [[:alnum:][:space:]]+$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd\[[0-9]+\]: pam_unix\(sshd:session\): session opened for user [[:alnum:]]+ by \(uid=[0-9]+\)$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd\[[0-9]+\]: pam_unix\(sshd:session\): session closed for user [[:alnum:]]+$
+
+# UFW firewall blocks - support both syslog and ISO 8601 formats
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ kernel: \[UFW [[:upper:]]+\].*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ kernel: \[[0-9.]+\] \[UFW [[:upper:]]+\].*$
+
+# Normal cron activity
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ \/USR\/SBIN\/CRON\[[0-9]+\]: \([[:alnum:]]+\) CMD \(.*\)$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ cron\[[0-9]+\]: \([[:alnum:]]+\) CMD \(.*\)$
+
+# Normal systemd activity
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ systemd\[[0-9]+\]: .*\.service: Succeeded\.$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ systemd\[[0-9]+\]: Started .*\.$
+
+# Normal postfix activity (for notifications)
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ postfix/smtp\[[0-9]+\]: [A-F0-9]+: to=<.*>, relay=.*$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ postfix/cleanup\[[0-9]+\]: [A-F0-9]+: message-id=<.*>$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ postfix/qmgr\[[0-9]+\]: [A-F0-9]+: from=<.*>, size=[0-9]+, nrcpt=[0-9]+.*$
+
+# Normal PHP-FPM activity (if using PHP)
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ php-fpm\[[0-9]+\]: .*pool [[:alnum:]]+.*$
+
+# Normal nginx activity
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ nginx\[[0-9]+\]: .*$
+
+# Normal Docker activity (if using Docker)
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ dockerd\[[0-9]+\]: .*$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ containerd\[[0-9]+\]: .*$
+
+EOF
+
+log_message "✅ Logcheck configured with application server ignore patterns"
 
 # Configure and initialize AIDE (Advanced Intrusion Detection Environment)
 if [ "$DOCKER_MODE" = "false" ]; then
@@ -4137,7 +4489,18 @@ echo ""
 echo "Configuration backup location: /var/backups/security-configs/"
 echo "Backup retention: 30 days"
 
-echo "===== 16. Setup complete! ====="
+echo "===== 16. Final configuration validation ====="
+log_message "Performing final configuration validation..."
+
+if validate_critical_configs; then
+    log_message "✅ All critical configurations validated successfully"
+else
+    log_error "⚠️ Some configuration validation issues detected"
+    log_message "Check $LOG_FILE for details"
+fi
+
+echo "===== 17. Setup complete! ====="
+log_message "Server setup completed successfully"
 echo "Server has been secured and Docker installed."
 echo "IMPORTANT: SSH is now running on port $SSH_PORT"
 echo "Use the following command to connect: ssh -p $SSH_PORT $USERNAME@your-server-ip"

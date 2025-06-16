@@ -1881,9 +1881,9 @@ cat > /usr/local/bin/bastionstat << EOF
 # This command can be run by the bastion user without entering a password
 
 echo "=== Bastion Host Status ==="
-echo "Hostname: $(hostname)"
-echo "Current Time: $(date)"
-echo "Uptime: $(uptime)"
+echo "Hostname: \$(hostname)"
+echo "Current Time: \$(date)"
+echo "Uptime: \$(uptime)"
 echo ""
 echo "Active SSH Sessions:"
 who -u
@@ -2996,7 +2996,7 @@ PARANOID=0
 # Reduce false positives for bastion hosts
 SYSLOGSUMMARY=0
 MAILASATTACHMENTS=0
-REBOOT=1
+REBOOT=0
 EOF
 
 # Disable hourly logcheck and ensure only daily runs
@@ -3151,8 +3151,10 @@ cat >> /etc/logcheck/ignore.d.server/bastion-ignore << EOF
 # Normal sudo activity (bastion users need sudo access)
 ^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sudo:\s+[[:alnum:]]+ : TTY=[[:alnum:]\/]+ ; PWD=[\/[:alnum:]._-]+ ; USER=root ; COMMAND=\/usr\/local\/bin\/.*$
 
-# UFW and fail2ban normal operations
+# UFW and fail2ban normal operations  
+# Support both traditional syslog and ISO 8601 timestamp formats
 ^\w{3} [ :0-9]{11} [._[:alnum:]-]+ kernel: \[UFW [[:upper:]]+\].*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ kernel: \[[0-9.]+\] \[UFW [[:upper:]]+\].*$
 
 # Normal cron activity
 ^\w{3} [ :0-9]{11} [._[:alnum:]-]+ \/USR\/SBIN\/CRON\[[0-9]+\]: \([[:alnum:]]+\) CMD \(.*\)$
