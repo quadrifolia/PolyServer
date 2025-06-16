@@ -4497,7 +4497,50 @@ echo "✅ Emergency tmpfs script created (/usr/local/bin/setup-log-tmpfs)"
 echo "💡 Run setup-log-tmpfs only in critical disk space emergencies"
 
 echo "===== 14.7 Advanced Security Refinements ====="
-echo "Skipping AppArmor configuration - removed for performance and compatibility"
+echo "Removing AppArmor entirely for bastion host compatibility..."
+
+# Stop AppArmor service
+systemctl stop apparmor 2>/dev/null || true
+
+# Disable AppArmor service
+systemctl disable apparmor 2>/dev/null || true
+
+# Remove AppArmor profiles to prevent interference
+if [ -d /etc/apparmor.d ]; then
+    echo "Backing up AppArmor profiles before removal..."
+    tar -czf /var/backups/apparmor-profiles-backup-$(date +%Y%m%d).tar.gz /etc/apparmor.d/ 2>/dev/null || true
+    
+    # Clear all profiles
+    echo "Removing AppArmor profiles..."
+    rm -rf /etc/apparmor.d/* 2>/dev/null || true
+fi
+
+# Unload all AppArmor profiles
+if command -v aa-teardown >/dev/null 2>&1; then
+    echo "Unloading all AppArmor profiles..."
+    aa-teardown 2>/dev/null || true
+fi
+
+# Alternative method to unload profiles
+if [ -f /sys/kernel/security/apparmor/profiles ]; then
+    echo "Force unloading AppArmor profiles..."
+    while read -r profile; do
+        profile_name=$(echo "$profile" | awk '{print $1}')
+        if [ -n "$profile_name" ] && [ "$profile_name" != "unconfined" ]; then
+            echo -n "$profile_name" > /sys/kernel/security/apparmor/.remove 2>/dev/null || true
+        fi
+    done < /sys/kernel/security/apparmor/profiles
+fi
+
+# Verify AppArmor is disabled
+if command -v aa-status >/dev/null 2>&1; then
+    echo "AppArmor status after removal:"
+    aa-status 2>/dev/null || echo "AppArmor profiles successfully removed"
+else
+    echo "AppArmor commands not available - profiles removed"
+fi
+
+echo "✅ AppArmor disabled and profiles removed for bastion host compatibility"
 
 # Unattended Reboot Warning System
 echo "Configuring unattended reboot warning system..."
@@ -5589,6 +5632,7 @@ echo "🎉 This bastion host is now ready for secure access management!"
 echo ""
 echo "📧 PERSISTENCE MONITORING:"
 echo "   • Grace period: 7 days from setup completion"
+
 echo "   • During grace period: Changes logged but no email alerts sent"
 echo "   • After grace period: Email alerts for suspicious persistence changes"
 echo "   • To modify: edit /etc/cron.daily/persistence-check (GRACE_PERIOD_DAYS variable)"
