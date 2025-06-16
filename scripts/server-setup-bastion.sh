@@ -2996,7 +2996,7 @@ PARANOID=0
 # Reduce false positives for bastion hosts
 SYSLOGSUMMARY=0
 MAILASATTACHMENTS=0
-REBOOT=1
+REBOOT=0
 EOF
 
 # Disable hourly logcheck and ensure only daily runs
