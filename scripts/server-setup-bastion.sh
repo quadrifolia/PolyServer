@@ -4496,230 +4496,6 @@ echo "✅ Emergency tmpfs script created (/usr/local/bin/setup-log-tmpfs)"
 echo "💡 Run setup-log-tmpfs only in critical disk space emergencies"
 
 # Fix AppArmor SSH profile to allow authorized_keys access
-echo "===== 15. Configuring AppArmor for SSH authorized_keys access ====="
-if [ -f /etc/apparmor.d/usr.sbin.sshd ]; then
-    echo "Updating AppArmor SSH profile for authorized_keys access..."
-    
-    # Backup original profile
-    cp /etc/apparmor.d/usr.sbin.sshd "/etc/apparmor.d/usr.sbin.sshd.backup-$(date +%Y%m%d)"
-    
-    # Add authorized_keys access if not already present
-    if ! grep -q "home.*authorized_keys" /etc/apparmor.d/usr.sbin.sshd; then
-        # Add authorized_keys permissions after the /etc/ssh/** r, line
-        sed -i '/\/etc\/ssh\/\*\* r,/a\  # Allow access to user authorized_keys files\n  /home/*/.ssh/authorized_keys r,\n  /home/*/.ssh/authorized_keys2 r,' /etc/apparmor.d/usr.sbin.sshd
-        
-        # Reload AppArmor profile
-        apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd && echo "✅ AppArmor SSH profile updated successfully"
-    else
-        echo "✅ AppArmor SSH profile already allows authorized_keys access"
-    fi
-else
-    echo "ℹ️  AppArmor SSH profile not found - SSH will use default permissions"
-fi
-
-echo "===== Final Configuration Validation ====="
-
-# Validate all configurations before final restart
-echo "Starting critical configuration validation..."
-if ! validate_critical_configs; then
-    log_error "Configuration validation failed - but continuing setup"
-    echo "⚠️ Some configurations may need manual verification"
-    echo "⚠️ SSH restart will proceed to maintain connectivity"
-    # Don't exit - continue with setup to maintain SSH connectivity
-else
-    echo "✅ All critical configurations validated successfully"
-fi
-
-# Restart SSH with new configuration
-echo "===== 16. Restarting SSH service ====="
-systemctl restart sshd
-
-# Final system checks
-echo "===== 17. Final system validation ====="
-echo "Checking SSH configuration..."
-sshd -t && echo "✅ SSH configuration is valid"
-
-echo "Checking firewall status..."
-ufw status | grep -q "Status: active" && echo "✅ Firewall is active"
-
-echo "Checking fail2ban status..."
-systemctl is-active --quiet fail2ban && echo "✅ Fail2ban is running"
-
-echo "Checking audit system..."
-systemctl is-active --quiet auditd && echo "✅ Audit system is running"
-
-echo "Checking Suricata IDS..."
-systemctl is-active --quiet suricata && echo "✅ Suricata IDS is running"
-
-echo ""
-echo "===== 16.1 Sending setup completion email ====="
-SETUP_DATE=$(date '+%Y-%m-%d_%H-%M-%S')
-SETUP_DATE_DISPLAY=$(date '+%Y-%m-%d %H:%M:%S')
-BASION_IP=$(hostname -I | awk '{print $1}')
-
-# Create setup completion email
-if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
-    MAIL_CONFIG_INFO="📧 MAIL CONFIGURATION:
-• External SMTP: $SMTP_SERVER:$SMTP_PORT
-• From Address: $SMTP_FROM_EMAIL
-• Notifications sent to: $LOGWATCH_EMAIL
-• TLS/STARTTLS: Enabled
-• All security alerts delivered via reliable SMTP"
-else
-    MAIL_CONFIG_INFO="📧 MAIL CONFIGURATION:
-• Local mail delivery only
-• Notifications stored in: /var/mail/root
-• Use 'bastionmail' command to read alerts
-• External SMTP not configured"
-fi
-
-cat > /tmp/bastion-setup-complete.txt << EOF
-Subject: ✅ Bastion Host Setup Complete - $HOSTNAME
-
-===============================================================
-BASTION HOST SETUP COMPLETION REPORT
-===============================================================
-
-Bastion Host: $HOSTNAME
-IP Address: $BASION_IP
-Setup Completed: $SETUP_DATE_DISPLAY
-SSH Port: $SSH_PORT
-User Account: $USERNAME
-
-🔐 SECURITY CONFIGURATION:
-• SSH Authentication: Key-only (passwords disabled)
-• Firewall: Restrictive UFW rules active
-• Intrusion Detection: Suricata IDS running
-• Brute Force Protection: Fail2ban configured
-• Comprehensive Audit: auditd monitoring active
-• Malware Protection: ClamAV + maldet scanning
-• Network Monitoring: Real-time traffic analysis
-• CPU Security: Microcode updates installed (active after reboot)
-
-🔗 CONNECTION COMMAND:
-ssh -p $SSH_PORT $USERNAME@$BASION_IP
-
-$MAIL_CONFIG_INFO
-
-📊 MONITORING & ALERTS:
-• Daily security reports via configured mail system
-• Hourly suspicious activity checks
-• Real-time SSH session monitoring
-• Automated malware scanning
-• Network intrusion detection
-
-📁 KEY FILES:
-• Configuration: /root/BASTION-README.md
-• SSH Config: /etc/ssh/sshd_config
-• Firewall Rules: ufw status numbered
-• Audit Rules: /etc/audit/rules.d/bastion-audit.rules
-• Monitoring Logs: /var/log/bastion-monitor.log
-
-🛠️ USEFUL COMMANDS:
-• sudo bastionstat - Show current bastion status (requires root)
-• sudo sshmon - Monitor SSH activity in real-time (requires root)
-• bastionmail - Read local mail (if using local delivery)
-• sudo fail2ban-client status - Check fail2ban status
-• sudo ufw status numbered - Show firewall rules
-• sudo ausearch -k user_commands - Show user command audit logs
-
-⚠️ NEXT STEPS:
-1. Test SSH access from your workstation
-2. Configure internal network access rules if needed
-3. Set up centralized logging if required
-4. Review and customize monitoring alerts
-5. Document connection procedures for authorized users
-
-🛡️ SECURITY FEATURES ACTIVE:
-• Multi-layer firewall protection
-• Real-time network monitoring
-• Comprehensive audit logging
-• Automated security scanning
-• Intrusion detection system
-• SSH session monitoring
-• File integrity monitoring
-
-🔐 ADVANCED SECURITY REFINEMENTS:
-• AppArmor profile enforcement verification and custom SSH profile
-• Unattended reboot warning system (wall messages + email alerts)
-• Suricata rules maintenance with weekly auto-updates
-• Enhanced OpenSSH HMAC tuning (SHA-1 completely disabled)
-• Systemd watchdog for fail2ban, suricata, and SSH services
-• Daily automated backup of all security configurations
-if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; then
-    echo "   • Netdata monitoring with optional Cloud integration"
-fi
-
-📁 CONFIGURATION BACKUP:
-• Location: /var/backups/security-configs/
-• Retention: 30 days
-• Daily automated backup with integrity verification
-
-This bastion host is now ready for secure access management\!
-
---
-Generated by PolyServer Bastion Setup
-$SETUP_DATE_DISPLAY
-EOF
-
-# Send setup completion email
-echo "===== Sending Setup Completion Report ====="
-
-if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
-    echo "Sending setup completion report via external SMTP..."
-    
-    # Create email with proper From header
-    cat > /tmp/final_setup_email.txt << EOF
-From: $SMTP_FROM_EMAIL
-To: $LOGWATCH_EMAIL
-Subject: ✅ Bastion Host Setup Complete - $HOSTNAME
-
-$(tail -n +3 /tmp/bastion-setup-complete.txt)
-EOF
-    
-    # Send to configured email address
-    /usr/sbin/sendmail -f "$SMTP_FROM_EMAIL" "$LOGWATCH_EMAIL" < /tmp/final_setup_email.txt
-    
-    echo "✅ Setup completion report sent to: $LOGWATCH_EMAIL"
-    echo "📧 Check your email inbox for the detailed setup report"
-    
-    # Check mail queue
-    sleep 3
-    QUEUE_STATUS=$(mailq)
-    if [[ "$QUEUE_STATUS" == "Mail queue is empty" ]]; then
-        echo "✅ Mail queue is empty - email sent successfully"
-    else
-        echo "⚠️ Mail queue status:"
-        mailq | head -n 5
-        echo "⚠️ If delivery fails, check your SMTP credentials and server settings"
-    fi
-    
-else
-    echo "Saving setup completion report to local mail..."
-    
-    # Send to local root account
-    /usr/sbin/sendmail root < /tmp/bastion-setup-complete.txt
-    
-    echo "✅ Setup completion report saved to local root mailbox"
-    echo "📧 Use 'bastionmail' command to read the setup report"
-    
-    # Check local delivery
-    sleep 3
-    if [ -f /var/mail/root ] || [ -f /var/spool/mail/root ]; then
-        echo "✅ Local mail delivery confirmed"
-    else
-        echo "⚠️ Local mail delivery may have issues - check postfix logs"
-    fi
-fi
-
-# Check recent postfix logs
-echo ""
-echo "Recent postfix logs:"
-tail -n 10 /var/log/mail.log 2>/dev/null || echo "Mail logs not yet available"
-
-# Also save a copy for local reference
-cp /tmp/bastion-setup-complete.txt "/root/bastion-setup-completion-$SETUP_DATE.txt"
-
 echo "===== 14.7 Advanced Security Refinements ====="
 
 # AppArmor Profile Enforcement Verification
@@ -4777,6 +4553,7 @@ if command -v aa-status >/dev/null 2>&1; then
   capability dac_override,
   capability dac_read_search,
   capability sys_tty_config,
+  capability sys_ptrace,
 
   /dev/log w,
   /dev/null rw,
@@ -4801,7 +4578,10 @@ if command -v aa-status >/dev/null 2>&1; then
   /proc/*/fd/ r,
   /proc/*/mounts r,
   /proc/*/stat r,
+  /proc/*/status r,
   /proc/sys/crypto/fips_enabled r,
+  /proc/sys/kernel/ngroups_max r,
+  /proc/version r,
 
   /run/sshd.pid w,
   /run/systemd/sessions/* rw,
@@ -4809,12 +4589,19 @@ if command -v aa-status >/dev/null 2>&1; then
 
   /usr/bin/** PUx,
   /bin/** PUx,
-  /usr/sbin/sshd mr,
+  /usr/sbin/sshd mrix,
 
   /var/log/auth.log w,
   /var/log/btmp w,
   /var/log/lastlog rw,
   /var/log/wtmp rw,
+
+  # Home directory access for SSH key authentication
+  /home/ r,
+  /home/*/ r,
+  /home/*/\.ssh/ r,
+  /home/*/\.ssh/authorized_keys r,
+  /home/*/\.ssh/authorized_keys\.* r,
 
   # Site-specific additions and overrides. See local/README for details.
   #include <local/usr.sbin.sshd>
@@ -4825,11 +4612,32 @@ EOF
         mkdir -p /etc/apparmor.d/local
         touch /etc/apparmor.d/local/usr.sbin.sshd
         
-        # Add a comment to the local file
+        # Add essential SSH access rules to the local file
         cat > /etc/apparmor.d/local/usr.sbin.sshd << EOF
 # Site-specific additions and overrides for /usr/sbin/sshd
-# This file can be used to add additional rules specific to this system
-# Format: standard AppArmor rules
+# Essential rules for SSH key authentication and bastion functionality
+
+# Home directory and SSH key access
+/home/ r,
+/home/*/ r,
+/home/*/\.ssh/ r,
+/home/*/\.ssh/authorized_keys r,
+/home/*/\.ssh/authorized_keys\.* r,
+
+# Additional SSH functionality
+/tmp/ssh-**/** rwk,
+/proc/sys/net/core/somaxconn r,
+/run/systemd/userdb/ r,
+/run/systemd/userdb/* r,
+
+# User shell access for bastion functionality
+/bin/bash ix,
+/bin/dash ix,
+/usr/bin/bash ix,
+/bin/sh ix,
+
+# SSH daemon re-execution capability
+/usr/sbin/sshd mrix,
 EOF
         
         # Load and enforce the SSH profile
@@ -5404,11 +5212,210 @@ echo "Creating initial security configuration backup..."
 
 echo "✅ Daily security configuration backup system configured"
 
-# Clean up temporary files
-rm -f /tmp/smtp_test_email.txt /tmp/final_setup_email.txt /tmp/bastion-setup-complete.txt
+echo "===== 15. Verifying AppArmor SSH profile and reloading ====="
+if [ -f /etc/apparmor.d/usr.sbin.sshd ] && [ -f /etc/apparmor.d/local/usr.sbin.sshd ]; then
+    echo "Verifying AppArmor SSH profile includes authorized_keys access..."
+    
+    # Check if local profile has the necessary rules
+    if grep -q "authorized_keys" /etc/apparmor.d/local/usr.sbin.sshd; then
+        echo "✅ AppArmor SSH local profile contains authorized_keys rules"
+        
+        # Reload AppArmor profile to ensure all rules are active
+        if apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd 2>/dev/null; then
+            echo "✅ AppArmor SSH profile reloaded successfully"
+        else
+            echo "⚠️ AppArmor SSH profile reload had issues - will be active after sshd restart"
+        fi
+        
+        # Restart SSH service to apply AppArmor changes immediately
+        echo "Restarting SSH service to apply AppArmor changes..."
+        systemctl restart ssh
+        
+        if systemctl is-active --quiet ssh; then
+            echo "✅ SSH service restarted successfully with AppArmor profile"
+        else
+            echo "⚠️ SSH service restart had issues - checking status..."
+            systemctl status ssh --no-pager -l
+        fi
+    else
+        echo "⚠️ AppArmor SSH local profile missing authorized_keys rules"
+        echo "   The profile was configured in section 14.7 - this should not happen"
+    fi
+else
+    echo "ℹ️  AppArmor SSH profile not found - SSH will use default permissions"
+fi
+
+echo "===== 15.1 SSH Authentication Troubleshooting and Validation ====="
+echo "Performing comprehensive SSH authentication validation..."
+
+# Check if SSH public key was provided and set up
+if [ -n "$SSH_PUBLIC_KEY" ] && [ -n "$USERNAME" ]; then
+    echo "Validating SSH key setup for user: $USERNAME"
+    
+    # Verify user exists
+    if id "$USERNAME" &>/dev/null; then
+        echo "✅ User $USERNAME exists"
+        
+        # Check home directory permissions
+        if [ -d "/home/$USERNAME" ]; then
+            HOME_PERMS=$(stat -c "%a" "/home/$USERNAME")
+            echo "Home directory permissions: $HOME_PERMS"
+            if [ "$HOME_PERMS" != "755" ]; then
+                echo "⚠️ Fixing home directory permissions..."
+                chmod 755 "/home/$USERNAME"
+                echo "✅ Home directory permissions corrected"
+            fi
+        fi
+        
+        # Check .ssh directory
+        if [ -d "/home/$USERNAME/.ssh" ]; then
+            SSH_DIR_PERMS=$(stat -c "%a" "/home/$USERNAME/.ssh")
+            SSH_DIR_OWNER=$(stat -c "%U:%G" "/home/$USERNAME/.ssh")
+            echo "SSH directory permissions: $SSH_DIR_PERMS, owner: $SSH_DIR_OWNER"
+            
+            if [ "$SSH_DIR_PERMS" != "700" ] || [ "$SSH_DIR_OWNER" != "$USERNAME:$USERNAME" ]; then
+                echo "⚠️ Fixing SSH directory permissions and ownership..."
+                chmod 700 "/home/$USERNAME/.ssh"
+                chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh"
+                echo "✅ SSH directory permissions and ownership corrected"
+            fi
+        else
+            echo "⚠️ SSH directory missing - recreating..."
+            mkdir -p "/home/$USERNAME/.ssh"
+            chmod 700 "/home/$USERNAME/.ssh"
+            chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh"
+            echo "✅ SSH directory created"
+        fi
+        
+        # Check authorized_keys file
+        if [ -f "/home/$USERNAME/.ssh/authorized_keys" ]; then
+            KEYS_PERMS=$(stat -c "%a" "/home/$USERNAME/.ssh/authorized_keys")
+            KEYS_OWNER=$(stat -c "%U:%G" "/home/$USERNAME/.ssh/authorized_keys")
+            KEYS_SIZE=$(stat -c "%s" "/home/$USERNAME/.ssh/authorized_keys")
+            echo "authorized_keys permissions: $KEYS_PERMS, owner: $KEYS_OWNER, size: $KEYS_SIZE bytes"
+            
+            if [ "$KEYS_PERMS" != "600" ] || [ "$KEYS_OWNER" != "$USERNAME:$USERNAME" ]; then
+                echo "⚠️ Fixing authorized_keys permissions and ownership..."
+                chmod 600 "/home/$USERNAME/.ssh/authorized_keys"
+                chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh/authorized_keys"
+                echo "✅ authorized_keys permissions and ownership corrected"
+            fi
+            
+            if [ "$KEYS_SIZE" -eq 0 ]; then
+                echo "⚠️ authorized_keys file is empty - recreating with provided key..."
+                echo "$SSH_PUBLIC_KEY" > "/home/$USERNAME/.ssh/authorized_keys"
+                chmod 600 "/home/$USERNAME/.ssh/authorized_keys"
+                chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh/authorized_keys"
+                echo "✅ authorized_keys file recreated with SSH key"
+            else
+                echo "✅ authorized_keys file contains $(wc -l < "/home/$USERNAME/.ssh/authorized_keys") key(s)"
+                # Show key fingerprint for verification
+                if command -v ssh-keygen >/dev/null 2>&1; then
+                    echo "Key fingerprints:"
+                    ssh-keygen -lf "/home/$USERNAME/.ssh/authorized_keys" 2>/dev/null || echo "   (unable to parse key fingerprint)"
+                fi
+            fi
+        else
+            echo "⚠️ authorized_keys file missing - creating with provided key..."
+            echo "$SSH_PUBLIC_KEY" > "/home/$USERNAME/.ssh/authorized_keys"
+            chmod 600 "/home/$USERNAME/.ssh/authorized_keys"
+            chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh/authorized_keys"
+            echo "✅ authorized_keys file created with SSH key"
+        fi
+        
+        # Test SSH configuration
+        echo "Testing SSH daemon configuration..."
+        if sshd -t 2>/dev/null; then
+            echo "✅ SSH daemon configuration is valid"
+        else
+            echo "⚠️ SSH daemon configuration test failed:"
+            sshd -t
+        fi
+        
+        # Check SSH service status
+        if systemctl is-active --quiet ssh; then
+            echo "✅ SSH service is running"
+        else
+            echo "⚠️ SSH service is not running - attempting to start..."
+            systemctl start ssh
+            if systemctl is-active --quiet ssh; then
+                echo "✅ SSH service started successfully"
+            else
+                echo "❌ Failed to start SSH service"
+                systemctl status ssh --no-pager -l
+            fi
+        fi
+        
+        # Check if SSH is listening on configured port
+        if ss -tlnp | grep -q ":$SSH_PORT "; then
+            echo "✅ SSH is listening on port $SSH_PORT"
+        else
+            echo "⚠️ SSH is not listening on port $SSH_PORT"
+            echo "Current listening ports:"
+            ss -tlnp | grep sshd || echo "   No SSH listening ports found"
+        fi
+        
+        # Check for AppArmor SSH execution issues
+        echo "Checking for AppArmor SSH issues..."
+        if dmesg | tail -20 | grep -q "apparmor.*sshd.*exec"; then
+            echo "⚠️ AppArmor may be blocking SSH execution - checking recent denials:"
+            dmesg | tail -10 | grep "apparmor.*sshd" || echo "   No recent AppArmor SSH denials found"
+        else
+            echo "✅ No AppArmor SSH execution blocks detected"
+        fi
+        
+        echo "✅ SSH authentication validation completed"
+        
+    else
+        echo "❌ User $USERNAME does not exist"
+    fi
+else
+    echo "⚠️ No SSH public key provided or username not set - manual SSH key setup required"
+fi
+
+echo "===== Final Configuration Validation ====="
+
+# Validate all configurations before final restart
+echo "Starting critical configuration validation..."
+if ! validate_critical_configs; then
+    log_error "Configuration validation failed - but continuing setup"
+    echo "⚠️ Some configurations may need manual verification"
+    echo "⚠️ SSH restart will proceed to maintain connectivity"
+    # Don't exit - continue with setup to maintain SSH connectivity
+else
+    echo "✅ All critical configurations validated successfully"
+fi
+
+# Restart SSH with new configuration
+echo "===== 16. Restarting SSH service ====="
+systemctl restart sshd
+
+# Final system checks
+echo "===== 17. Final system validation ====="
+echo "Checking SSH configuration..."
+sshd -t && echo "✅ SSH configuration is valid"
+
+echo "Checking firewall status..."
+ufw status | grep -q "Status: active" && echo "✅ Firewall is active"
+
+echo "Checking fail2ban status..."
+systemctl is-active --quiet fail2ban && echo "✅ Fail2ban is running"
+
+echo "Checking audit system..."
+systemctl is-active --quiet auditd && echo "✅ Audit system is running"
+
+echo "Checking Suricata IDS..."
+systemctl is-active --quiet suricata && echo "✅ Suricata IDS is running"
+
+echo ""
 
 echo "===== BASTION HOST SETUP COMPLETE ====="
 echo "========================================"
+
+# Set up date variables for final output and email
+SETUP_DATE=$(date '+%Y-%m-%d_%H-%M-%S')
+SETUP_DATE_DISPLAY=$(date '+%Y-%m-%d %H:%M:%S')
+
 echo ""
 echo "✅ Bastion host has been successfully configured with enhanced security"
 echo ""
@@ -5420,7 +5427,7 @@ echo "   • Firewall: Restrictive rules active"
 echo "   • Monitoring: Comprehensive logging and alerting enabled"
 echo ""
 echo "🔗 CONNECTION COMMAND:"
-echo "   ssh -p $SSH_PORT $USERNAME@$BASION_IP"
+echo "   ssh -p $SSH_PORT $USERNAME@$BASTION_IP"
 echo ""
 echo "📊 MONITORING:"
 if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
@@ -5464,6 +5471,8 @@ echo "   • Suricata rules maintenance with weekly auto-updates"
 echo "   • Enhanced OpenSSH HMAC tuning (SHA-1 completely disabled)"
 echo "   • Systemd watchdog for fail2ban, suricata, and SSH services"
 echo "   • Daily automated backup of all security configurations"
+echo "   • ClamAV antivirus with daily scans and real-time monitoring"
+echo "   • Linux Malware Detect (maldet) for enhanced malware protection"
 if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; then
     echo "   • Netdata monitoring with optional Cloud integration"
 fi
@@ -5474,21 +5483,248 @@ echo "   • Retention: 30 days"
 echo "   • Daily automated backup with integrity verification"
 echo ""
 echo "⚠️  NEXT STEPS:"
-echo "   1. Test SSH access from your workstation"
-echo "   2. Configure any internal network access rules as needed"
-echo "   3. Set up centralized logging if required"
-echo "   4. Review and customize monitoring alerts"
-echo "   5. Document connection procedures for authorized users"
-echo "   6. ⚠️  IMPORTANT: After 24-48 hours, update chkrootkit baseline:"
+echo "   1. Test SSH access from your workstation using: ssh -p $SSH_PORT $USERNAME@$BASTION_IP"
+if [ "$SSH_PORT" != "22" ]; then
+    echo "   2. ⚠️  CRITICAL: Once you confirm SSH access on port $SSH_PORT works, disable port 22:"
+    echo "      sudo ufw delete allow 22/tcp"
+    echo "      sudo ufw reload"
+    echo "   3. Configure any internal network access rules as needed"
+    echo "   4. Set up centralized logging if required"
+    echo "   5. Review and customize monitoring alerts"
+    echo "   6. Document connection procedures for authorized users"
+    echo "   7. ⚠️  IMPORTANT: After 24-48 hours, update chkrootkit baseline:"
+else
+    echo "   2. Configure any internal network access rules as needed"
+    echo "   3. Set up centralized logging if required"
+    echo "   4. Review and customize monitoring alerts"
+    echo "   5. Document connection procedures for authorized users"
+    echo "   6. ⚠️  IMPORTANT: After 24-48 hours, update chkrootkit baseline:"
+fi
 echo "      sudo cp -a -f /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected"
 if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
-    echo "   7. Check your email inbox for the setup completion report"
+    if [ "$SSH_PORT" != "22" ]; then
+        echo "   8. Check your email inbox for the setup completion report"
+    else
+        echo "   7. Check your email inbox for the setup completion report"
+    fi
 fi
+echo ""
+echo "🔧 SSH TROUBLESHOOTING (if connection fails):"
+echo "   If you get 'Permission denied (publickey)' error, check:"
+echo "   1. ssh -v -p $SSH_PORT $USERNAME@$BASTION_IP (verbose output)"
+echo "   2. sudo tail -f /var/log/auth.log (on server, in another session)"
+echo "   3. sudo ls -la /home/$USERNAME/.ssh/"
+echo "   4. sudo cat /home/$USERNAME/.ssh/authorized_keys"
+echo "   5. sudo aa-status | grep ssh (check AppArmor)"
+echo "   6. sudo systemctl status ssh"
+echo "   7. sudo dmesg | tail -20 | grep apparmor (check for blocks)"
+echo "   8. If 'rexec failed', reload: sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd"
+echo ""
+
+# Send setup completion email
+echo "===== Sending Setup Completion Report ====="
+
+# Create setup completion email
+if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
+    MAIL_CONFIG_INFO="📧 MAIL CONFIGURATION:
+• External SMTP: $SMTP_SERVER:$SMTP_PORT
+• From Address: $SMTP_FROM_EMAIL
+• Notifications sent to: $LOGWATCH_EMAIL
+• TLS/STARTTLS: Enabled
+• All security alerts delivered via reliable SMTP"
+else
+    MAIL_CONFIG_INFO="📧 MAIL CONFIGURATION:
+• Local mail delivery only
+• Notifications stored in: /var/mail/root
+• Use 'bastionmail' command to read alerts
+• External SMTP not configured"
+fi
+
+cat > /tmp/bastion-setup-complete.txt << EOF
+Subject: ✅ Bastion Host Setup Complete - $HOSTNAME
+
+===============================================================
+BASTION HOST SETUP COMPLETION REPORT
+===============================================================
+
+Bastion Host: $HOSTNAME
+IP Address: $BASTION_IP
+Setup Completed: $SETUP_DATE_DISPLAY
+SSH Port: $SSH_PORT
+User Account: $USERNAME
+
+🔐 SECURITY CONFIGURATION:
+• SSH Authentication: Key-only (passwords disabled)
+• Firewall: Restrictive UFW rules active
+• Intrusion Detection: Suricata IDS running
+• Brute Force Protection: Fail2ban configured
+• Comprehensive Audit: auditd monitoring active
+• Malware Protection: ClamAV + maldet scanning
+• Network Monitoring: Real-time traffic analysis
+• CPU Security: Microcode updates installed (active after reboot)
+
+🔗 CONNECTION COMMAND:
+ssh -p $SSH_PORT $USERNAME@$BASTION_IP
+
+$MAIL_CONFIG_INFO
+
+📊 MONITORING & ALERTS:
+• Daily security reports via configured mail system
+• Hourly suspicious activity checks
+• Real-time SSH session monitoring
+• Automated malware scanning
+• Network intrusion detection
+
+📁 KEY FILES:
+• Configuration: /root/BASTION-README.md
+• SSH Config: /etc/ssh/sshd_config
+• Firewall Rules: ufw status numbered
+• Audit Rules: /etc/audit/rules.d/bastion-audit.rules
+• Monitoring Logs: /var/log/bastion-monitor.log
+
+🛠️ USEFUL COMMANDS:
+• sudo bastionstat - Show current bastion status (requires root)
+• sudo sshmon - Monitor SSH activity in real-time (requires root)
+• bastionmail - Read local mail (if using local delivery)
+• sudo fail2ban-client status - Check fail2ban status
+• sudo ufw status numbered - Show firewall rules
+• sudo ausearch -k user_commands - Show user command audit logs
+
+⚠️ NEXT STEPS:
+1. Test SSH access from your workstation using: ssh -p $SSH_PORT $USERNAME@$BASTION_IP
+
+🛡️ SECURITY FEATURES ACTIVE:
+• Multi-layer firewall protection
+• Real-time network monitoring
+• Comprehensive audit logging
+• Automated security scanning
+• Intrusion detection system
+• SSH session monitoring
+• File integrity monitoring
+
+🔐 ADVANCED SECURITY REFINEMENTS:
+• AppArmor profile enforcement verification and custom SSH profile
+• Unattended reboot warning system (wall messages + email alerts)
+• Suricata rules maintenance with weekly auto-updates
+• Enhanced OpenSSH HMAC tuning (SHA-1 completely disabled)
+• Systemd watchdog for fail2ban, suricata, and SSH services
+• Daily automated backup of all security configurations
+• ClamAV antivirus with daily scans and real-time monitoring
+• Linux Malware Detect (maldet) for enhanced malware protection
+EOF
+
+# Add SSH port warning and complete next steps to email
+if [ "$SSH_PORT" != "22" ]; then
+    cat >> /tmp/bastion-setup-complete.txt << EOF
+2. ⚠️  CRITICAL: Once you confirm SSH access on port $SSH_PORT works, disable port 22:
+   sudo ufw delete allow 22/tcp
+   sudo ufw reload
+3. Configure internal network access rules if needed
+4. Set up centralized logging if required
+5. Review and customize monitoring alerts
+6. Document connection procedures for authorized users
+EOF
+else
+    cat >> /tmp/bastion-setup-complete.txt << EOF
+2. Configure internal network access rules if needed
+3. Set up centralized logging if required
+4. Review and customize monitoring alerts
+5. Document connection procedures for authorized users
+EOF
+fi
+
+if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; then
+    echo "   • Netdata monitoring with optional Cloud integration" >> /tmp/bastion-setup-complete.txt
+fi
+
+cat >> /tmp/bastion-setup-complete.txt << EOF
+
+📁 CONFIGURATION BACKUP:
+• Location: /var/backups/security-configs/
+• Retention: 30 days
+• Daily automated backup with integrity verification
+
+🔧 SSH TROUBLESHOOTING (if connection fails):
+If you get 'Permission denied (publickey)' error, check:
+1. ssh -v -p $SSH_PORT $USERNAME@$BASTION_IP (verbose output)
+2. sudo tail -f /var/log/auth.log (on server, in another session)
+3. sudo ls -la /home/$USERNAME/.ssh/
+4. sudo cat /home/$USERNAME/.ssh/authorized_keys
+5. sudo aa-status | grep ssh (check AppArmor)
+6. sudo systemctl status ssh
+7. sudo dmesg | tail -20 | grep apparmor (check for blocks)
+8. If 'rexec failed', reload: sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd
+
+This bastion host is now ready for secure access management!
+
+--
+Generated by PolyServer Bastion Setup
+$SETUP_DATE_DISPLAY
+EOF
+
+if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
+    echo "Sending setup completion report via external SMTP..."
+    
+    # Create email with proper From header
+    cat > /tmp/final_setup_email.txt << EOF
+From: $SMTP_FROM_EMAIL
+To: $LOGWATCH_EMAIL
+Subject: ✅ Bastion Host Setup Complete - $HOSTNAME
+
+$(tail -n +3 /tmp/bastion-setup-complete.txt)
+EOF
+    
+    # Send to configured email address
+    /usr/sbin/sendmail -f "$SMTP_FROM_EMAIL" "$LOGWATCH_EMAIL" < /tmp/final_setup_email.txt
+    
+    echo "✅ Setup completion report sent to: $LOGWATCH_EMAIL"
+    echo "📧 Check your email inbox for the detailed setup report"
+    
+    # Check mail queue
+    sleep 3
+    QUEUE_STATUS=$(mailq)
+    if [[ "$QUEUE_STATUS" == "Mail queue is empty" ]]; then
+        echo "✅ Mail queue is empty - email sent successfully"
+    else
+        echo "⚠️ Mail queue status:"
+        mailq | head -n 5
+        echo "⚠️ If delivery fails, check your SMTP credentials and server settings"
+    fi
+    
+else
+    echo "Saving setup completion report to local mail..."
+    
+    # Send to local root account
+    /usr/sbin/sendmail root < /tmp/bastion-setup-complete.txt
+    
+    echo "✅ Setup completion report saved to local root mailbox"
+    echo "📧 Use 'bastionmail' command to read the setup report"
+    
+    # Check local delivery
+    sleep 3
+    if [ -f /var/mail/root ] || [ -f /var/spool/mail/root ]; then
+        echo "✅ Local mail delivery confirmed"
+    else
+        echo "⚠️ Local mail delivery may have issues - check postfix logs"
+    fi
+fi
+
+# Check recent postfix logs
+echo ""
+echo "Recent postfix logs:"
+tail -n 10 /var/log/mail.log 2>/dev/null || echo "Mail logs not yet available"
+
+# Also save a copy for local reference
+cp /tmp/bastion-setup-complete.txt "/root/bastion-setup-completion-$SETUP_DATE.txt"
+
 echo ""
 
 # Clear any sensitive variables from memory
 unset SMTP_PASSWORD
 unset SSH_PUBLIC_KEY
+
+# Clean up temporary files
+rm -f /tmp/smtp_test_email.txt /tmp/final_setup_email.txt /tmp/bastion-setup-complete.txt
 
 # Create setup completion marker for persistence monitoring grace period
 touch /var/lib/bastion-setup-complete
