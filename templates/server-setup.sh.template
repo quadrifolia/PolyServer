@@ -1733,6 +1733,52 @@ sed -i "s/^SENDMAILTO=.*/SENDMAILTO=\"${LOGWATCH_EMAIL:-root}\"/" /etc/logcheck/
 sed -i 's/^CRON_DAILY_RUN=.*/CRON_DAILY_RUN="true"/' /etc/logcheck/logcheck.conf
 sed -i 's/^CRON_HOURLY_RUN=.*/CRON_HOURLY_RUN="false"/' /etc/logcheck/logcheck.conf
 
+# Remove hourly logcheck cron job if it exists
+rm -f /etc/cron.hourly/logcheck 2>/dev/null || true
+
+# Add ignore patterns for common application server activity
+log_message "Adding logcheck ignore patterns for UFW and common server activity..."
+cat >> /etc/logcheck/ignore.d.server/application-server-ignore << EOF
+# Application server specific ignore patterns
+# Ignore normal server activity patterns that are not security issues
+
+# Normal SSH connection patterns
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd\[[0-9]+\]: Connection from [.[:digit:]]+ port [0-9]+ on [.[:digit:]]+ port [0-9]+$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd\[[0-9]+\]: Accepted publickey for [[:alnum:]]+ from [.[:digit:]]+ port [0-9]+ ssh2: [[:alnum:][:space:]]+$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd\[[0-9]+\]: pam_unix\(sshd:session\): session opened for user [[:alnum:]]+ by \(uid=[0-9]+\)$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd\[[0-9]+\]: pam_unix\(sshd:session\): session closed for user [[:alnum:]]+$
+
+# UFW firewall blocks - support both syslog and ISO 8601 formats
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ kernel: \[UFW [[:upper:]]+\].*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ kernel: \[[0-9.]+\] \[UFW [[:upper:]]+\].*$
+
+# Normal cron activity
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ \/USR\/SBIN\/CRON\[[0-9]+\]: \([[:alnum:]]+\) CMD \(.*\)$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ cron\[[0-9]+\]: \([[:alnum:]]+\) CMD \(.*\)$
+
+# Normal systemd activity
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ systemd\[[0-9]+\]: .*\.service: Succeeded\.$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ systemd\[[0-9]+\]: Started .*\.$
+
+# Normal postfix activity (for notifications)
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ postfix/smtp\[[0-9]+\]: [A-F0-9]+: to=<.*>, relay=.*$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ postfix/cleanup\[[0-9]+\]: [A-F0-9]+: message-id=<.*>$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ postfix/qmgr\[[0-9]+\]: [A-F0-9]+: from=<.*>, size=[0-9]+, nrcpt=[0-9]+.*$
+
+# Normal PHP-FPM activity (if using PHP)
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ php-fpm\[[0-9]+\]: .*pool [[:alnum:]]+.*$
+
+# Normal nginx activity
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ nginx\[[0-9]+\]: .*$
+
+# Normal Docker activity (if using Docker)
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ dockerd\[[0-9]+\]: .*$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ containerd\[[0-9]+\]: .*$
+
+EOF
+
+log_message "✅ Logcheck configured with application server ignore patterns"
+
 # Configure and initialize AIDE (Advanced Intrusion Detection Environment)
 if [ "$DOCKER_MODE" = "false" ]; then
     echo "Configuring AIDE for file integrity monitoring..."

@@ -3151,8 +3151,10 @@ cat >> /etc/logcheck/ignore.d.server/bastion-ignore << EOF
 # Normal sudo activity (bastion users need sudo access)
 ^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sudo:\s+[[:alnum:]]+ : TTY=[[:alnum:]\/]+ ; PWD=[\/[:alnum:]._-]+ ; USER=root ; COMMAND=\/usr\/local\/bin\/.*$
 
-# UFW and fail2ban normal operations
+# UFW and fail2ban normal operations  
+# Support both traditional syslog and ISO 8601 timestamp formats
 ^\w{3} [ :0-9]{11} [._[:alnum:]-]+ kernel: \[UFW [[:upper:]]+\].*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ kernel: \[[0-9.]+\] \[UFW [[:upper:]]+\].*$
 
 # Normal cron activity
 ^\w{3} [ :0-9]{11} [._[:alnum:]-]+ \/USR\/SBIN\/CRON\[[0-9]+\]: \([[:alnum:]]+\) CMD \(.*\)$
