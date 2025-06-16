@@ -1881,9 +1881,9 @@ cat > /usr/local/bin/bastionstat << EOF
 # This command can be run by the bastion user without entering a password
 
 echo "=== Bastion Host Status ==="
-echo "Hostname: $(hostname)"
-echo "Current Time: $(date)"
-echo "Uptime: $(uptime)"
+echo "Hostname: \$(hostname)"
+echo "Current Time: \$(date)"
+echo "Uptime: \$(uptime)"
 echo ""
 echo "Active SSH Sessions:"
 who -u
