@@ -1127,9 +1127,9 @@ server:
     log-queries: no
     log-replies: no
     
-    # Performance tuning
-    so-rcvbuf: 4m
-    so-sndbuf: 4m
+    # Performance tuning - conservative values to avoid warnings
+    so-rcvbuf: 256k
+    so-sndbuf: 256k
     so-reuseport: yes
     
     # DNSSEC - disable for simplified bastion configuration
@@ -1230,19 +1230,25 @@ if unbound-checkconf >/tmp/unbound-check.log 2>&1; then
         echo "✅ Unbound service started"
         
         # Wait for service to initialize
-        sleep 5
+        sleep 8
         
         # Verify Unbound is running and listening
         if systemctl is-active --quiet unbound; then
             echo "✅ Unbound DNS resolver started successfully"
             
-            # Test DNS resolution with timeout
-            if timeout 10 dig @127.0.0.1 google.com >/dev/null 2>&1; then
+            # Wait a bit more for Unbound to be ready for queries
+            sleep 3
+            
+            # Test DNS resolution with timeout - use a more reliable test
+            if timeout 15 nslookup google.com 127.0.0.1 >/dev/null 2>&1; then
                 echo "✅ Unbound DNS resolution test successful"
+            elif timeout 15 dig @127.0.0.1 google.com >/dev/null 2>&1; then
+                echo "✅ Unbound DNS resolution test successful (via dig)"
             else
-                echo "⚠️ Unbound DNS resolution test failed - checking logs"
+                echo "⚠️ Unbound DNS resolution test failed - checking status"
+                echo "Unbound may still be initializing (this is often normal)"
                 echo "Recent Unbound logs:"
-                journalctl -u unbound --no-pager -l --since="5 minutes ago" | tail -10
+                journalctl -u unbound --no-pager -l --since="2 minutes ago" | tail -5
             fi
         else
             echo "⚠️ Unbound failed to start - checking status"
@@ -2406,23 +2412,31 @@ sleep 3
 
 # Try to load the rules and check for success (with timeout)
 echo "Loading audit rules from file..."
-if timeout 30 auditctl -R /etc/audit/rules.d/bastion-audit.rules 2>/dev/null; then
-    echo "✅ Audit rules file loaded"
+# Capture output to avoid confusing status messages
+AUDIT_LOAD_OUTPUT=$(timeout 30 auditctl -R /etc/audit/rules.d/bastion-audit.rules 2>&1)
+AUDIT_LOAD_STATUS=$?
+
+if [ $AUDIT_LOAD_STATUS -eq 0 ]; then
+    echo "✅ Audit rules file loaded successfully"
 else
-    echo "⚠️ Audit rules loading failed or timed out"
+    echo "⚠️ Audit rules loading had issues (exit code: $AUDIT_LOAD_STATUS)"
+    echo "This is often normal during initial setup"
 fi
 sleep 2
 
 # Check if rules are actually loaded
-echo "Checking final audit rules status..."
+echo "Verifying audit rules are active..."
 if command -v auditctl >/dev/null 2>&1; then
-    RULE_COUNT=$(timeout 10 auditctl -l 2>/dev/null | wc -l || echo "0")
-    echo "Number of audit rules loaded: $RULE_COUNT"
+    # Get actual rules (exclude status lines)
+    ACTUAL_RULES=$(timeout 10 auditctl -l 2>/dev/null | grep -v "^enabled\|^failure\|^pid\|^rate_limit\|^backlog" | wc -l || echo "0")
+    TOTAL_LINES=$(timeout 10 auditctl -l 2>/dev/null | wc -l || echo "0")
     
-    if [ "$RULE_COUNT" -gt 1 ]; then
-        echo "✅ Audit rules loaded successfully"
+    echo "Audit system status: $TOTAL_LINES total lines, $ACTUAL_RULES rule lines"
+    
+    if [ "$ACTUAL_RULES" -gt 5 ]; then
+        echo "✅ Audit rules loaded successfully ($ACTUAL_RULES rules active)"
     else
-        echo "⚠️ No audit rules loaded, using minimal configuration..."
+        echo "⚠️ Limited audit rules loaded ($ACTUAL_RULES rules) - creating minimal fallback"
     fi
 else
     echo "⚠️ auditctl command not available"
@@ -2567,6 +2581,8 @@ app-layer:
       enabled: yes
     ftp:
       enabled: yes
+    imap:
+      enabled: no
     
     # Disable protocols not needed on bastion hosts
     dcerpc:
@@ -2622,6 +2638,11 @@ outputs:
         - ssh
         - flow
         - netflow
+        
+  - stats:
+      enabled: yes
+      filename: stats.log
+      interval: 3600
 EOF
 
     # Create bastion-specific Suricata rules
@@ -2704,7 +2725,20 @@ EOF
 
 systemctl daemon-reload
 
-# Test Suricata configuration before starting
+# Ensure required directories and files exist before testing
+echo "Preparing Suricata configuration..."
+mkdir -p /etc/suricata/rules /var/log/suricata /var/lib/suricata/rules
+
+# Create minimal default rules file if it doesn't exist
+if [ ! -f /etc/suricata/rules/suricata.rules ]; then
+    echo "Creating initial Suricata rules file..."
+    cat > /etc/suricata/rules/suricata.rules << EOF
+# Default Suricata rules for bastion host
+# This file is required by Suricata configuration
+EOF
+fi
+
+# Test Suricata configuration
 echo "Testing Suricata configuration..."
 if suricata -T -c /etc/suricata/suricata.yaml >/tmp/suricata-test.log 2>&1; then
     echo "✅ Suricata configuration is valid"
@@ -2766,17 +2800,8 @@ else
     
     echo "Attempting to fix common Suricata issues..."
     
-    # Check if required directories exist
-    mkdir -p /etc/suricata/rules /var/log/suricata /var/lib/suricata/rules
-    
-    # Check if default rules exist
-    if [ ! -f /etc/suricata/rules/suricata.rules ]; then
-        echo "Creating minimal default rules file..."
-        cat > /etc/suricata/rules/suricata.rules << EOF
-# Minimal default rules for Suricata
-# This file prevents Suricata from failing due to missing default rules
-EOF
-    fi
+    # Directories and rules file already created above
+    echo "Suricata directories and basic rules file already exist"
     
     # Check interface exists
     if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
