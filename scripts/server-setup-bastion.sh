@@ -803,7 +803,7 @@ fi
 # Full package list for production bastion hosts
 apt-get install -y fail2ban unattended-upgrades apt-listchanges \
     logwatch clamav clamav-daemon lm-sensors \
-    rkhunter chkrootkit unbound apparmor apparmor-utils \
+    rkhunter chkrootkit unbound \
     suricata tcpdump netcat-openbsd mailutils postfix
 
 echo "===== 6.0.1 Configuring ClamAV with resource optimization for bastion hosts ====="
@@ -3956,7 +3956,7 @@ echo "Currently enabled services:"
 ENABLED_SERVICES=$(systemctl list-unit-files --state=enabled --type=service | grep enabled | awk '{print $1}' | grep -v '@')
 
 # Define whitelist of allowed services for bastion hosts
-ALLOWED_SERVICES="ssh sshd rsyslog systemd-journald systemd-logind systemd-networkd systemd-resolved systemd-timesyncd cron systemd-cron-daily.timer systemd-cron-hourly.timer systemd-cron-monthly.timer systemd-cron-weekly.timer postfix fail2ban ufw auditd suricata unbound apparmor systemd-tmpfiles-setup systemd-tmpfiles-clean.timer unattended-upgrades apt-daily.timer apt-daily-upgrade.timer bastion-monitor.timer disk-space-protection.timer logrotate.timer man-db.timer"
+ALLOWED_SERVICES="ssh sshd rsyslog systemd-journald systemd-logind systemd-networkd systemd-resolved systemd-timesyncd cron systemd-cron-daily.timer systemd-cron-hourly.timer systemd-cron-monthly.timer systemd-cron-weekly.timer postfix fail2ban ufw auditd suricata unbound systemd-tmpfiles-setup systemd-tmpfiles-clean.timer unattended-upgrades apt-daily.timer apt-daily-upgrade.timer bastion-monitor.timer disk-space-protection.timer logrotate.timer man-db.timer"
 
 echo "Checking for unexpected enabled services..."
 UNEXPECTED_SERVICES=""
@@ -4495,160 +4495,8 @@ chmod +x /usr/local/bin/setup-log-tmpfs
 echo "✅ Emergency tmpfs script created (/usr/local/bin/setup-log-tmpfs)"
 echo "💡 Run setup-log-tmpfs only in critical disk space emergencies"
 
-# Fix AppArmor SSH profile to allow authorized_keys access
 echo "===== 14.7 Advanced Security Refinements ====="
-
-# AppArmor Profile Enforcement Verification
-echo "Verifying AppArmor profile enforcement..."
-if command -v aa-status >/dev/null 2>&1; then
-    echo "Current AppArmor status:"
-    aa-status
-    
-    echo "DEBUG: Checking AppArmor profile status..."
-    # Check profiles status with timeout protection
-    echo "DEBUG: Getting complain profiles..."
-    PROFILES_COMPLAIN=$(timeout 10 aa-status --complain 2>/dev/null | wc -l 2>/dev/null || echo "0")
-    echo "DEBUG: PROFILES_COMPLAIN=$PROFILES_COMPLAIN"
-    echo "DEBUG: Getting enforce profiles..."
-    PROFILES_ENFORCE=$(timeout 10 aa-status --enforce 2>/dev/null | wc -l 2>/dev/null || echo "0")
-    echo "DEBUG: PROFILES_ENFORCE=$PROFILES_ENFORCE"
-    
-    if [ "$PROFILES_COMPLAIN" -gt 0 ]; then
-        echo "⚠️ $PROFILES_COMPLAIN AppArmor profiles in complain mode - consider enforcing:"
-        timeout 10 aa-status --complain 2>/dev/null || echo "   (unable to list complain profiles)"
-        echo "   To enforce: sudo aa-enforce /etc/apparmor.d/<profile>"
-    fi
-    
-    if [ "$PROFILES_ENFORCE" -gt 0 ]; then
-        echo "✅ $PROFILES_ENFORCE AppArmor profiles in enforce mode"
-    fi
-    
-    echo "DEBUG: AppArmor status check completed"
-    
-    # Create custom SSH profile for enhanced protection
-    echo "Creating AppArmor SSH profile..."
-    echo "DEBUG: Starting SSH profile creation..."
-    if [ "$EUID" -ne 0 ]; then
-        echo "⚠️ Not running as root - cannot create AppArmor profile"
-        echo "   Profile would be created at: /etc/apparmor.d/usr.sbin.sshd"
-    else
-        cat > /etc/apparmor.d/usr.sbin.sshd << EOF
-#include <tunables/global>
-
-/usr/sbin/sshd {
-  #include <abstractions/authentication>
-  #include <abstractions/base>
-  #include <abstractions/consoles>
-  #include <abstractions/nameservice>
-  #include <abstractions/wutmp>
-
-  capability sys_chroot,
-  capability sys_resource,
-  capability chown,
-  capability fowner,
-  capability kill,
-  capability setgid,
-  capability setuid,
-  capability audit_write,
-  capability dac_override,
-  capability dac_read_search,
-  capability sys_tty_config,
-  capability sys_ptrace,
-
-  /dev/log w,
-  /dev/null rw,
-  /dev/ptmx rw,
-  /dev/pts/* rw,
-  /dev/tty rw,
-  /dev/urandom r,
-
-  /etc/default/locale r,
-  /etc/environment r,
-  /etc/group r,
-  /etc/hosts.allow r,
-  /etc/hosts.deny r,
-  /etc/ld.so.cache r,
-  /etc/localtime r,
-  /etc/motd r,
-  /etc/passwd r,
-  /etc/security/** r,
-  /etc/shadow r,
-  /etc/ssh/** r,
-
-  /proc/*/fd/ r,
-  /proc/*/mounts r,
-  /proc/*/stat r,
-  /proc/*/status r,
-  /proc/sys/crypto/fips_enabled r,
-  /proc/sys/kernel/ngroups_max r,
-  /proc/version r,
-
-  /run/sshd.pid w,
-  /run/systemd/sessions/* rw,
-  /run/utmp rw,
-
-  /usr/bin/** PUx,
-  /bin/** PUx,
-  /usr/sbin/sshd mrix,
-
-  /var/log/auth.log w,
-  /var/log/btmp w,
-  /var/log/lastlog rw,
-  /var/log/wtmp rw,
-
-  # Home directory access for SSH key authentication
-  /home/ r,
-  /home/*/ r,
-  /home/*/\.ssh/ r,
-  /home/*/\.ssh/authorized_keys r,
-  /home/*/\.ssh/authorized_keys\.* r,
-
-  # Site-specific additions and overrides. See local/README for details.
-  #include <local/usr.sbin.sshd>
-}
-EOF
-        
-        # Create the local include directory and file to prevent parser errors
-        mkdir -p /etc/apparmor.d/local
-        touch /etc/apparmor.d/local/usr.sbin.sshd
-        
-        # Add essential SSH access rules to the local file
-        cat > /etc/apparmor.d/local/usr.sbin.sshd << EOF
-# Site-specific additions and overrides for /usr/sbin/sshd
-# Essential rules for SSH key authentication and bastion functionality
-
-# Home directory and SSH key access
-/home/ r,
-/home/*/ r,
-/home/*/\.ssh/ r,
-/home/*/\.ssh/authorized_keys r,
-/home/*/\.ssh/authorized_keys\.* r,
-
-# Additional SSH functionality
-/tmp/ssh-**/** rwk,
-/proc/sys/net/core/somaxconn r,
-/run/systemd/userdb/ r,
-/run/systemd/userdb/* r,
-
-# User shell access for bastion functionality
-/bin/bash ix,
-/bin/dash ix,
-/usr/bin/bash ix,
-/bin/sh ix,
-
-# SSH daemon re-execution capability
-/usr/sbin/sshd mrix,
-EOF
-        
-        # Load and enforce the SSH profile
-        apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd 2>/dev/null || echo "AppArmor SSH profile created (will be active after sshd restart)"
-        echo "✅ AppArmor SSH profile created and loaded"
-    fi
-else
-    echo "⚠️ AppArmor not available or not installed"
-fi
-
-echo "DEBUG: AppArmor section completed, moving to unattended reboot system"
+echo "Skipping AppArmor configuration - removed for performance and compatibility"
 
 # Unattended Reboot Warning System
 echo "Configuring unattended reboot warning system..."
@@ -4826,20 +4674,6 @@ ProtectHome=yes
 ReadWritePaths=/var/log /var/run /run
 EOF
 
-    # AppArmor service watchdog - handle profile loading delays
-    mkdir -p /etc/systemd/system/apparmor.service.d
-    cat > /etc/systemd/system/apparmor.service.d/watchdog.conf << EOF
-[Service]
-# AppArmor profile loading can take time on large systems
-WatchdogSec=300
-Restart=on-failure
-RestartSec=20
-StartLimitInterval=900
-StartLimitBurst=2
-
-# Standard priority for security service
-OOMScoreAdjust=-50
-EOF
 
     # Unbound DNS watchdog - essential for bastion name resolution
     mkdir -p /etc/systemd/system/unbound.service.d
@@ -4868,7 +4702,6 @@ echo "   • SSH: 180s timeout, highest priority (OOM -500, Nice -10)"
 echo "   • fail2ban: 300s timeout, high priority (OOM -100, Nice -5)"
 echo "   • Suricata: 600s timeout, lower priority (OOM +200, Nice +5)"
 echo "   • Unbound: 120s timeout, medium priority (OOM +100)"
-echo "   • AppArmor: 300s timeout, medium-high priority (OOM -50)"
 echo ""
 echo "Smart watchdog protects critical services during resource contention"
 
@@ -5151,7 +4984,6 @@ tar -czf "\$BACKUP_FILE" \
     /etc/ssh \
     /etc/audit \
     /etc/ufw \
-    /etc/apparmor.d \
     /etc/cron.d \
     /etc/cron.daily \
     /etc/cron.hourly \
@@ -5212,37 +5044,13 @@ echo "Creating initial security configuration backup..."
 
 echo "✅ Daily security configuration backup system configured"
 
-echo "===== 15. Verifying AppArmor SSH profile and reloading ====="
-if [ -f /etc/apparmor.d/usr.sbin.sshd ] && [ -f /etc/apparmor.d/local/usr.sbin.sshd ]; then
-    echo "Verifying AppArmor SSH profile includes authorized_keys access..."
-    
-    # Check if local profile has the necessary rules
-    if grep -q "authorized_keys" /etc/apparmor.d/local/usr.sbin.sshd; then
-        echo "✅ AppArmor SSH local profile contains authorized_keys rules"
-        
-        # Reload AppArmor profile to ensure all rules are active
-        if apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd 2>/dev/null; then
-            echo "✅ AppArmor SSH profile reloaded successfully"
-        else
-            echo "⚠️ AppArmor SSH profile reload had issues - will be active after sshd restart"
-        fi
-        
-        # Restart SSH service to apply AppArmor changes immediately
-        echo "Restarting SSH service to apply AppArmor changes..."
-        systemctl restart ssh
-        
-        if systemctl is-active --quiet ssh; then
-            echo "✅ SSH service restarted successfully with AppArmor profile"
-        else
-            echo "⚠️ SSH service restart had issues - checking status..."
-            systemctl status ssh --no-pager -l
-        fi
-    else
-        echo "⚠️ AppArmor SSH local profile missing authorized_keys rules"
-        echo "   The profile was configured in section 14.7 - this should not happen"
-    fi
+echo "===== 15. SSH service verification ====="
+echo "Verifying SSH service is running properly..."
+if systemctl is-active --quiet ssh; then
+    echo "✅ SSH service is running"
 else
-    echo "ℹ️  AppArmor SSH profile not found - SSH will use default permissions"
+    echo "⚠️ SSH service issues detected - checking status..."
+    systemctl status ssh --no-pager -l
 fi
 
 echo "===== 15.1 SSH Authentication Troubleshooting and Validation ====="
@@ -5355,14 +5163,6 @@ if [ -n "$SSH_PUBLIC_KEY" ] && [ -n "$USERNAME" ]; then
             ss -tlnp | grep sshd || echo "   No SSH listening ports found"
         fi
         
-        # Check for AppArmor SSH execution issues
-        echo "Checking for AppArmor SSH issues..."
-        if dmesg | tail -20 | grep -q "apparmor.*sshd.*exec"; then
-            echo "⚠️ AppArmor may be blocking SSH execution - checking recent denials:"
-            dmesg | tail -10 | grep "apparmor.*sshd" || echo "   No recent AppArmor SSH denials found"
-        else
-            echo "✅ No AppArmor SSH execution blocks detected"
-        fi
         
         echo "✅ SSH authentication validation completed"
         
@@ -5465,7 +5265,6 @@ else
 fi
 echo ""
 echo "🔐 ADVANCED SECURITY REFINEMENTS:"
-echo "   • AppArmor profile enforcement verification and custom SSH profile"
 echo "   • Unattended reboot warning system (wall messages + email alerts)"
 echo "   • Suricata rules maintenance with weekly auto-updates"
 echo "   • Enhanced OpenSSH HMAC tuning (SHA-1 completely disabled)"
@@ -5515,10 +5314,7 @@ echo "   1. ssh -v -p $SSH_PORT $USERNAME@$BASTION_IP (verbose output)"
 echo "   2. sudo tail -f /var/log/auth.log (on server, in another session)"
 echo "   3. sudo ls -la /home/$USERNAME/.ssh/"
 echo "   4. sudo cat /home/$USERNAME/.ssh/authorized_keys"
-echo "   5. sudo aa-status | grep ssh (check AppArmor)"
 echo "   6. sudo systemctl status ssh"
-echo "   7. sudo dmesg | tail -20 | grep apparmor (check for blocks)"
-echo "   8. If 'rexec failed', reload: sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd"
 echo ""
 
 # Send setup completion email
@@ -5603,7 +5399,6 @@ $MAIL_CONFIG_INFO
 • File integrity monitoring
 
 🔐 ADVANCED SECURITY REFINEMENTS:
-• AppArmor profile enforcement verification and custom SSH profile
 • Unattended reboot warning system (wall messages + email alerts)
 • Suricata rules maintenance with weekly auto-updates
 • Enhanced OpenSSH HMAC tuning (SHA-1 completely disabled)
@@ -5650,10 +5445,7 @@ If you get 'Permission denied (publickey)' error, check:
 2. sudo tail -f /var/log/auth.log (on server, in another session)
 3. sudo ls -la /home/$USERNAME/.ssh/
 4. sudo cat /home/$USERNAME/.ssh/authorized_keys
-5. sudo aa-status | grep ssh (check AppArmor)
 6. sudo systemctl status ssh
-7. sudo dmesg | tail -20 | grep apparmor (check for blocks)
-8. If 'rexec failed', reload: sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd
 
 This bastion host is now ready for secure access management!
 
