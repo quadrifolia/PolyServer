@@ -533,7 +533,8 @@ PasswordAuthentication no
 PermitEmptyPasswords no
 ChallengeResponseAuthentication no
 KbdInteractiveAuthentication no
-UsePAM yes
+UsePAM no
+AuthorizedKeysFile .ssh/authorized_keys
 
 # Forwarding and Tunneling - Essential for bastion functionality
 AllowTcpForwarding yes
@@ -566,6 +567,10 @@ TCPKeepAlive yes
 KexAlgorithms curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512
 Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
 MACs hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512
+
+# Ensure no weak algorithms
+PubkeyAcceptedKeyTypes rsa-sha2-512,rsa-sha2-256,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-ed25519
+KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256
 
 # User access control
 AllowUsers $USERNAME
@@ -951,9 +956,6 @@ Restart=on-failure
 RestartSec=30
 StartLimitInterval=600
 StartLimitBurst=3
-
-# Watchdog configuration - longer timeout for resource-limited scanning
-WatchdogSec=180
 
 # OOM handling - kill ClamAV rather than other services
 OOMPolicy=kill
@@ -2486,10 +2488,6 @@ Restart=always
 RestartSec=30
 TimeoutStartSec=60
 TimeoutStopSec=30
-
-# Watchdog configuration
-WatchdogSec=120
-NotifyAccess=main
 EOF
 
 systemctl daemon-reload
@@ -2715,10 +2713,6 @@ Restart=always
 RestartSec=60
 TimeoutStartSec=120
 TimeoutStopSec=30
-
-# Watchdog configuration
-WatchdogSec=300
-NotifyAccess=main
 EOF
 
 systemctl daemon-reload
@@ -4538,6 +4532,12 @@ if [ -d /etc/apparmor.d ]; then
     rm -rf /etc/apparmor.d/* 2>/dev/null || true
 fi
 
+# Remove AppArmor packages completely
+echo "Removing AppArmor packages..."
+wait_for_dpkg_lock
+apt-get purge -y apparmor apparmor-utils apparmor-profiles apparmor-profiles-extra 2>/dev/null || true
+apt-get autoremove -y 2>/dev/null || true
+
 # Unload all AppArmor profiles
 if command -v aa-teardown >/dev/null 2>&1; then
     echo "Unloading all AppArmor profiles..."
@@ -4659,39 +4659,18 @@ else
     echo "⚠️ suricata-update not available - install with: apt install suricata-update"
 fi
 
-# Enhanced OpenSSH HMAC Tuning
-echo "Applying enhanced OpenSSH HMAC tuning..."
-if [ "$EUID" -ne 0 ]; then
-    echo "⚠️ Not running as root - cannot modify SSH configuration"
-    echo "   Would append to: /etc/ssh/sshd_config"
-else
-    cat >> /etc/ssh/sshd_config << EOF
-
-# Enhanced HMAC configuration - disable SHA-1 completely
-MACs hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512
-
-# Ensure no weak algorithms
-PubkeyAcceptedKeyTypes rsa-sha2-512,rsa-sha2-256,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-ed25519
-KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256
-EOF
-    
-    echo "✅ Enhanced SSH HMAC configuration applied (no SHA-1)"
-fi
-
-# Smart Systemd Watchdog for Critical Services
-echo "Configuring smart systemd watchdog for critical services..."
-echo "This configuration balances service monitoring with resource protection"
+# Smart Systemd Service Hardening for Critical Services
+echo "Configuring smart systemd service hardening for critical services..."
+echo "This configuration provides resource limits and restart policies"
 
 if [ "$EUID" -ne 0 ]; then
-    echo "⚠️ Not running as root - cannot configure systemd watchdog"
-    echo "   Would create watchdog configs in: /etc/systemd/system/"
+    echo "⚠️ Not running as root - cannot configure systemd service hardening"
+    echo "   Would create service configs in: /etc/systemd/system/"
 else
     # Smart fail2ban service watchdog - increased timeout during high load
     mkdir -p /etc/systemd/system/fail2ban.service.d
     cat > /etc/systemd/system/fail2ban.service.d/watchdog.conf << EOF
 [Service]
-# Longer watchdog timeout to survive resource-intensive periods
-WatchdogSec=300
 Restart=on-failure
 RestartSec=10
 StartLimitInterval=600
@@ -4707,8 +4686,6 @@ EOF
     mkdir -p /etc/systemd/system/suricata.service.d
     cat > /etc/systemd/system/suricata.service.d/watchdog.conf << EOF
 [Service]
-# Extended timeout for network analysis workloads
-WatchdogSec=600
 Restart=on-failure
 RestartSec=30
 StartLimitInterval=1200
@@ -4723,8 +4700,6 @@ EOF
     mkdir -p /etc/systemd/system/ssh.service.d
     cat > /etc/systemd/system/ssh.service.d/watchdog.conf << EOF
 [Service]
-# Moderate timeout but high priority for critical access service
-WatchdogSec=180
 Restart=on-failure
 RestartSec=5
 StartLimitInterval=300
@@ -4737,7 +4712,7 @@ Nice=-10
 # Security hardening
 PrivateTmp=yes
 ProtectSystem=strict
-ProtectHome=yes
+# ProtectHome=yes disabled - blocks SSH key authentication
 ReadWritePaths=/var/log /var/run /run
 EOF
 
@@ -4746,8 +4721,6 @@ EOF
     mkdir -p /etc/systemd/system/unbound.service.d
     cat > /etc/systemd/system/unbound.service.d/watchdog.conf << EOF
 [Service]
-# DNS service timeout - balance responsiveness with stability
-WatchdogSec=120
 Restart=on-failure
 RestartSec=10
 StartLimitInterval=300
@@ -4764,13 +4737,12 @@ EOF
     systemctl daemon-reload
 fi
 
-echo "✅ Smart systemd watchdog configured for critical services"
-echo "   • SSH: 180s timeout, highest priority (OOM -500, Nice -10)"
-echo "   • fail2ban: 300s timeout, high priority (OOM -100, Nice -5)"
-echo "   • Suricata: 600s timeout, lower priority (OOM +200, Nice +5)"
-echo "   • Unbound: 120s timeout, medium priority (OOM +100)"
+echo "✅ Smart systemd service hardening configured for critical services"
+echo "   • SSH: Watchdog pings not supported, highest priority (OOM -500, Nice -10)"
+echo "   • fail2ban: Watchdog pings not supported, high priority (OOM -100, Nice -5)"
+echo "   • Suricata: Watchdog pings not supported, lower priority (OOM +200, Nice +5)"
+echo "   • Unbound: Watchdog pings not supported, medium priority (OOM +100)"
 echo ""
-echo "Smart watchdog protects critical services during resource contention"
 
 echo "===== 14.7.1 Setting up Resource Guardian System ====="
 # Proactive resource management to prevent service failures
@@ -5198,6 +5170,49 @@ if [ -n "$SSH_PUBLIC_KEY" ] && [ -n "$USERNAME" ]; then
             echo "✅ authorized_keys file created with SSH key"
         fi
         
+        # Advanced SSH debugging - check for permission issues
+        echo ""
+        echo "🔍 Advanced SSH debugging..."
+        
+        # Check for filesystem issues
+        echo "Checking filesystem mount options..."
+        MOUNT_INFO=$(df "/home/$USERNAME" | tail -1)
+        echo "Mount info: $MOUNT_INFO"
+        
+        MOUNT_POINT=$(echo "$MOUNT_INFO" | awk '{print $6}')
+        if mount | grep " $MOUNT_POINT " | grep -q noexec; then
+            echo "⚠️ WARNING: $MOUNT_POINT mounted with noexec - this may cause issues"
+        fi
+        
+        # Check for extended attributes and immutable flags
+        echo "Checking file attributes..."
+        if lsattr "/home/$USERNAME/.ssh/authorized_keys" 2>/dev/null | grep -q '^....i'; then
+            echo "⚠️ WARNING: authorized_keys has immutable flag - removing..."
+            chattr -i "/home/$USERNAME/.ssh/authorized_keys" 2>/dev/null || true
+        fi
+        
+        # Check full path permissions with namei
+        echo "Full path permission analysis:"
+        namei -l "/home/$USERNAME/.ssh/authorized_keys" 2>/dev/null || echo "namei not available"
+        
+        # Check if SSH can actually read the file
+        echo "Testing file readability..."
+        if sudo -u "$USERNAME" test -r "/home/$USERNAME/.ssh/authorized_keys"; then
+            echo "✅ File readable by user $USERNAME"
+        else
+            echo "❌ File NOT readable by user $USERNAME"
+            echo "Attempting to fix permissions..."
+            chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh/authorized_keys"
+            chmod 600 "/home/$USERNAME/.ssh/authorized_keys"
+            
+            if sudo -u "$USERNAME" test -r "/home/$USERNAME/.ssh/authorized_keys"; then
+                echo "✅ File now readable after permission fix"
+            else
+                echo "❌ File STILL not readable - deeper issue exists"
+                echo "Manual debugging required - see /usr/local/bin/fix-ssh-auth"
+            fi
+        fi
+        
         # Test SSH configuration
         echo "Testing SSH daemon configuration..."
         if sshd -t 2>/dev/null; then
@@ -5360,7 +5375,7 @@ echo "🔐 ADVANCED SECURITY REFINEMENTS:"
 echo "   • Unattended reboot warning system (wall messages + email alerts)"
 echo "   • Suricata rules maintenance with weekly auto-updates"
 echo "   • Enhanced OpenSSH HMAC tuning (SHA-1 completely disabled)"
-echo "   • Systemd watchdog for fail2ban, suricata, and SSH services"
+echo "   • Systemd service hardening with resource limits and restart policies"
 echo "   • Daily automated backup of all security configurations"
 echo "   • ClamAV antivirus with daily scans and real-time monitoring"
 echo "   • Linux Malware Detect (maldet) for enhanced malware protection"
@@ -5515,7 +5530,7 @@ $MAIL_CONFIG_INFO
 • Unattended reboot warning system (wall messages + email alerts)
 • Suricata rules maintenance with weekly auto-updates
 • Enhanced OpenSSH HMAC tuning (SHA-1 completely disabled)
-• Systemd watchdog for fail2ban, suricata, and SSH services
+• Systemd service hardening with resource limits and restart policies
 • Daily automated backup of all security configurations
 • ClamAV antivirus with daily scans and real-time monitoring
 • Linux Malware Detect (maldet) for enhanced malware protection
