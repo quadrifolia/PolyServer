@@ -5660,6 +5660,46 @@ unset SSH_PUBLIC_KEY
 # Clean up temporary files
 rm -f /tmp/smtp_test_email.txt /tmp/final_setup_email.txt /tmp/bastion-setup-complete.txt
 
+# Optional: Run Lynis security audit
+echo ""
+echo "===== OPTIONAL: LYNIS SECURITY AUDIT ====="
+read -p "Run Lynis security audit to validate hardening? (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo "Installing and running Lynis security audit..."
+    
+    # Clone Lynis from official repository
+    cd /tmp
+    if [ -d "lynis" ]; then
+        rm -rf lynis
+    fi
+    
+    git clone https://github.com/CISOfy/lynis.git
+    if [ $? -eq 0 ]; then
+        # Set proper ownership for security
+        chown -R 0:0 lynis
+        cd lynis
+        
+        # Run the audit
+        echo "Starting Lynis system audit..."
+        ./lynis audit system
+        
+        # Save the report
+        if [ -f /var/log/lynis.log ]; then
+            cp /var/log/lynis.log "/root/lynis-audit-$(date +%Y%m%d-%H%M%S).log"
+            echo "✅ Lynis audit completed - report saved to /root/"
+        fi
+        
+        # Clean up
+        cd /root
+        rm -rf /tmp/lynis
+    else
+        echo "❌ Failed to download Lynis - skipping audit"
+    fi
+else
+    echo "Skipping Lynis security audit"
+fi
+
 # Create setup completion marker for persistence monitoring grace period
 touch /var/lib/bastion-setup-complete
 echo "Setup completed at $(date)" > /var/lib/bastion-setup-complete
