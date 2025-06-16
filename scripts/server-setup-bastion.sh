@@ -186,7 +186,7 @@ validate_critical_configs() {
     fi
     
     echo "Checking UFW configuration..."
-    if ! timeout 10 ufw --dry-run enable >/dev/null 2>&1; then
+    if ! timeout 10 ufw status >/dev/null 2>&1; then
         log_error "UFW configuration validation failed"
         errors=$((errors + 1))
     else
@@ -509,6 +509,7 @@ cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
 # This configuration prioritizes security over convenience
 
 # Network Configuration
+Port 22
 Port $SSH_PORT
 Protocol 2
 AddressFamily inet
@@ -5154,13 +5155,28 @@ if [ -n "$SSH_PUBLIC_KEY" ] && [ -n "$USERNAME" ]; then
             fi
         fi
         
-        # Check if SSH is listening on configured port
+        # Check if SSH is listening on configured ports
+        echo "Checking SSH listening ports..."
+        SSH_PORTS_LISTENING=""
+        if ss -tlnp | grep -q ":22 "; then
+            echo "✅ SSH is listening on port 22 (default)"
+            SSH_PORTS_LISTENING="22"
+        fi
         if ss -tlnp | grep -q ":$SSH_PORT "; then
-            echo "✅ SSH is listening on port $SSH_PORT"
-        else
-            echo "⚠️ SSH is not listening on port $SSH_PORT"
+            echo "✅ SSH is listening on port $SSH_PORT (custom)"
+            SSH_PORTS_LISTENING="$SSH_PORTS_LISTENING $SSH_PORT"
+        fi
+        
+        if [ -z "$SSH_PORTS_LISTENING" ]; then
+            echo "⚠️ SSH is not listening on expected ports"
             echo "Current listening ports:"
             ss -tlnp | grep sshd || echo "   No SSH listening ports found"
+        else
+            echo "✅ SSH is listening on ports:$SSH_PORTS_LISTENING"
+            if [ "$SSH_PORT" != "22" ]; then
+                echo "   📋 SSH configured for dual-port operation during transition"
+                echo "   🔧 Test port $SSH_PORT, then disable port 22 when confirmed working"
+            fi
         fi
         
         
@@ -5220,14 +5236,24 @@ echo ""
 echo "✅ Bastion host has been successfully configured with enhanced security"
 echo ""
 echo "🔐 IMPORTANT SECURITY INFORMATION:"
-echo "   • SSH Port: $SSH_PORT (NOT the default 22)"
+if [ "$SSH_PORT" != "22" ]; then
+    echo "   • SSH Ports: 22 (temporary) AND $SSH_PORT (primary)"
+    echo "   • ⚠️  TRANSITION: Both ports active - disable 22 after testing $SSH_PORT"
+else
+    echo "   • SSH Port: $SSH_PORT"
+fi
 echo "   • Authentication: SSH keys ONLY (no passwords)"
 echo "   • User: $USERNAME"
 echo "   • Firewall: Restrictive rules active"
 echo "   • Monitoring: Comprehensive logging and alerting enabled"
 echo ""
-echo "🔗 CONNECTION COMMAND:"
-echo "   ssh -p $SSH_PORT $USERNAME@$BASTION_IP"
+echo "🔗 CONNECTION COMMANDS:"
+if [ "$SSH_PORT" != "22" ]; then
+    echo "   Primary:   ssh -p $SSH_PORT $USERNAME@$BASTION_IP"
+    echo "   Fallback:  ssh -p 22 $USERNAME@$BASTION_IP (temporary)"
+else
+    echo "   ssh -p $SSH_PORT $USERNAME@$BASTION_IP"
+fi
 echo ""
 echo "📊 MONITORING:"
 if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
@@ -5310,11 +5336,16 @@ fi
 echo ""
 echo "🔧 SSH TROUBLESHOOTING (if connection fails):"
 echo "   If you get 'Permission denied (publickey)' error, check:"
-echo "   1. ssh -v -p $SSH_PORT $USERNAME@$BASTION_IP (verbose output)"
+if [ "$SSH_PORT" != "22" ]; then
+    echo "   1. ssh -v -p $SSH_PORT $USERNAME@$BASTION_IP (verbose output - primary port)"
+    echo "   1b. ssh -v -p 22 $USERNAME@$BASTION_IP (verbose output - fallback port)"
+else
+    echo "   1. ssh -v -p $SSH_PORT $USERNAME@$BASTION_IP (verbose output)"
+fi
 echo "   2. sudo tail -f /var/log/auth.log (on server, in another session)"
 echo "   3. sudo ls -la /home/$USERNAME/.ssh/"
 echo "   4. sudo cat /home/$USERNAME/.ssh/authorized_keys"
-echo "   6. sudo systemctl status ssh"
+echo "   5. sudo systemctl status ssh"
 echo ""
 
 # Send setup completion email
@@ -5346,8 +5377,24 @@ BASTION HOST SETUP COMPLETION REPORT
 Bastion Host: $HOSTNAME
 IP Address: $BASTION_IP
 Setup Completed: $SETUP_DATE_DISPLAY
-SSH Port: $SSH_PORT
 User Account: $USERNAME
+
+🔗 SSH CONNECTION:
+EOF
+
+# Add SSH connection information based on port configuration
+if [ "$SSH_PORT" != "22" ]; then
+    cat >> /tmp/bastion-setup-complete.txt << EOF
+Primary: ssh -p $SSH_PORT $USERNAME@$BASTION_IP  
+Fallback: ssh -p 22 $USERNAME@$BASTION_IP (temporary - disable after testing)
+EOF
+else
+    cat >> /tmp/bastion-setup-complete.txt << EOF
+ssh -p $SSH_PORT $USERNAME@$BASTION_IP
+EOF
+fi
+
+cat >> /tmp/bastion-setup-complete.txt << EOF
 
 🔐 SECURITY CONFIGURATION:
 • SSH Authentication: Key-only (passwords disabled)
@@ -5441,7 +5488,21 @@ cat >> /tmp/bastion-setup-complete.txt << EOF
 
 🔧 SSH TROUBLESHOOTING (if connection fails):
 If you get 'Permission denied (publickey)' error, check:
+EOF
+
+# Add troubleshooting commands based on port configuration
+if [ "$SSH_PORT" != "22" ]; then
+    cat >> /tmp/bastion-setup-complete.txt << EOF
+1. ssh -v -p $SSH_PORT $USERNAME@$BASTION_IP (verbose output - primary port)
+1b. ssh -v -p 22 $USERNAME@$BASTION_IP (verbose output - fallback port)
+EOF
+else
+    cat >> /tmp/bastion-setup-complete.txt << EOF
 1. ssh -v -p $SSH_PORT $USERNAME@$BASTION_IP (verbose output)
+EOF
+fi
+
+cat >> /tmp/bastion-setup-complete.txt << EOF
 2. sudo tail -f /var/log/auth.log (on server, in another session)
 3. sudo ls -la /home/$USERNAME/.ssh/
 4. sudo cat /home/$USERNAME/.ssh/authorized_keys
