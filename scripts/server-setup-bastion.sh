@@ -373,7 +373,7 @@ wait_for_dpkg_lock() {
         if [ $((count % 10)) -eq 0 ]; then
             echo "Waiting for package management to complete... ($count/$timeout seconds)"
             # Show what process is holding the lock
-            ps aux | grep -E "(apt|dpkg|unattended)" | grep -v grep || true
+            pgrep -af "(apt|dpkg|unattended)" || true
         fi
         
         sleep 1
