@@ -3005,11 +3005,17 @@ echo "===== 10.2.1 Setting logcheck to run daily only (reducing email frequency)
 # Remove or disable the default hourly logcheck cron job
 rm -f /etc/cron.hourly/logcheck 2>/dev/null || true
 
-# Ensure the daily logcheck cron job exists and is properly configured
-if [ ! -f /etc/cron.daily/logcheck ]; then
-    cp /usr/sbin/logcheck /etc/cron.daily/logcheck 2>/dev/null || true
-    chmod 755 /etc/cron.daily/logcheck 2>/dev/null || true
+# Create a proper daily logcheck cron job that runs as logcheck user
+cat > /etc/cron.daily/logcheck << 'EOF'
+#!/bin/bash
+# Daily logcheck cron job - runs as logcheck user to avoid security warnings
+if command -v sudo >/dev/null 2>&1; then
+    sudo -u logcheck /usr/sbin/logcheck
+else
+    su -s /bin/bash -c "/usr/sbin/logcheck" logcheck
 fi
+EOF
+chmod 755 /etc/cron.daily/logcheck
 
 echo "✅ Logcheck configured to run daily only (instead of hourly)"
 echo "   • To change frequency: edit /etc/logcheck/logcheck.conf"
