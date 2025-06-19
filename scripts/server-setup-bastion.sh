@@ -213,7 +213,7 @@ validate_critical_configs() {
     fi
 }
 
-# ========= Fixed Configuration =========
+# ========= Configuration =========
 # This script is designed for production bastion host deployment
 # All parameters are set to secure defaults for bastion use case
 
@@ -941,21 +941,21 @@ echo "Setting up systemd resource limits for ClamAV services..."
 mkdir -p /etc/systemd/system/clamav-daemon.service.d
 cat > /etc/systemd/system/clamav-daemon.service.d/resource-limits.conf << EOF
 [Service]
-# Resource limits to prevent ClamAV from overwhelming bastion host
+# Proper memory limits for ClamAV daemon (minimum 1GB required)
 CPUQuota=25%
-MemoryMax=512M
-MemoryHigh=400M
+MemoryMax=1536M
+MemoryHigh=1200M
 
 # Process priority and I/O scheduling
 Nice=19
 IOSchedulingClass=3
 IOSchedulingPriority=7
 
-# Smart restart behavior
+# Smart restart behavior with longer delays
 Restart=on-failure
-RestartSec=30
-StartLimitInterval=600
-StartLimitBurst=3
+RestartSec=60
+StartLimitInterval=1200
+StartLimitBurst=2
 
 # OOM handling - kill ClamAV rather than other services
 OOMPolicy=kill
@@ -967,15 +967,19 @@ ProtectSystem=strict
 ProtectHome=true
 NoNewPrivileges=true
 ReadWritePaths=/var/lib/clamav /var/log/clamav /run/clamav
+
+# Prevent memory fragmentation issues
+TasksMax=50
 EOF
 
 # Freshclam resource limits
 mkdir -p /etc/systemd/system/clamav-freshclam.service.d
 cat > /etc/systemd/system/clamav-freshclam.service.d/resource-limits.conf << EOF
 [Service]
-# Resource limits for virus definition updates
+# Proper memory limits for virus definition updates (minimum 768MB required)
 CPUQuota=15%
-MemoryMax=256M
+MemoryMax=1024M
+MemoryHigh=768M
 
 # Process priority
 Nice=19
@@ -983,8 +987,8 @@ IOSchedulingClass=3
 
 # Restart behavior
 Restart=on-failure
-RestartSec=60
-StartLimitInterval=1200
+RestartSec=120
+StartLimitInterval=1800
 StartLimitBurst=2
 
 # OOM handling
@@ -997,6 +1001,9 @@ ProtectSystem=strict
 ProtectHome=true
 NoNewPrivileges=true
 ReadWritePaths=/var/lib/clamav /var/log/clamav
+
+# Prevent resource conflicts during updates
+TasksMax=20
 EOF
 
 # Create log directory with proper permissions
@@ -1026,9 +1033,9 @@ systemctl daemon-reload
 # Enable services but don't start immediately - let the user decide
 systemctl enable clamav-daemon clamav-freshclam
 
-echo "✅ ClamAV configured with resource optimization for bastion environment"
+echo "✅ ClamAV configured with resource allocation for bastion environment"
 echo "   • CPU limited to 25% (daemon) / 15% (updater)"
-echo "   • Memory limited to 512MB (daemon) / 256MB (updater)"
+echo "   • Memory INCREASED to 1536MB (daemon) / 1024MB (updater)"
 echo "   • Update frequency: 2x daily (instead of 24x)"
 echo "   • Optimized scan limits and timeouts"
 echo "   • Enhanced OOM protection and process isolation"
@@ -1294,7 +1301,7 @@ EOF
     # Test again
     echo "Retesting Unbound configuration..."
     if unbound-checkconf; then
-        echo "✅ Unbound configuration fixed and valid"
+        echo "✅ Unbound configuration"
         systemctl daemon-reload
         systemctl enable unbound
         systemctl start unbound
@@ -1784,12 +1791,128 @@ export LC_MESSAGES=en_US.UTF-8
 
 echo "Locale configuration updated to resolve environment warnings"
 
-# Configure lm-sensors to suppress warnings on systems without hardware sensors
-echo "===== 6.2.2 Configuring hardware sensors (suppressing warnings) ====="
+# Configure lm-sensors with enhanced detection and logwatch integration
+echo "===== 6.2.2 Configuring hardware sensors with enhanced detection ====="
+
+# Enhanced sensor detection and configuration
+echo "Running comprehensive sensor detection..."
+
+# Run sensors-detect automatically with safe defaults
+if command -v sensors-detect >/dev/null 2>&1; then
+    echo "Running sensors-detect with safe automatic detection..."
+    # Run sensors-detect with automatic yes to safe drivers only
+    echo -e "y\ny\ny\ny\ny\nn" | sensors-detect --auto 2>/dev/null || true
+    
+    # Load detected modules
+    if [ -f /etc/modules ]; then
+        echo "Loading detected sensor modules..."
+        systemctl restart systemd-modules-load 2>/dev/null || true
+        # Try manual module loading for common sensors
+        for module in coretemp k10temp it87 w83627ehf nct6775; do
+            modprobe $module 2>/dev/null || true
+        done
+    fi
+fi
+
+# Re-check sensors after detection
 if command -v sensors >/dev/null 2>&1; then
-    # Check if sensors are actually detected
-    if ! sensors 2>/dev/null | grep -q "°C\|°F"; then
-        echo "No hardware sensors detected - disabling sensors service to prevent warnings"
+    # Wait for modules to initialize
+    sleep 2
+    
+    # Check if sensors are now detected
+    if sensors 2>/dev/null | grep -q "°C\|°F\|RPM\|V\|W"; then
+        echo "✅ Hardware sensors detected after module loading"
+        
+        # Show detected sensors
+        echo "Detected sensors:"
+        sensors 2>/dev/null | grep -E "Core|temp|fan|°C|°F|RPM|V|W" | head -10
+        
+        # Enable lm-sensors service
+        systemctl enable lm-sensors 2>/dev/null || true
+        systemctl start lm-sensors 2>/dev/null || true
+        
+        # Configure sensors for logwatch
+        echo "Configuring sensors for logwatch integration..."
+        mkdir -p /etc/logwatch/conf/services
+        
+        # Create sensors service configuration for logwatch
+        cat > /etc/logwatch/conf/services/sensors.conf << 'EOF'
+# Sensors monitoring for logwatch
+Title = "Hardware Sensors"
+LogFile = sensors
+*OnlyService = sensors
+*RemoveHeaders = Yes
+EOF
+        
+        # Create sensor logging script for logwatch
+        mkdir -p /var/log/sensors
+        cat > /usr/local/bin/log-sensors << 'EOF'
+#!/bin/bash
+# Log sensor data for logwatch analysis
+LOGFILE="/var/log/sensors/sensors.log"
+DATE=$(date '+%Y-%m-%d %H:%M:%S')
+
+# Ensure log directory exists
+mkdir -p /var/log/sensors
+
+# Log current sensor readings
+echo "[$DATE] Sensor readings:" >> "$LOGFILE"
+sensors >> "$LOGFILE" 2>/dev/null
+echo "" >> "$LOGFILE"
+
+# Check for critical temperatures and log alerts
+if sensors 2>/dev/null | grep -E "CRITICAL|ALARM" | grep -v "+0.0"; then
+    echo "[$DATE] CRITICAL: Sensor alerts detected!" >> "$LOGFILE"
+    sensors 2>/dev/null | grep -E "CRITICAL|ALARM" >> "$LOGFILE"
+    echo "" >> "$LOGFILE"
+fi
+
+# Rotate log if it gets too large (keep last 1000 lines)
+if [ -f "$LOGFILE" ] && [ $(wc -l < "$LOGFILE") -gt 1000 ]; then
+    tail -n 500 "$LOGFILE" > "${LOGFILE}.tmp" && mv "${LOGFILE}.tmp" "$LOGFILE"
+fi
+EOF
+        
+        chmod +x /usr/local/bin/log-sensors
+        
+        # Add sensor logging to cron (every 10 minutes)
+        echo "*/10 * * * * root /usr/local/bin/log-sensors" >> /etc/crontab
+        
+        # Update logwatch configuration to include sensors
+        if [ -f /etc/logwatch/conf/logwatch.conf ]; then
+            # Check if sensors service already included
+            if ! grep -q "sensors" /etc/logwatch/conf/logwatch.conf; then
+                echo "Service = sensors" >> /etc/logwatch/conf/logwatch.conf
+                echo "✅ Sensors added to logwatch daily reports"
+            fi
+        fi
+        
+        # Create logrotate configuration for sensor logs
+        cat > /etc/logrotate.d/sensors << EOF
+/var/log/sensors/*.log {
+    weekly
+    rotate 4
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 644 root root
+}
+EOF
+        
+        echo "✅ Hardware sensors configured with logwatch integration"
+        echo "   • Sensor data logged every 10 minutes"
+        echo "   • Critical temperature alerts logged"
+        echo "   • Included in daily logwatch reports"
+        
+        # Run initial sensor logging
+        /usr/local/bin/log-sensors
+        
+    else
+        echo "No hardware sensors detected even after module detection"
+        echo "This is normal for virtual machines and cloud instances"
+        
+        # Disable sensors service and suppress warnings
         systemctl disable lm-sensors 2>/dev/null || true
         systemctl mask lm-sensors 2>/dev/null || true
         
@@ -1800,11 +1923,26 @@ if command -v sensors >/dev/null 2>&1; then
 # This file prevents sensors warnings on systems without hardware monitoring
 EOF
         echo "✅ Sensors warnings suppressed for VPS/cloud environment"
-    else
-        echo "Hardware sensors detected - sensors will remain active"
+        
+        # Create fake sensor log for logwatch (prevents errors)
+        mkdir -p /var/log/sensors
+        cat > /var/log/sensors/sensors.log << EOF
+# No hardware sensors available on this system
+# This is normal for virtual machines and cloud instances
+EOF
+        
+        # Still add sensors to logwatch but with a note about no sensors
+        if [ -f /etc/logwatch/conf/logwatch.conf ]; then
+            if ! grep -q "sensors" /etc/logwatch/conf/logwatch.conf; then
+                echo "Service = sensors" >> /etc/logwatch/conf/logwatch.conf
+                echo "✅ Sensors service added to logwatch (will show 'no sensors' message)"
+            fi
+        fi
     fi
 else
-    echo "Sensors command not available - skipping configuration"
+    echo "Sensors command not available - installing lm-sensors package"
+    apt-get update && apt-get install -y lm-sensors
+    echo "✅ lm-sensors installed - rerun script or manually run sensors-detect"
 fi
 
 # Install Oh My Zsh for bastion user with security-focused plugins
@@ -2526,7 +2664,7 @@ fi
 
 echo "Configuring Suricata for interface: $INTERFACE, IP: $BASTION_IP"
     
-    # Configure Suricata for bastion host monitoring with fixed HOME_NET
+    # Configure Suricata for bastion host monitoring with HOME_NET
     cat > /etc/suricata/suricata.yaml << EOF
 %YAML 1.1
 ---
@@ -2809,7 +2947,7 @@ else
     # Retry configuration test
     echo "Retesting Suricata configuration with fixes..."
     if suricata -T -c /etc/suricata/suricata.yaml >/tmp/suricata-retest.log 2>&1; then
-        echo "✅ Suricata configuration fixed"
+        echo "✅ Suricata configuration"
         
         systemctl daemon-reload
         systemctl enable suricata
@@ -2826,7 +2964,7 @@ else
         echo "Final error details:"
         cat /tmp/suricata-retest.log
         
-        # Disable Suricata if it can't be fixed
+        # Disable Suricata if it still invalid
         systemctl disable suricata 2>/dev/null || true
         echo "⚠️ Suricata IDS disabled due to configuration errors"
         echo "   Other security tools (fail2ban, auditd) will provide protection"
@@ -3198,22 +3336,216 @@ Service = "-zz-network"
 Service = "-zz-sys"
 Service = "-named"
 Service = "-http"
+
+# Enhanced email/sendmail reporting
+Service = postfix
+Service = sendmail
 EOF
 
-# Create logwatch cron job (ensure it runs daily)
-cat > /etc/cron.daily/00logwatch << EOF
-#!/bin/bash
-# Daily Logwatch execution for bastion host
-
-# Run logwatch with bastion-specific configuration
-/usr/sbin/logwatch --output mail --format html --range yesterday --detail high
+# Create enhanced postfix/sendmail service configuration for detailed reporting
+mkdir -p /etc/logwatch/conf/services
+cat > /etc/logwatch/conf/services/postfix.conf << EOF
+# Enhanced Postfix reporting for bastion host
+Title = "Mail System (Postfix/Sendmail)"
+LogFile = mail
+LogFile = maillog
+*OnlyService = postfix
+*RemoveHeaders = Yes
+Detail = High
 EOF
 
-chmod 755 /etc/cron.daily/00logwatch
+# Create custom sendmail/postfix logwatch script for bastion-specific analysis
+mkdir -p /etc/logwatch/scripts/services
+cat > /etc/logwatch/scripts/services/postfix << 'EOF'
+#!/usr/bin/perl
+# Enhanced Postfix/Sendmail analysis for bastion hosts
+# Focuses on security-relevant email events
 
-# Also enable logwatch cron in case it's disabled
+use strict;
+use warnings;
+
+my %sent_count = ();
+my %received_count = ();
+my %rejected_count = ();
+my %bounced_count = ();
+my %smtp_stats = ();
+my %security_events = ();
+my %relay_attempts = ();
+my @critical_events = ();
+
+while (my $line = <STDIN>) {
+    chomp $line;
+    
+    # Skip lines that don't contain postfix/sendmail
+    next unless $line =~ /(postfix|sendmail)/;
+    
+    # Extract timestamp
+    my ($timestamp) = $line =~ /^(\w+\s+\d+\s+\d+:\d+:\d+)/;
+    
+    # Count sent messages
+    if ($line =~ /status=sent/) {
+        $sent_count{total}++;
+        if ($line =~ /relay=([^,\s]+)/) {
+            $sent_count{$1}++;
+        }
+    }
+    
+    # Count received messages
+    elsif ($line =~ /status=deferred|status=bounced/) {
+        $bounced_count{total}++;
+        if ($line =~ /(Connection refused|timeout|Host not found)/i) {
+            $bounced_count{$1}++;
+        }
+    }
+    
+    # Track SMTP security events
+    elsif ($line =~ /(SASL|TLS|SSL)/) {
+        if ($line =~ /SASL.*authentication failed/i) {
+            $security_events{"SASL Authentication Failed"}++;
+            push @critical_events, "$timestamp: SASL auth failure";
+        }
+        elsif ($line =~ /(TLS|SSL).*established/i) {
+            $smtp_stats{"TLS Connections"}++;
+        }
+        elsif ($line =~ /Anonymous TLS connection established/i) {
+            $smtp_stats{"Anonymous TLS"}++;
+        }
+    }
+    
+    # Track relay attempts (security concern for bastion)
+    elsif ($line =~ /Relay access denied/i) {
+        $security_events{"Unauthorized Relay Attempts"}++;
+        if ($line =~ /from=<([^>]*)>.*to=<([^>]*)>/) {
+            push @critical_events, "$timestamp: Relay attempt from $1 to $2";
+        }
+    }
+    
+    # Track connection rejections
+    elsif ($line =~ /(reject|blocked|denied)/i) {
+        $rejected_count{total}++;
+        if ($line =~ /Client host rejected/i) {
+            $rejected_count{"Host Rejection"}++;
+        }
+        elsif ($line =~ /Sender address rejected/i) {
+            $rejected_count{"Sender Rejection"}++;
+        }
+    }
+    
+    # Track postfix warnings and errors
+    elsif ($line =~ /(warning|error|fatal)/i) {
+        if ($line =~ /warning.*SASL/i) {
+            $security_events{"SASL Warnings"}++;
+        }
+        elsif ($line =~ /error.*timeout/i) {
+            $smtp_stats{"Timeout Errors"}++;
+        }
+    }
+    
+    # Track queue statistics
+    elsif ($line =~ /postfix\/qmgr.*removed/) {
+        $smtp_stats{"Messages Processed"}++;
+    }
+}
+
+# Generate report
+print "\n";
+print "=" x 60 . "\n";
+print "BASTION HOST MAIL SYSTEM REPORT\n";
+print "=" x 60 . "\n\n";
+
+# Mail delivery statistics
+if (keys %sent_count || keys %bounced_count) {
+    print "📧 MAIL DELIVERY STATISTICS:\n";
+    print "-" x 30 . "\n";
+    
+    if ($sent_count{total}) {
+        print "✅ Successfully sent: $sent_count{total} messages\n";
+        foreach my $relay (sort keys %sent_count) {
+            next if $relay eq 'total';
+            print "   → via $relay: $sent_count{$relay}\n";
+        }
+    }
+    
+    if ($bounced_count{total}) {
+        print "⚠️  Bounced/Deferred: $bounced_count{total} messages\n";
+        foreach my $reason (sort keys %bounced_count) {
+            next if $reason eq 'total';
+            print "   → $reason: $bounced_count{$reason}\n";
+        }
+    }
+    
+    if ($rejected_count{total}) {
+        print "🚫 Rejected: $rejected_count{total} messages\n";
+        foreach my $reason (sort keys %rejected_count) {
+            next if $reason eq 'total';
+            print "   → $reason: $rejected_count{$reason}\n";
+        }
+    }
+    print "\n";
+}
+
+# SMTP/TLS statistics
+if (keys %smtp_stats) {
+    print "🔐 SMTP/TLS STATISTICS:\n";
+    print "-" x 25 . "\n";
+    foreach my $stat (sort keys %smtp_stats) {
+        print "• $stat: $smtp_stats{$stat}\n";
+    }
+    print "\n";
+}
+
+# Security events (important for bastion hosts)
+if (keys %security_events) {
+    print "🚨 SECURITY EVENTS:\n";
+    print "-" x 20 . "\n";
+    foreach my $event (sort keys %security_events) {
+        my $count = $security_events{$event};
+        my $indicator = $count > 5 ? "⚠️ " : "• ";
+        print "$indicator$event: $count\n";
+    }
+    print "\n";
+}
+
+# Critical events detail
+if (@critical_events) {
+    print "🔍 CRITICAL EVENT DETAILS:\n";
+    print "-" x 28 . "\n";
+    foreach my $event (@critical_events) {
+        print "• $event\n";
+    }
+    print "\n";
+}
+
+# Recommendations for bastion hosts
+if ($security_events{"Unauthorized Relay Attempts"} > 0) {
+    print "⚠️  SECURITY RECOMMENDATIONS:\n";
+    print "-" x 32 . "\n";
+    print "• Review relay restrictions in postfix configuration\n";
+    print "• Consider implementing stricter sender verification\n";
+    print "• Monitor source IPs for relay attempts\n\n";
+}
+
+if (!$smtp_stats{"TLS Connections"} && $sent_count{total}) {
+    print "⚠️  TLS RECOMMENDATIONS:\n";
+    print "-" x 23 . "\n";
+    print "• Consider enforcing TLS for all SMTP connections\n";
+    print "• Review SMTP authentication security\n\n";
+}
+
+print "📋 For detailed logs, check: /var/log/mail.log\n";
+print "🔧 Mail queue status: mailq\n";
+print "📊 Postfix configuration: postconf -n\n\n";
+EOF
+
+chmod +x /etc/logwatch/scripts/services/postfix
+
+# Create logwatch cron job - use only cron.d for precise timing
+# Remove any existing daily cron to prevent duplicates
+rm -f /etc/cron.daily/00logwatch
+
+# Configure logwatch to run once daily at 6:00 AM
 cat > /etc/cron.d/logwatch << EOF
-# Daily logwatch execution
+# Daily logwatch execution for bastion host
 # Run at 6:00 AM daily to analyze previous day's logs
 0 6 * * * root /usr/sbin/logwatch --output mail --format html --range yesterday --detail high
 EOF
@@ -4575,7 +4907,6 @@ echo "✅ AppArmor disabled and profiles removed for bastion host compatibility"
 
 # Unattended Reboot Warning System
 echo "Configuring unattended reboot warning system..."
-echo "DEBUG: Starting unattended reboot configuration..."
 if [ "$EUID" -ne 0 ]; then
     echo "⚠️ Not running as root - cannot configure unattended upgrades"
     echo "   Configuration would be created at: /etc/apt/apt.conf.d/51unattended-upgrades-bastion"
@@ -5180,7 +5511,6 @@ if [ -n "$SSH_PUBLIC_KEY" ] && [ -n "$USERNAME" ]; then
         
         # Advanced SSH debugging - check for permission issues
         echo ""
-        echo "🔍 Advanced SSH debugging..."
         
         # Check for filesystem issues
         echo "Checking filesystem mount options..."
