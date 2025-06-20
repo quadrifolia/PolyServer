@@ -1039,6 +1039,113 @@ echo "   • Memory INCREASED to 1536MB (daemon) / 1024MB (updater)"
 echo "   • Update frequency: 2x daily (instead of 24x)"
 echo "   • Optimized scan limits and timeouts"
 echo "   • Enhanced OOM protection and process isolation"
+
+# Install Linux Malware Detect (maldet) for enhanced malware protection
+echo "===== 7.1 Installing Linux Malware Detect (maldet) ====="
+
+# Create temporary directory for installation
+mkdir -p /tmp/maldet-install
+cd /tmp/maldet-install
+
+echo "Downloading Linux Malware Detect..."
+if wget -q http://www.rfxn.com/downloads/maldetect-current.tar.gz; then
+    echo "✅ Downloaded maldetect successfully"
+    
+    # Extract and install
+    tar -xzf maldetect-current.tar.gz
+    MALDET_DIR=$(tar -tzf maldetect-current.tar.gz | head -1 | cut -f1 -d"/")
+    cd "$MALDET_DIR"
+    
+    echo "Installing Linux Malware Detect..."
+    ./install.sh || {
+        echo "❌ Maldet installation failed"
+        cd /
+        rm -rf /tmp/maldet-install
+        exit 1
+    }
+    
+    # Create symlink for easy access
+    ln -sf /usr/local/maldetect/maldet /usr/local/bin/maldet
+    
+    # Configure maldet with bastion-specific settings
+    echo "Configuring Linux Malware Detect for bastion environment..."
+    cat > /usr/local/maldetect/conf.maldet << 'EOF'
+# Linux Malware Detect - Bastion Host Configuration
+email_alert="1"
+email_addr="root@localhost"
+email_subject="Malware Alert - Bastion Host"
+
+# Scan configuration optimized for bastion hosts
+scan_clamscan="1"
+scan_tmpdir="1"
+scan_ignore_root="0"
+scan_max_filesize="10240"
+
+# Quarantine settings
+quarantine_hits="1"
+quarantine_clean="0"
+quarantine_suspend_user="0"
+
+# Performance settings for bastion environment
+maxfilesize="20480"
+maxdepth="10"
+cpu_nice="19"
+
+# Log configuration
+log_verbose="0"
+log_mail="1"
+
+# Auto-clean quarantine after 30 days
+autoclean_days="30"
+
+# Clamdscan performance tuning
+clamdscan_threads="2"
+clamdscan_timeout="300"
+EOF
+    
+    # Set up daily scanning via cron
+    echo "Setting up daily malware scanning..."
+    cat > /etc/cron.d/maldet << 'EOF'
+# Linux Malware Detect - Daily scan for bastion host
+# Run at 3:00 AM daily to scan critical directories
+0 3 * * * root /usr/local/maldetect/maldet -a /home,/etc,/usr/local,/opt 2>&1 | logger -t maldet
+EOF
+    
+    # Create logrotate configuration
+    cat > /etc/logrotate.d/maldet << 'EOF'
+/usr/local/maldetect/logs/* {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 644 root root
+}
+EOF
+    
+    # Update maldet signatures
+    echo "Updating malware signatures..."
+    /usr/local/maldetect/maldet --update-ver
+    /usr/local/maldetect/maldet --update
+    
+    echo "✅ Linux Malware Detect configured for bastion environment"
+    echo "   • Daily scans of critical directories (home, etc, usr/local, opt)"
+    echo "   • Email alerts enabled for detected threats"
+    echo "   • Integration with ClamAV for enhanced detection"
+    echo "   • Automatic quarantine of detected malware"
+    echo "   • Optimized resource usage for bastion hosts"
+    
+    # Cleanup installation files
+    cd /
+    rm -rf /tmp/maldet-install
+    
+else
+    echo "❌ Failed to download Linux Malware Detect"
+    echo "   Check internet connectivity and try again later"
+    cd /
+    rm -rf /tmp/maldet-install
+fi
 echo ""
 echo "📋 ClamAV Management Commands:"
 echo "   • Start services: systemctl start clamav-daemon clamav-freshclam"
@@ -1794,8 +1901,18 @@ echo "Locale configuration updated to resolve environment warnings"
 # Configure lm-sensors with enhanced detection and logwatch integration
 echo "===== 6.2.2 Configuring hardware sensors with enhanced detection ====="
 
-# Enhanced sensor detection and configuration
-echo "Running comprehensive sensor detection..."
+# Enhanced sensor detection and configuration with diagnostic output
+echo "Running comprehensive sensor detection and virtualization check..."
+
+# Check if this is a virtual environment first
+if systemd-detect-virt &>/dev/null; then
+    VIRT_TYPE=$(systemd-detect-virt)
+    echo "🔍 Virtualization detected: $VIRT_TYPE"
+    echo "   Hardware sensors typically not available in virtual environments"
+    echo "   This is normal and expected for VMs/cloud instances"
+else
+    echo "✅ Physical hardware detected - proceeding with sensor detection"
+fi
 
 # Run sensors-detect automatically with safe defaults
 if command -v sensors-detect >/dev/null 2>&1; then
@@ -1808,24 +1925,42 @@ if command -v sensors-detect >/dev/null 2>&1; then
         echo "Loading detected sensor modules..."
         systemctl restart systemd-modules-load 2>/dev/null || true
         # Try manual module loading for common sensors
+        echo "Attempting to load common sensor modules..."
+        LOADED_MODULES=""
         for module in coretemp k10temp it87 w83627ehf nct6775; do
-            modprobe $module 2>/dev/null || true
+            if modprobe $module 2>/dev/null; then
+                LOADED_MODULES="$LOADED_MODULES $module"
+            fi
         done
+        if [ -n "$LOADED_MODULES" ]; then
+            echo "✅ Loaded sensor modules:$LOADED_MODULES"
+        else
+            echo "⚠️ No sensor modules loaded successfully"
+        fi
     fi
+else
+    echo "❌ sensors-detect command not available"
 fi
 
-# Re-check sensors after detection
+# Re-check sensors after detection with detailed diagnostics
 if command -v sensors >/dev/null 2>&1; then
     # Wait for modules to initialize
+    echo "Waiting for sensor modules to initialize..."
     sleep 2
     
-    # Check if sensors are now detected
+    # Test sensor detection
+    echo "Testing hardware sensor detection..."
     if sensors 2>/dev/null | grep -q "°C\|°F\|RPM\|V\|W"; then
-        echo "✅ Hardware sensors detected after module loading"
+        echo "✅ Hardware sensors detected successfully!"
         
-        # Show detected sensors
-        echo "Detected sensors:"
-        sensors 2>/dev/null | grep -E "Core|temp|fan|°C|°F|RPM|V|W" | head -10
+        # Show detected sensors with counts
+        SENSOR_COUNT=$(sensors 2>/dev/null | grep -E "Core|temp|fan|°C|°F|RPM|V|W" | wc -l)
+        echo "📊 Found $SENSOR_COUNT sensor readings:"
+        sensors 2>/dev/null | grep -E "Core|temp|fan|°C|°F|RPM|V|W" | head -10 | sed 's/^/   /'
+        
+        # Show loaded sensor modules
+        echo "📋 Active sensor modules:"
+        lsmod | grep -E "coretemp|k10temp|it87|w83627|nct6775" | awk '{print "   • " $1}' || echo "   • No specific sensor modules detected"
         
         # Enable lm-sensors service
         systemctl enable lm-sensors 2>/dev/null || true
@@ -1909,10 +2044,27 @@ EOF
         /usr/local/bin/log-sensors
         
     else
-        echo "No hardware sensors detected even after module detection"
-        echo "This is normal for virtual machines and cloud instances"
+        echo "❌ No hardware sensors detected after comprehensive detection"
+        
+        # Provide diagnostic information
+        if systemd-detect-virt &>/dev/null; then
+            VIRT_TYPE=$(systemd-detect-virt)
+            echo "🔍 Analysis: Running in $VIRT_TYPE virtualization"
+            echo "   This is completely normal - VMs typically don't have hardware sensors"
+            echo "   Virtual environments use hypervisor-level monitoring instead"
+        else
+            echo "⚠️ Analysis: Physical hardware detected but no sensors found"
+            echo "   This may indicate:"
+            echo "   • Motherboard doesn't support sensor monitoring"
+            echo "   • Sensors require specific kernel modules not available"
+            echo "   • Manual sensors-detect configuration needed"
+        fi
+        
+        # Show what modules were attempted
+        echo "📋 Attempted sensor modules: coretemp, k10temp, it87, w83627ehf, nct6775"
         
         # Disable sensors service and suppress warnings
+        echo "Disabling lm-sensors service to prevent false error reports..."
         systemctl disable lm-sensors 2>/dev/null || true
         systemctl mask lm-sensors 2>/dev/null || true
         
@@ -1921,8 +2073,9 @@ EOF
         cat > /etc/sensors.d/bastion-no-sensors.conf << EOF
 # No hardware sensors configuration for bastion host
 # This file prevents sensors warnings on systems without hardware monitoring
+# Generated automatically during bastion setup
 EOF
-        echo "✅ Sensors warnings suppressed for VPS/cloud environment"
+        echo "✅ Hardware sensor monitoring disabled (appropriate for this environment)"
         
         # Create fake sensor log for logwatch (prevents errors)
         mkdir -p /var/log/sensors
@@ -2066,6 +2219,77 @@ else
     echo "❌ Firewall (UFW): Not installed"
 fi
 systemctl is-active --quiet auditd && echo "✅ Audit System: Active" || echo "❌ Audit System: Inactive"
+
+# ClamAV Antivirus Status
+systemctl is-active --quiet clamav-daemon && echo "✅ ClamAV Daemon: Active" || echo "❌ ClamAV Daemon: Inactive"
+systemctl is-active --quiet clamav-freshclam && echo "✅ ClamAV Updates: Active" || echo "❌ ClamAV Updates: Inactive"
+
+# DNS Security
+systemctl is-active --quiet unbound && echo "✅ Unbound DNS: Active" || echo "❌ Unbound DNS: Inactive"
+
+# Hardware Monitoring
+systemctl is-active --quiet lm-sensors && echo "✅ Hardware Sensors: Active" || echo "❌ Hardware Sensors: Inactive"
+
+# File Integrity Monitoring
+if systemctl list-unit-files | grep -q aide.timer; then
+    systemctl is-active --quiet aide.timer && echo "✅ AIDE Integrity: Active" || echo "❌ AIDE Integrity: Inactive"
+else
+    echo "⚠️ AIDE Integrity: Not configured"
+fi
+
+# Log Monitoring
+if command -v logcheck >/dev/null 2>&1; then
+    if [ -f /etc/cron.d/logcheck ]; then
+        echo "✅ Logcheck: Configured"
+    else
+        echo "⚠️ Logcheck: Installed but not scheduled"
+    fi
+else
+    echo "❌ Logcheck: Not installed"
+fi
+
+if command -v logwatch >/dev/null 2>&1; then
+    if [ -f /etc/cron.d/logwatch ]; then
+        echo "✅ Logwatch: Configured"
+    else
+        echo "⚠️ Logwatch: Installed but not scheduled"
+    fi
+else
+    echo "❌ Logwatch: Not installed"
+fi
+
+# Rootkit Detection
+if command -v rkhunter >/dev/null 2>&1; then
+    # Check if rkhunter cron job exists
+    if [ -f /etc/cron.daily/rkhunter ] || [ -f /etc/cron.d/rkhunter ]; then
+        echo "✅ RKHunter: Configured"
+    else
+        echo "⚠️ RKHunter: Installed but not scheduled"
+    fi
+else
+    echo "❌ RKHunter: Not installed"
+fi
+
+if command -v chkrootkit >/dev/null 2>&1; then
+    if [ -f /etc/cron.daily/chkrootkit ] || [ -f /etc/cron.d/chkrootkit ]; then
+        echo "✅ Chkrootkit: Configured"
+    else
+        echo "⚠️ Chkrootkit: Installed but not scheduled"
+    fi
+else
+    echo "❌ Chkrootkit: Not installed"
+fi
+
+# Malware Detection
+if command -v maldet >/dev/null 2>&1; then
+    if [ -f /etc/cron.daily/maldet ] || grep -q maldet /etc/crontab 2>/dev/null; then
+        echo "✅ Linux Malware Detect: Configured"
+    else
+        echo "⚠️ Linux Malware Detect: Installed but not scheduled"
+    fi
+else
+    echo "❌ Linux Malware Detect: Not installed"
+fi
 echo ""
 echo "Local Mail System:"
 if [ -f /var/mail/root ]; then
@@ -2398,14 +2622,68 @@ EOF
 
 systemctl daemon-reload
 
+# Create AIDE systemd timer for daily checks
+cat > /etc/systemd/system/aide.timer << EOF
+[Unit]
+Description=Run AIDE integrity check daily
+Requires=aide.service
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# Create AIDE service unit that uses our custom script
+cat > /etc/systemd/system/aide.service << EOF
+[Unit]
+Description=AIDE integrity check
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/aide-check
+User=root
+Group=root
+
+# Resource limits to prevent AIDE from overwhelming bastion system
+CPUQuota=20%
+MemoryMax=256M
+Nice=19
+IOSchedulingClass=3
+
+# Proper logging
+StandardOutput=journal
+StandardError=journal
+
+# Security isolation
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/aide /var/log/aide /etc/aide
+EOF
+
+systemctl daemon-reload
+
 echo "Initializing AIDE database for bastion host - this will take some time..."
 # Run aideinit in a subshell to prevent environment pollution
 (nice -n 19 aideinit)
 
+# Enable and start AIDE timer
+systemctl enable aide.timer
+systemctl start aide.timer
+
 # Clear any environment variables that might interfere with heredocs
 unset EOF >/dev/null 2>&1 || true
 
-echo "✅ AIDE configured with proper mail functionality for bastion host"
+echo "✅ AIDE configured with systemd timer and proper mail functionality for bastion host"
+echo "   • Daily integrity checks enabled via aide.timer"
+echo "   • Custom mail alerts for detected changes"
+echo "   • Resource limits to prevent system impact"
 
 echo "===== 8. Configuring comprehensive audit framework for bastion ====="
 # Enhanced audit configuration for bastion hosts
