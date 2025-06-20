@@ -1051,18 +1051,46 @@ echo "Downloading Linux Malware Detect..."
 if wget -q http://www.rfxn.com/downloads/maldetect-current.tar.gz; then
     echo "✅ Downloaded maldetect successfully"
     
-    # Extract and install
-    tar -xzf maldetect-current.tar.gz
-    MALDET_DIR=$(tar -tzf maldetect-current.tar.gz | head -1 | cut -f1 -d"/")
-    cd "$MALDET_DIR"
-    
-    echo "Installing Linux Malware Detect..."
-    ./install.sh || {
-        echo "❌ Maldet installation failed"
+    # Extract and install with error handling
+    echo "Extracting maldetect archive..."
+    if tar -xzf maldetect-current.tar.gz 2>/dev/null; then
+        echo "✅ Archive extracted successfully"
+        
+        # Find the extracted directory (more robust method)
+        MALDET_DIR=$(find . -maxdepth 1 -type d -name "maldetect-*" | head -1 2>/dev/null)
+        if [ -z "$MALDET_DIR" ]; then
+            # Fallback: use tar output to get directory name
+            MALDET_DIR=$(tar -tzf maldetect-current.tar.gz 2>/dev/null | head -1 | cut -f1 -d"/")
+        fi
+        
+        if [ -n "$MALDET_DIR" ] && [ -d "$MALDET_DIR" ]; then
+            echo "✅ Found maldet directory: $MALDET_DIR"
+            cd "$MALDET_DIR"
+        else
+            echo "❌ Could not find maldet installation directory"
+            cd /
+            rm -rf /tmp/maldet-install
+            echo "⚠️ Maldet installation failed - continuing without maldet"
+            return 0  # Don't exit the entire script, just return from this section
+        fi
+    else
+        echo "❌ Failed to extract maldet archive"
         cd /
         rm -rf /tmp/maldet-install
-        exit 1
-    }
+        echo "⚠️ Maldet installation failed - continuing without maldet"
+        return 0  # Don't exit the entire script, just return from this section
+    fi
+    
+    echo "Installing Linux Malware Detect..."
+    if ./install.sh 2>/dev/null; then
+        echo "✅ Maldet installation completed successfully"
+    else
+        echo "❌ Maldet installation script failed"
+        cd /
+        rm -rf /tmp/maldet-install
+        echo "⚠️ Maldet installation failed - continuing without maldet"
+        return 0  # Don't exit the entire script, just return from this section
+    fi
     
     # Create symlink for easy access
     ln -sf /usr/local/maldetect/maldet /usr/local/bin/maldet
