@@ -1982,7 +1982,7 @@ if command -v sensors >/dev/null 2>&1; then
         echo "✅ Hardware sensors detected successfully!"
         
         # Show detected sensors with counts
-        SENSOR_COUNT=$(sensors 2>/dev/null | grep -E "Core|temp|fan|°C|°F|RPM|V|W" | wc -l)
+        SENSOR_COUNT=$(sensors 2>/dev/null | grep -cE "Core|temp|fan|°C|°F|RPM|V|W")
         echo "📊 Found $SENSOR_COUNT sensor readings:"
         sensors 2>/dev/null | grep -E "Core|temp|fan|°C|°F|RPM|V|W" | head -10 | sed 's/^/   /'
         
