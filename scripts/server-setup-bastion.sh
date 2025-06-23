@@ -3617,6 +3617,24 @@ cat >> /etc/logcheck/ignore.d.server/bastion-ignore << EOF
 
 # Normal postfix activity (for notifications)
 ^\w{3} [ :0-9]{11} [._[:alnum:]-]+ postfix\/.*\[[0-9]+\]: [A-F0-9]+: .*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ postfix\/.*\[[0-9]+\]: [A-F0-9]+: .*$
+
+# Suricata normal operations and restarts
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ suricata\[[0-9]+\]: [0-9]{1,2}\/[0-9]{1,2}\/[0-9]{4} -- [0-9]{2}:[0-9]{2}:[0-9]{2} - <.*> - .*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ systemd\[[0-9]+\]: suricata\.service: .*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ suricatasc\[[0-9]+\]: Unable to connect to socket .*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ kernel: \[[0-9.]+\] device ens[0-9]+ (entered|left) promiscuous mode$
+
+# Normal security tool operations
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ chkrootkit-daily\[[0-9]+\]: sending alert to root: .*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ maldet: .*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ root: (Security configuration backup completed|Suricata rules updated successfully): .*$
+
+# SSH connection attempts and failures (these are expected on a bastion)
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sshd\[[0-9]+\]: (error: |Unable to negotiate with|Connection closed by|banner exchange:).*$
+
+# Kernel packet filtering messages
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ kernel: \[[0-9.]+\] af_packet: .*$
 EOF
 
 echo "✅ Logcheck configured for daily server-level reports (less technical than default)"
@@ -3636,17 +3654,14 @@ Format = html
 Range = yesterday
 Detail = High
 
-# Use All services but exclude unnecessary ones
-Service = All
-Service = "-zz-disk_space"
-Service = "-zz-network"
-Service = "-zz-sys"
-Service = "-named"
-Service = "-http"
-
-# Enhanced email/sendmail reporting
+# Use specific services instead of All to avoid configuration conflicts
 Service = postfix
 Service = sendmail
+Service = sshd
+Service = kernel
+Service = secure
+Service = cron
+Service = dpkg
 EOF
 
 # Create enhanced postfix/sendmail service configuration for detailed reporting
@@ -4070,9 +4085,28 @@ else
 fi
 echo "" >> \$REPORT_FILE
 
-echo "FIREWALL STATUS" >> \$REPORT_FILE
-echo "===============" >> \$REPORT_FILE
+echo "FIREWALL STATUS & STATISTICS" >> \$REPORT_FILE
+echo "============================" >> \$REPORT_FILE
 ufw status numbered >> \$REPORT_FILE 2>/dev/null || echo "UFW status unavailable" >> \$REPORT_FILE
+echo "" >> \$REPORT_FILE
+
+echo "UFW BLOCKED CONNECTIONS (Last 24h)" >> \$REPORT_FILE
+echo "===================================" >> \$REPORT_FILE
+# Generate UFW block statistics instead of showing individual blocks
+UFW_BLOCKS=\$(grep "\$(date '+%Y-%m-%d')" /var/log/kern.log 2>/dev/null | grep "UFW BLOCK" | wc -l)
+echo "Total blocked connections: \$UFW_BLOCKS" >> \$REPORT_FILE
+if [ \$UFW_BLOCKS -gt 0 ]; then
+    echo "" >> \$REPORT_FILE
+    echo "Top 10 blocked source IPs:" >> \$REPORT_FILE
+    grep "\$(date '+%Y-%m-%d')" /var/log/kern.log 2>/dev/null | grep "UFW BLOCK" | \
+        grep -o "SRC=[0-9.]*" | cut -d= -f2 | sort | uniq -c | sort -nr | head -10 | \
+        awk '{printf "  %s attempts from %s\\n", \$1, \$2}' >> \$REPORT_FILE 2>/dev/null || true
+    echo "" >> \$REPORT_FILE
+    echo "Top 10 blocked destination ports:" >> \$REPORT_FILE
+    grep "\$(date '+%Y-%m-%d')" /var/log/kern.log 2>/dev/null | grep "UFW BLOCK" | \
+        grep -o "DPT=[0-9]*" | cut -d= -f2 | sort | uniq -c | sort -nr | head -10 | \
+        awk '{printf "  %s attempts on port %s\\n", \$1, \$2}' >> \$REPORT_FILE 2>/dev/null || true
+fi
 echo "" >> \$REPORT_FILE
 
 echo "FAIL2BAN STATUS" >> \$REPORT_FILE
@@ -4082,20 +4116,23 @@ echo "" >> \$REPORT_FILE
 
 echo "AUDIT SUMMARY" >> \$REPORT_FILE
 echo "=============" >> \$REPORT_FILE
-if ausearch --start today --end now 2>/dev/null | aureport --summary >> \$REPORT_FILE 2>/dev/null; then
+# Use proper date format for ausearch (MM/DD/YYYY HH:MM:SS)
+START_DATE=\$(date -d "yesterday" "+%m/%d/%Y 00:00:00")
+END_DATE=\$(date -d "today" "+%m/%d/%Y 00:00:00")
+if ausearch --start "\$START_DATE" --end "\$END_DATE" 2>/dev/null | aureport --summary >> \$REPORT_FILE 2>/dev/null; then
     true
 else
-    echo "No audit events found for today" >> \$REPORT_FILE
+    echo "No audit events found for yesterday" >> \$REPORT_FILE
 fi
 echo "" >> \$REPORT_FILE
 
 echo "CRITICAL SECURITY EVENTS" >> \$REPORT_FILE
 echo "========================" >> \$REPORT_FILE
 EVENTS_FOUND=0
-if ausearch -k privilege_escalation --start today --end now >> \$REPORT_FILE 2>/dev/null; then
+if ausearch -k privilege_escalation --start "\$START_DATE" --end "\$END_DATE" >> \$REPORT_FILE 2>/dev/null; then
     EVENTS_FOUND=1
 fi
-if ausearch -k user_commands --start today --end now 2>/dev/null | tail -20 >> \$REPORT_FILE; then
+if ausearch -k user_commands --start "\$START_DATE" --end "\$END_DATE" 2>/dev/null | tail -20 >> \$REPORT_FILE; then
     EVENTS_FOUND=1
 fi
 if [ \$EVENTS_FOUND -eq 0 ]; then
@@ -4115,6 +4152,19 @@ chmod 755 /etc/cron.daily/bastion-security-report
 echo "===== 12. Setting up bastion-specific log rotation (avoiding conflicts) ====="
 # Remove any conflicting logrotate configurations and create bastion-specific ones
 rm -f /etc/logrotate.d/bastion-logs
+
+# Remove duplicate/conflicting system logrotate configs that cause errors
+# Keep only one configuration per log file to avoid "duplicate log entry" errors
+echo "Cleaning up duplicate logrotate configurations..."
+for config in clamav-daemon clamav-freshclam alternatives apt btmp clamav dpkg fail2ban maldet netdata rkhunter rsyslog suricata ufw unattended-upgrades wtmp; do
+    if [ -f "/etc/logrotate.d/$config" ]; then
+        # Check if there are any bastion-specific entries that would conflict
+        if [ -f "/etc/logrotate.d/bastion-$config" ]; then
+            echo "Removing system default $config logrotate config (bastion-specific version exists)"
+            rm -f "/etc/logrotate.d/$config"
+        fi
+    fi
+done
 
 # Create separate logrotate configs for bastion-specific logs only
 # This avoids conflicts with system default logrotate configurations
@@ -4754,8 +4804,12 @@ if [ -f "$SUID_BASELINE" ]; then
         log_message "ALERT: SUID/SGID binary changes detected"
         echo "SECURITY ALERT: SUID/SGID binary changes on bastion host $(hostname)" | mail -s "BASTION ALERT: SUID/SGID Changes" root
         diff "$SUID_BASELINE" /tmp/suid-sgid.current >> "$LOGFILE" 2>/dev/null || true
+    else
+        log_message "INFO: No changes in SUID/SGID binaries"
     fi
 else
+    # Ensure baseline directory exists before creating baseline
+    mkdir -p "$BASELINE_DIR"
     cp /tmp/suid-sgid.current "$SUID_BASELINE"
     log_message "INFO: Created SUID/SGID baseline"
 fi
@@ -4829,13 +4883,19 @@ EOF
 
 chmod +x /etc/cron.hourly/disk-space-protection
 
-# Add logrotate configuration to be more aggressive about space
-cat >> /etc/logrotate.conf << EOF
-
-# Emergency space management
-# If disk usage goes above 90%, force rotation of large logs
-include /etc/logrotate.d
-size 100M
+# Add emergency space management configuration to logrotate
+# Create a separate config file instead of modifying main logrotate.conf
+cat > /etc/logrotate.d/emergency-space-management << EOF
+# Emergency space management for bastion hosts
+# Force rotation of any logs larger than 100M
+/var/log/*.log /var/log/*/*.log {
+    size 100M
+    rotate 1
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
 EOF
 
 echo "✅ Emergency disk space protection configured"
@@ -5172,7 +5232,7 @@ systemctl disable apparmor 2>/dev/null || true
 # Remove AppArmor profiles to prevent interference
 if [ -d /etc/apparmor.d ]; then
     echo "Backing up AppArmor profiles before removal..."
-    tar -czf /var/backups/apparmor-profiles-backup-$(date +%Y%m%d).tar.gz /etc/apparmor.d/ 2>/dev/null || true
+    tar -czf /var/backups/apparmor-profiles-backup-"$(date +%Y%m%d)".tar.gz /etc/apparmor.d/ 2>/dev/null || true
     
     # Clear all profiles
     echo "Removing AppArmor profiles..."
