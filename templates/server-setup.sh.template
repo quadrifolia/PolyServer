@@ -2907,22 +2907,13 @@ EOF
 mkdir -p /etc/logwatch/conf/services
 mkdir -p /etc/logwatch/conf/logfiles
 
-# Create mail logfile configuration
-cat > /etc/logwatch/conf/logfiles/mail.conf << EOF
-# Mail logfile configuration for postfix/sendmail
-LogFile = /var/log/mail.log
-LogFile = /var/log/mail.info
-LogFile = /var/log/mail.warn
-LogFile = /var/log/mail.err
-Archive = /var/log/mail.log.*
-*ExpandRepeats
-*ApplyStdDate
-EOF
+# Create postfix service configuration using journalctl
 cat > /etc/logwatch/conf/services/postfix.conf << EOF
-# Enhanced Postfix reporting for servers
+# Enhanced Postfix reporting for servers using journalctl
 Title = "Mail System (Postfix/Sendmail)"
-LogFile = mail
-*OnlyService = postfix
+Logfile =
+Logfile = none
+*JournalCtl = "--unit='postfix' --unit='postfix@-'"
 *RemoveHeaders = Yes
 Detail = High
 EOF
