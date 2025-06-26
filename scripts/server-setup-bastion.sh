@@ -3690,7 +3690,7 @@ EOF
 mkdir -p /etc/logwatch/conf/services
 mkdir -p /etc/logwatch/conf/logfiles
 
-# Create postfix service configuration using journalctl
+# Create journalctl-based service configurations for systemd services
 cat > /etc/logwatch/conf/services/postfix.conf << EOF
 # Enhanced Postfix reporting for bastion host using journalctl
 Title = "Mail System (Postfix/Sendmail)"
@@ -3699,6 +3699,51 @@ Logfile = none
 *JournalCtl = "--unit='postfix' --unit='postfix@-'"
 *RemoveHeaders = Yes
 Detail = High
+EOF
+
+cat > /etc/logwatch/conf/services/fail2ban.conf << EOF
+# Fail2ban Intrusion Prevention using journalctl
+Title = "Fail2ban Intrusion Prevention"
+Logfile =
+*JournalCtl = "--unit=fail2ban"
+*RemoveHeaders = Yes
+Detail = High
+EOF
+
+cat > /etc/logwatch/conf/services/suricata.conf << EOF
+# Suricata Intrusion Detection using journalctl
+Title = "Suricata Intrusion Detection"
+Logfile =
+*JournalCtl = "--unit=suricata"
+*RemoveHeaders = Yes
+Detail = High
+EOF
+
+cat > /etc/logwatch/conf/services/unbound.conf << EOF
+# Unbound DNS Resolver using journalctl
+Title = "Unbound DNS Resolver"
+Logfile =
+*JournalCtl = "--unit=unbound"
+*RemoveHeaders = Yes
+Detail = Medium
+EOF
+
+cat > /etc/logwatch/conf/services/ssh.conf << EOF
+# SSH Daemon using journalctl
+Title = "SSH Daemon"
+Logfile =
+*JournalCtl = "--unit=ssh --unit=sshd"
+*RemoveHeaders = Yes
+Detail = High
+EOF
+
+cat > /etc/logwatch/conf/services/cron.conf << EOF
+# Cron Daemon using journalctl
+Title = "Cron Daemon"
+Logfile =
+*JournalCtl = "--unit=cron"
+*RemoveHeaders = Yes
+Detail = Medium
 EOF
 
 # Create custom sendmail/postfix logwatch script for bastion-specific analysis
