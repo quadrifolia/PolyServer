@@ -2885,12 +2885,13 @@ Show_Empty_Sections = yes
 Service =
 
 # Use specific services instead of All to avoid configuration conflicts
+Service = zz-sys         # System Configuration
 Service = sshd           # SSH login attempts and success/fail
 Service = secure         # PAM messages, login denials
 Service = sudo           # Use of sudo, privilege escalations
 Service = audit          # If auditd is active
 Service = fail2ban       # Banned IPs (if you're using it)
-Service = pam            # Pluggable authentication messages
+Service = pam_unix       # Pluggable authentication messages
 Service = cron           # Scheduled job activity
 Service = dpkg           # Package installs/removals (Debian/Ubuntu)
 Service = systemd        # System boot/service issues
@@ -2899,8 +2900,10 @@ Service = postfix        # Mail logs (if you use local mail for cron/system)
 Service = sendmail       # Might be triggered by postfix wrapper
 Service = iptables       # Firewall logs (if you log dropped packets)
 Service = zz-lm_sensors  # Hardware Sensors
+Service = zz-network     # Network Interface
 Service = zz-disk_space  # Disk usage overview
 Service = clamav         # Virus scan results
+Service = clam-update    # Virus scan updates
 EOF
 
 # Create enhanced postfix/sendmail service configuration for detailed reporting
@@ -2916,51 +2919,6 @@ Logfile = none
 *JournalCtl = "--unit='postfix' --unit='postfix@-'"
 *RemoveHeaders = Yes
 Detail = High
-EOF
-
-cat > /etc/logwatch/conf/services/fail2ban.conf << EOF
-# Fail2ban Intrusion Prevention using journalctl
-Title = "Fail2ban Intrusion Prevention"
-Logfile =
-*JournalCtl = "--unit=fail2ban"
-*RemoveHeaders = Yes
-Detail = High
-EOF
-
-cat > /etc/logwatch/conf/services/suricata.conf << EOF
-# Suricata Intrusion Detection using journalctl
-Title = "Suricata Intrusion Detection"
-Logfile =
-*JournalCtl = "--unit=suricata"
-*RemoveHeaders = Yes
-Detail = High
-EOF
-
-cat > /etc/logwatch/conf/services/unbound.conf << EOF
-# Unbound DNS Resolver using journalctl
-Title = "Unbound DNS Resolver"
-Logfile =
-*JournalCtl = "--unit=unbound"
-*RemoveHeaders = Yes
-Detail = Medium
-EOF
-
-cat > /etc/logwatch/conf/services/sshd.conf << EOF
-# SSH Daemon using journalctl
-Title = "SSH Daemon"
-Logfile =
-*JournalCtl = "--unit=ssh --unit=sshd"
-*RemoveHeaders = Yes
-Detail = High
-EOF
-
-cat > /etc/logwatch/conf/services/cron.conf << EOF
-# Cron Daemon using journalctl
-Title = "Cron Daemon"
-Logfile =
-*JournalCtl = "--unit=cron"
-*RemoveHeaders = Yes
-Detail = Medium
 EOF
 
 # Create custom sendmail/postfix logwatch script for server-specific analysis
