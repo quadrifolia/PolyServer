@@ -631,6 +631,9 @@ else
     KERNEL_UPDATE_NEEDED=false
 fi
 
+# Export kernel update status for potential use by other scripts
+export KERNEL_UPDATE_NEEDED
+
 # Check for backports kernel if available (often has better hardware support)
 if apt-cache search linux-image | grep -q backports; then
     echo ""
@@ -1068,7 +1071,7 @@ if [ "$SMTP_ENABLED" = "true" ]; then
     
     # Configure postfix for external SMTP relay
     postconf -e "relayhost = [$SMTP_SERVER]:$SMTP_PORT"
-    postconf -e "smtp_use_tls = yes"
+    postconf -e "smtp_use_tls = $SMTP_USE_TLS"
     postconf -e "smtp_sasl_auth_enable = yes"
     postconf -e "smtp_sasl_security_options = noanonymous"
     postconf -e "smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd"
@@ -2860,49 +2863,63 @@ fi
 
 # Configure Logwatch
 echo "===== 10. Configuring Logwatch ====="
+
+# Configure rsyslog with traditional timestamp format for logwatch compatibility
+if ! grep -q "RSYSLOG_TraditionalFileFormat" /etc/rsyslog.conf; then
+    cp /etc/rsyslog.conf /etc/rsyslog.conf.backup
+    sed -i '1i$ActionFileDefaultTemplate RSYSLOG_TraditionalFileFormat' /etc/rsyslog.conf
+    systemctl restart rsyslog
+    echo "✅ Configured rsyslog to use traditional timestamp format"
+fi
+
 mkdir -p /var/cache/logwatch
 
 # Create Logwatch configuration
 cat > /etc/logwatch/conf/logwatch.conf << EOF
 # Logwatch Configuration
-
-# Default logwatch output format
 Output = mail
-
-# Default person to mail reports to
 MailTo = ${LOGWATCH_EMAIL:-root}
-
-# Default logwatch format
 Format = html
-
-# Default range
 Range = yesterday
-
-# Default detail level
-Detail = Med
-
-# Include hardware sensors in output
-Service = zz-lm_sensors
-
-# Support for lm_sensors data
-Service = zz-disk_space
-
-# Enhanced email/sendmail reporting
-Service = postfix
-Service = sendmail
-
-# Always show empty sections
+Detail = High
 Show_Empty_Sections = yes
+
+# Disable the default Service = All to avoid conflicts
+Service =
+
+# Use specific services instead of All to avoid configuration conflicts
+Service = zz-sys         # System Configuration
+Service = sshd           # SSH login attempts and success/fail
+Service = secure         # PAM messages, login denials
+Service = sudo           # Use of sudo, privilege escalations
+Service = audit          # If auditd is active
+Service = fail2ban       # Banned IPs (if you're using it)
+Service = pam_unix       # Pluggable authentication messages
+Service = cron           # Scheduled job activity
+Service = dpkg           # Package installs/removals (Debian/Ubuntu)
+Service = systemd        # System boot/service issues
+Service = kernel         # Kernel messages (OOM, panics, etc.)
+Service = postfix        # Mail logs (if you use local mail for cron/system)
+Service = sendmail       # Might be triggered by postfix wrapper
+Service = iptables       # Firewall logs (if you log dropped packets)
+Service = zz-lm_sensors  # Hardware Sensors
+Service = zz-network     # Network Interface
+Service = zz-disk_space  # Disk usage overview
+Service = clamav         # Virus scan results
+Service = clam-update    # Virus scan updates
 EOF
 
 # Create enhanced postfix/sendmail service configuration for detailed reporting
 mkdir -p /etc/logwatch/conf/services
+mkdir -p /etc/logwatch/conf/logfiles
+
+# Create journalctl-based service configurations for systemd services
 cat > /etc/logwatch/conf/services/postfix.conf << EOF
-# Enhanced Postfix reporting for servers
+# Enhanced Postfix reporting for servers using journalctl
 Title = "Mail System (Postfix/Sendmail)"
-LogFile = mail
-LogFile = maillog
-*OnlyService = postfix
+Logfile =
+Logfile = none
+*JournalCtl = "--unit='postfix' --unit='postfix@-'"
 *RemoveHeaders = Yes
 Detail = High
 EOF
@@ -3818,10 +3835,33 @@ cat > /etc/logrotate.d/polyserver-aide << 'EOF'
 }
 EOF
 
-# Note: auth.log, syslog, and kern.log are already managed by system default logrotate
-# We avoid creating conflicting configurations for these files
+# Configure comprehensive rsyslog log rotation
+cat > /etc/logrotate.d/rsyslog << 'EOF'
+/var/log/syslog
+/var/log/mail.log
+/var/log/mail.err
+/var/log/mail.info
+/var/log/mail.warn
+/var/log/kern.log
+/var/log/auth.log
+/var/log/user.log
+/var/log/daemon.log
+/var/log/debug
+/var/log/messages
+{
+    rotate 7
+    daily
+    missingok
+    notifempty
+    delaycompress
+    compress
+    postrotate
+        invoke-rc.d rsyslog rotate > /dev/null 2>&1 || true
+    endscript
+}
+EOF
 
-echo "✅ Application-specific log rotation configured (avoiding system conflicts)"
+echo "✅ Comprehensive log rotation configured (including rsyslog system logs)"
 
 # ========= Additional security hardening =========
 echo "===== 11. Additional security hardening ====="
@@ -4477,13 +4517,17 @@ if command -v aa-status >/dev/null 2>&1; then
     aa-status
     
     # Check if profiles are in enforce mode
-    PROFILES_ENFORCE=$(aa-status --complain 2>/dev/null | wc -l)
-    PROFILES_COMPLAIN=$(aa-status --enforce 2>/dev/null | wc -l)
+    PROFILES_COMPLAIN=$(aa-status --complain 2>/dev/null | wc -l)
+    PROFILES_ENFORCE=$(aa-status --enforce 2>/dev/null | wc -l)
     
     if [ "$PROFILES_COMPLAIN" -gt 0 ]; then
         echo "⚠️ $PROFILES_COMPLAIN AppArmor profiles in complain mode - consider enforcing:"
         aa-status --complain 2>/dev/null || true
         echo "   To enforce: sudo aa-enforce /etc/apparmor.d/<profile>"
+    fi
+    
+    if [ "$PROFILES_ENFORCE" -gt 0 ]; then
+        echo "✅ $PROFILES_ENFORCE AppArmor profiles in enforce mode"
     fi
     
     # Create custom SSH profile for enhanced protection

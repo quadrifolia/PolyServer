@@ -2267,8 +2267,10 @@ fi
 
 # Log Monitoring
 if command -v logcheck >/dev/null 2>&1; then
-    if [ -f /etc/cron.d/logcheck ]; then
-        echo "✅ Logcheck: Configured"
+    if [ -f /etc/cron.daily/logcheck ]; then
+        echo "✅ Logcheck: Configured (daily)"
+    elif [ -f /etc/cron.d/logcheck ]; then
+        echo "✅ Logcheck: Configured (cron.d)"
     else
         echo "⚠️ Logcheck: Installed but not scheduled"
     fi
@@ -3285,6 +3287,16 @@ echo "===== 10. Setting up comprehensive logging and monitoring ====="
 
 # Rsyslog already installed and configured earlier for fail2ban
 
+# Configure rsyslog with traditional timestamp format for logwatch compatibility
+if ! grep -q "RSYSLOG_TraditionalFileFormat" /etc/rsyslog.conf; then
+    cp /etc/rsyslog.conf /etc/rsyslog.conf.backup
+    {
+        echo "\$ActionFileDefaultTemplate RSYSLOG_TraditionalFileFormat"
+        cat /etc/rsyslog.conf
+    } > /etc/rsyslog.conf.tmp && mv /etc/rsyslog.conf.tmp /etc/rsyslog.conf
+    echo "✅ Configured rsyslog to use traditional timestamp format"
+fi
+
 # Configure rsyslog for enhanced logging
 cat > /etc/rsyslog.d/bastion-logging.conf << EOF
 # Bastion Host Enhanced Logging Configuration
@@ -3631,7 +3643,7 @@ cat >> /etc/logcheck/ignore.d.server/bastion-ignore << EOF
 ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ root: (Security configuration backup completed|Suricata rules updated successfully): .*$
 
 # SSH connection attempts and failures (these are expected on a bastion)
-^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sshd\[[0-9]+\]: (error: |Unable to negotiate with|Connection closed by|banner exchange:).*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sshd\[[0-9]+\]: (error: |Unable to negotiate with|Connection closed by|banner exchange:|drop connection|fatal: |exited MaxStartups|beginning MaxStartups).*$
 
 # Kernel packet filtering messages
 ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ kernel: \[[0-9.]+\] af_packet: .*$
@@ -3653,25 +3665,44 @@ MailTo = $LOGWATCH_EMAIL
 Format = html
 Range = yesterday
 Detail = High
+Show_Empty_Sections = yes
 
-# Use specific services instead of All to avoid configuration conflicts
-Service = postfix
-Service = sendmail
-Service = sshd
-Service = kernel
-Service = secure
-Service = cron
-Service = dpkg
+# Disable the default Service = All to avoid conflicts
+Service = 
+
+# Use specific services for bastion monitoring
+Service = zz-sys         # System Configuration
+Service = sshd           # SSH login attempts and success/fail
+Service = secure         # PAM messages, login denials
+Service = sudo           # Use of sudo, privilege escalations
+Service = audit          # If auditd is active
+Service = fail2ban       # Banned IPs (if you're using it)
+Service = pam_unix       # Pluggable authentication messages
+Service = cron           # Scheduled job activity
+Service = dpkg           # Package installs/removals (Debian/Ubuntu)
+Service = systemd        # System boot/service issues
+Service = kernel         # Kernel messages (OOM, panics, etc.)
+Service = postfix        # Mail logs (if you use local mail for cron/system)
+Service = sendmail       # Might be triggered by postfix wrapper
+Service = iptables       # Firewall logs (if you log dropped packets)
+Service = zz-lm_sensors  # Hardware Sensors
+Service = zz-network     # Network Interface
+Service = zz-disk_space  # Disk usage overview
+Service = clamav         # Virus scan results
+Service = clam-update    # Virus scan updates
 EOF
 
 # Create enhanced postfix/sendmail service configuration for detailed reporting
 mkdir -p /etc/logwatch/conf/services
+mkdir -p /etc/logwatch/conf/logfiles
+
+# Create journalctl-based service configurations for systemd services
 cat > /etc/logwatch/conf/services/postfix.conf << EOF
-# Enhanced Postfix reporting for bastion host
+# Enhanced Postfix reporting for bastion host using journalctl
 Title = "Mail System (Postfix/Sendmail)"
-LogFile = mail
-LogFile = maillog
-*OnlyService = postfix
+Logfile =
+Logfile = none
+*JournalCtl = "--unit='postfix' --unit='postfix@-'"
 *RemoveHeaders = Yes
 Detail = High
 EOF
@@ -3839,7 +3870,7 @@ if (@critical_events) {
 }
 
 # Recommendations for bastion hosts
-if ($security_events{"Unauthorized Relay Attempts"} > 0) {
+if (($security_events{"Unauthorized Relay Attempts"} // 0) > 0) {
     print "⚠️  SECURITY RECOMMENDATIONS:\n";
     print "-" x 32 . "\n";
     print "• Review relay restrictions in postfix configuration\n";
@@ -4265,7 +4296,34 @@ cat > /etc/logrotate.d/bastion-aide << EOF
 }
 EOF
 
-echo "✅ Bastion-specific logrotate configurations created (avoiding system conflicts)"
+# Configure comprehensive rsyslog log rotation
+cat > /etc/logrotate.d/rsyslog << 'EOF'
+/var/log/syslog
+/var/log/mail.log
+/var/log/mail.err
+/var/log/mail.info
+/var/log/mail.warn
+/var/log/kern.log
+/var/log/auth.log
+/var/log/user.log
+/var/log/daemon.log
+/var/log/debug
+/var/log/messages
+{
+    rotate 7
+    daily
+    missingok
+    notifempty
+    delaycompress
+    compress
+    postrotate
+        invoke-rc.d rsyslog rotate > /dev/null 2>&1 || true
+    endscript
+}
+EOF
+
+echo "✅ Comprehensive log rotation configured (including rsyslog system logs)"
+echo "✅ Bastion-specific logrotate configurations created"
 
 # Add disk space monitoring to bastion monitoring script
 echo "===== 12.1 Adding disk space monitoring to prevent log overflow ====="
