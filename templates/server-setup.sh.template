@@ -631,6 +631,9 @@ else
     KERNEL_UPDATE_NEEDED=false
 fi
 
+# Export kernel update status for potential use by other scripts
+export KERNEL_UPDATE_NEEDED
+
 # Check for backports kernel if available (often has better hardware support)
 if apt-cache search linux-image | grep -q backports; then
     echo ""
@@ -1068,7 +1071,7 @@ if [ "$SMTP_ENABLED" = "true" ]; then
     
     # Configure postfix for external SMTP relay
     postconf -e "relayhost = [$SMTP_SERVER]:$SMTP_PORT"
-    postconf -e "smtp_use_tls = yes"
+    postconf -e "smtp_use_tls = $SMTP_USE_TLS"
     postconf -e "smtp_sasl_auth_enable = yes"
     postconf -e "smtp_sasl_security_options = noanonymous"
     postconf -e "smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd"
@@ -4514,13 +4517,17 @@ if command -v aa-status >/dev/null 2>&1; then
     aa-status
     
     # Check if profiles are in enforce mode
-    PROFILES_ENFORCE=$(aa-status --complain 2>/dev/null | wc -l)
-    PROFILES_COMPLAIN=$(aa-status --enforce 2>/dev/null | wc -l)
+    PROFILES_COMPLAIN=$(aa-status --complain 2>/dev/null | wc -l)
+    PROFILES_ENFORCE=$(aa-status --enforce 2>/dev/null | wc -l)
     
     if [ "$PROFILES_COMPLAIN" -gt 0 ]; then
         echo "⚠️ $PROFILES_COMPLAIN AppArmor profiles in complain mode - consider enforcing:"
         aa-status --complain 2>/dev/null || true
         echo "   To enforce: sudo aa-enforce /etc/apparmor.d/<profile>"
+    fi
+    
+    if [ "$PROFILES_ENFORCE" -gt 0 ]; then
+        echo "✅ $PROFILES_ENFORCE AppArmor profiles in enforce mode"
     fi
     
     # Create custom SSH profile for enhanced protection
