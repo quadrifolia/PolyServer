@@ -3728,7 +3728,7 @@ Logfile =
 Detail = Medium
 EOF
 
-cat > /etc/logwatch/conf/services/ssh.conf << EOF
+cat > /etc/logwatch/conf/services/sshd.conf << EOF
 # SSH Daemon using journalctl
 Title = "SSH Daemon"
 Logfile =
