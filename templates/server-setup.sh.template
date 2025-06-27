@@ -2867,6 +2867,7 @@ echo "===== 10. Configuring Logwatch ====="
 # Configure rsyslog with traditional timestamp format for logwatch compatibility
 if ! grep -q "RSYSLOG_TraditionalFileFormat" /etc/rsyslog.conf; then
     cp /etc/rsyslog.conf /etc/rsyslog.conf.backup
+    # shellcheck disable=SC2016
     sed -i '1i$ActionFileDefaultTemplate RSYSLOG_TraditionalFileFormat' /etc/rsyslog.conf
     systemctl restart rsyslog
     echo "✅ Configured rsyslog to use traditional timestamp format"
