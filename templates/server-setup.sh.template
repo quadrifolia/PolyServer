@@ -2645,10 +2645,15 @@ if [ "$DOCKER_MODE" = "false" ]; then
     echo ""
     
     # Service detection and configuration
+    # shellcheck disable=SC2016
     HTTP_SERVERS='$HOME_NET'
+    # shellcheck disable=SC2016
     SQL_SERVERS='$HOME_NET'
+    # shellcheck disable=SC2016
     DNS_SERVERS='$HOME_NET'
+    # shellcheck disable=SC2016
     MAIL_SERVERS='$HOME_NET'
+    # shellcheck disable=SC2016
     FTP_SERVERS='$HOME_NET'
     
     if [ "$TESTING_MODE" != "true" ]; then
