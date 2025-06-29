@@ -2982,11 +2982,21 @@ vars:
     HOME_NET: "[$BASTION_IP]"
     EXTERNAL_NET: "![$BASTION_IP]"
     INTERNAL_NET: "[$INTERNAL_NETWORK]"
+    # Bastion-specific: Only SSH services, others set to any for external monitoring only
+    HTTP_SERVERS: "any"
+    SQL_SERVERS: "any"
+    DNS_SERVERS: "any"
+    MAIL_SERVERS: "any"
+    FTP_SERVERS: "any"
     
   port-groups:
     SSH_PORTS: "$SSH_PORT"
     HTTP_PORTS: "80"
     HTTPS_PORTS: "443"
+    DNS_PORTS: "53"
+    DB_PORTS: "3306,5432,1521,1433,27017"
+    MAIL_PORTS: "25,465,587,993,995"
+    FTP_PORTS: "21,990"
     
 default-rule-path: /etc/suricata/rules
 rule-files:
