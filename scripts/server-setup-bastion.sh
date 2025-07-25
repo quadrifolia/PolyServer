@@ -3131,6 +3131,7 @@ EOF
     cat > /etc/logrotate.d/suricata << EOF
 /var/log/suricata/*.log /var/log/suricata/*.json {
     daily
+    size 100M
     rotate 14
     compress
     delaycompress
@@ -3138,7 +3139,7 @@ EOF
     notifempty
     create 0640 root adm
     postrotate
-        systemctl restart suricata
+        /bin/kill -USR2 $(cat /var/run/suricata.pid 2>/dev/null) 2>/dev/null || systemctl reload suricata 2>/dev/null || true
     endscript
 }
 EOF
