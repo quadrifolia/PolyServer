@@ -4750,6 +4750,393 @@ else
     echo "⚠️ AppArmor not available or not installed"
 fi
 
+# Optional Resource Guardian System
+echo ""
+read -p "Install Resource Guardian system for proactive resource management? (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo "===== 15.1 Setting up Resource Guardian System ====="
+    echo "Installing Resource Guardian for proactive resource management..."
+    
+    cat > /usr/local/bin/resource-guardian << 'EOF'
+#!/bin/bash
+# Resource Guardian - Proactive Resource Management for Production Server
+# Monitors and manages resource usage to prevent service failures
+
+LOGFILE="/var/log/resource-guardian.log"
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+
+# Configuration - More conservative for production servers
+HIGH_CPU_THRESHOLD=85       # Higher threshold for production
+SUSTAINED_CPU_TIME=600      # 10 minutes (longer grace period)
+HIGH_MEMORY_THRESHOLD=90    # High memory warning threshold
+CRITICAL_MEMORY_THRESHOLD=95 # Emergency memory threshold
+
+# Critical processes that should never be killed
+CRITICAL_PROCESSES="systemd|sshd|networkd|dbus|fail2ban|auditd|rsyslog|nginx|docker|containerd"
+
+# Logging function
+log_message() {
+    echo "[$TIMESTAMP] $*" >> "$LOGFILE"
+}
+
+# Function to check CPU usage
+check_cpu_usage() {
+    # Find processes using high CPU for sustained periods
+    ps aux --sort=-%cpu | awk 'NR>1 {print $2, $3, $10, $11}' | head -10 | while read -r pid cpu_percent time_col command; do
+        if ! echo "$command" | grep -qE "$CRITICAL_PROCESSES"; then
+            if (( $(echo "$cpu_percent > $HIGH_CPU_THRESHOLD" | bc -l) )); then
+                # Convert time to seconds for comparison
+                time_seconds=$(echo "$time_col" | awk -F: '{
+                    if (NF == 3) print ($1 * 3600) + ($2 * 60) + $3
+                    else if (NF == 2) print ($1 * 60) + $2
+                    else print $1
+                }' | cut -d. -f1)
+                
+                # Only terminate if sustained high usage (production safety)
+                if [ "$time_seconds" -gt "$SUSTAINED_CPU_TIME" ]; then
+                    log_message "ACTION: Terminating high-CPU process: PID=$pid CMD=$command CPU=${cpu_percent}% TIME=${time_col}"
+                    
+                    # Send warning email first (production safety)
+                    echo "Resource Guardian will terminate high-CPU process on server $(hostname):
+                    
+Process: $command
+PID: $pid  
+CPU Usage: ${cpu_percent}%
+Runtime: $time_col
+Action: Process will be terminated in 2 minutes to protect system stability
+
+To prevent automatic termination: kill $pid or systemctl stop [service]" | mail -s "PRODUCTION WARNING: Resource Guardian Action Pending" root
+                    
+                    # Wait 2 minutes before termination (production safety)
+                    sleep 120
+                    
+                    # Check if process still exists and is still high CPU
+                    if ps -p "$pid" > /dev/null 2>&1; then
+                        current_cpu=$(ps -p "$pid" -o %cpu --no-headers 2>/dev/null | tr -d ' ')
+                        if (( $(echo "$current_cpu > $HIGH_CPU_THRESHOLD" | bc -l) )); then
+                            kill -TERM "$pid" 2>/dev/null
+                            sleep 10
+                            kill -KILL "$pid" 2>/dev/null
+                            
+                            echo "Resource Guardian terminated high-CPU process on server $(hostname):
+                            
+Process: $command
+PID: $pid
+CPU Usage: ${cpu_percent}%
+Runtime: $time_col
+Action: Process terminated to protect system stability" | mail -s "PRODUCTION: Resource Guardian Action Taken" root
+                        fi
+                    fi
+                fi
+            fi
+        fi
+    done
+}
+
+# Function to check memory usage
+check_memory_usage() {
+    memory_usage=$(free | grep Mem | awk '{printf "%.1f", ($3/$2)*100}')
+    
+    if (( $(echo "$memory_usage > $CRITICAL_MEMORY_THRESHOLD" | bc -l) )); then
+        log_message "CRITICAL: Memory usage at ${memory_usage}% - emergency cleanup"
+        
+        # Emergency: kill highest memory non-critical processes
+        ps aux --sort=-%mem | awk 'NR>1 {print $2, $4, $11}' | head -5 | while read -r pid mem_percent command; do
+            if ! echo "$command" | grep -qE "$CRITICAL_PROCESSES"; then
+                if (( $(echo "$mem_percent > 15" | bc -l) )); then
+                    log_message "EMERGENCY: Killing high-memory process: PID=$pid CMD=$command MEM=${mem_percent}%"
+                    kill -TERM "$pid" 2>/dev/null
+                    
+                    echo "EMERGENCY: Resource Guardian terminated high-memory process on server $(hostname):
+                    
+Process: $command
+PID: $pid
+Memory Usage: ${mem_percent}%
+System Memory: ${memory_usage}%
+Action: Emergency termination to prevent system crash" | mail -s "PRODUCTION EMERGENCY: Resource Guardian Memory Action" root
+                fi
+            fi
+        done
+        
+    elif (( $(echo "$memory_usage > $HIGH_MEMORY_THRESHOLD" | bc -l) )); then
+        log_message "WARNING: Memory usage at ${memory_usage}% - monitoring closely"
+        echo "WARNING: High memory usage (${memory_usage}%) detected on server $(hostname). Resource Guardian is monitoring the situation." | mail -s "PRODUCTION WARNING: High Memory Usage" root
+    fi
+}
+
+# Function to check system load
+check_system_load() {
+    load_avg=$(uptime | awk -F'load average:' '{print $2}' | awk '{print $1}' | sed 's/,//')
+    cpu_count=$(nproc)
+    load_ratio=$(echo "scale=2; $load_avg / $cpu_count" | bc)
+    
+    # Alert if load average > 2x CPU count (production threshold)
+    if (( $(echo "$load_ratio > 2.0" | bc -l) )); then
+        log_message "ALERT: High system load - Load: $load_avg, CPUs: $cpu_count, Ratio: $load_ratio"
+        echo "HIGH LOAD ALERT: Server $(hostname) experiencing high system load.
+
+Load Average: $load_avg
+CPU Count: $cpu_count  
+Load Ratio: $load_ratio per CPU
+
+Resource Guardian is monitoring the situation." | mail -s "PRODUCTION ALERT: High System Load" root
+    fi
+}
+
+# Main execution
+log_message "Resource Guardian scan started"
+
+# Check if bc is available (required for floating point calculations)
+if ! command -v bc >/dev/null 2>&1; then
+    log_message "ERROR: bc calculator not found - installing..."
+    apt-get update && apt-get install -y bc
+fi
+
+# Run checks
+check_cpu_usage
+check_memory_usage  
+check_system_load
+
+log_message "Resource Guardian scan completed"
+
+# Log rotation for resource guardian logs
+if [ $(stat -c%s "$LOGFILE" 2>/dev/null || echo 0) -gt 10485760 ]; then  # 10MB
+    mv "$LOGFILE" "${LOGFILE}.old"
+    touch "$LOGFILE"
+    chmod 644 "$LOGFILE"
+    log_message "Resource Guardian log rotated"
+fi
+EOF
+
+    chmod +x /usr/local/bin/resource-guardian
+    
+    # Install required dependency
+    if ! command -v bc >/dev/null 2>&1; then
+        echo "Installing bc calculator for Resource Guardian..."
+        apt-get update && apt-get install -y bc
+    fi
+    
+    # Create systemd service for Resource Guardian
+    cat > /etc/systemd/system/resource-guardian.service << 'EOF'
+[Unit]
+Description=Resource Guardian - Proactive Resource Management
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/resource-guardian
+User=root
+StandardOutput=journal
+StandardError=journal
+EOF
+    
+    # Create systemd timer for Resource Guardian (runs every 5 minutes for production)
+    cat > /etc/systemd/system/resource-guardian.timer << 'EOF'
+[Unit]
+Description=Run Resource Guardian every 5 minutes
+Requires=resource-guardian.service
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+    
+    # Enable and start Resource Guardian
+    systemctl daemon-reload
+    systemctl enable resource-guardian.timer
+    systemctl start resource-guardian.timer
+    
+    echo "✅ Resource Guardian system installed and configured"
+    echo "   • Monitors CPU usage every 5 minutes (production-safe interval)"
+    echo "   • CPU threshold: 85% for 10+ minutes (with 2-minute warning)"
+    echo "   • Memory warning: 90%, Critical: 95%"
+    echo "   • Protects critical services: SSH, systemd, fail2ban, nginx, docker, etc."
+    echo "   • Logs all actions to /var/log/resource-guardian.log"
+    echo "   • Sends email alerts for all actions taken"
+    echo ""
+else
+    echo "Skipping Resource Guardian installation"
+fi
+
+# Optional Advanced Monitoring Tools
+echo ""
+read -p "Install advanced server monitoring commands (serverstatus, logmon, servermail)? (y/N): " -n 1 -r
+echo
+MONITORING_TOOLS_REPLY=$REPLY
+if [[ $MONITORING_TOOLS_REPLY =~ ^[Yy]$ ]]; then
+    echo "===== 15.2 Setting up Advanced Monitoring Tools ====="
+    echo "Installing advanced monitoring commands for server management..."
+    
+    # Create serverstatus command (adapted from bastionstat)
+    cat > /usr/local/bin/serverstatus << 'EOF'
+#!/bin/bash
+# Server Status Command - Comprehensive server health check
+# Can be run by any user
+
+echo "=== Server Status Report ==="
+echo "Hostname: $(hostname -f)"
+echo "Date: $(date)"
+echo ""
+
+echo "=== System Information ==="
+echo "Uptime: $(uptime -p)"
+echo "Load Average: $(uptime | awk -F'load average:' '{print $2}')"
+echo "CPU Cores: $(nproc)"
+echo ""
+
+echo "=== Memory Usage ==="
+free -h
+echo ""
+
+echo "=== Disk Usage ==="
+df -h / /var /tmp 2>/dev/null | grep -v tmpfs
+echo ""
+
+echo "=== Network Connections ==="
+echo "Active connections: $(netstat -ant 2>/dev/null | grep ESTABLISHED | wc -l)"
+echo "Listening services:"
+ss -tlnp | head -10
+echo ""
+
+echo "=== Active Users ==="
+who -u
+echo ""
+
+echo "=== System Services Status ==="
+for service in ssh nginx fail2ban suricata clamav-daemon auditd postfix; do
+    if systemctl list-units --type=service | grep -q "^  $service.service"; then
+        status=$(systemctl is-active $service 2>/dev/null)
+        if [ "$status" = "active" ]; then
+            echo "✅ $service: $status"
+        else
+            echo "❌ $service: $status"
+        fi
+    fi
+done
+echo ""
+
+echo "=== Recent Security Events ==="
+echo "Recent SSH logins:"
+last -n 5 2>/dev/null | head -5
+echo ""
+
+if [ -f /var/log/auth.log ]; then
+    echo "Recent authentication events:"
+    grep "$(date '+%b %d')" /var/log/auth.log 2>/dev/null | grep -E "(Accepted|Failed)" | tail -5
+fi
+
+echo ""
+echo "=== System Resource Alerts ==="
+# Check for high load
+load_avg=$(uptime | awk -F'load average:' '{print $2}' | awk '{print $1}' | sed 's/,//')
+cpu_count=$(nproc)
+if [ $(echo "$load_avg > $cpu_count * 2" | bc -l) -eq 1 ] 2>/dev/null; then
+    echo "⚠️ High system load detected: $load_avg (CPUs: $cpu_count)"
+fi
+
+# Check disk space
+df -h / | awk 'NR==2 {gsub(/%/, "", $5); if ($5 > 85) print "⚠️ Root filesystem usage high: " $5"%"}'
+df -h /var | awk 'NR==2 {gsub(/%/, "", $5); if ($5 > 85) print "⚠️ /var filesystem usage high: " $5"%"}' 2>/dev/null
+
+# Check memory usage
+mem_usage=$(free | grep Mem | awk '{printf "%.0f", ($3/$2)*100}')
+if [ "$mem_usage" -gt 90 ]; then
+    echo "⚠️ High memory usage: ${mem_usage}%"
+fi
+
+echo ""
+echo "=== Mail System Status ==="
+if [ -f /var/mail/root ] || [ -f /var/spool/mail/root ]; then
+    mail_count=$(wc -l < /var/mail/root 2>/dev/null || echo "0")
+    echo "📧 Local mail: $mail_count messages for root"
+else
+    echo "📭 Local mail: No mail file found"
+fi
+systemctl is-active --quiet postfix && echo "✅ Mail system (Postfix): Active" || echo "❌ Mail system (Postfix): Inactive"
+EOF
+    
+    chmod +x /usr/local/bin/serverstatus
+    
+    # Create logmon command (adapted from sshmon)
+    cat > /usr/local/bin/logmon << 'EOF'
+#!/bin/bash
+# Log Monitor - Real-time log monitoring
+# Usage: logmon [auth|security|system|nginx|all]
+
+LOG_TYPE=${1:-auth}
+
+echo "=== Server Log Monitor ==="
+echo "Monitoring: $LOG_TYPE logs"
+echo "Press Ctrl+C to stop monitoring"
+echo ""
+
+case $LOG_TYPE in
+    auth)
+        echo "Monitoring authentication logs..."
+        sudo tail -f /var/log/auth.log | grep --line-buffered -E "(ssh|sudo|su|login)"
+        ;;
+    security)
+        echo "Monitoring security logs (fail2ban, suricata, audit)..."
+        sudo tail -f /var/log/fail2ban.log /var/log/suricata/fast.log /var/log/audit/audit.log 2>/dev/null | grep --line-buffered -v "INFO"
+        ;;
+    system)
+        echo "Monitoring system logs..."
+        sudo journalctl -f -u ssh -u nginx -u fail2ban -u suricata -u clamav-daemon
+        ;;
+    nginx)
+        echo "Monitoring nginx access and error logs..."
+        sudo tail -f /var/log/nginx/access.log /var/log/nginx/error.log 2>/dev/null
+        ;;
+    all|*)
+        echo "Monitoring all system logs..."
+        sudo journalctl -f
+        ;;
+esac
+EOF
+    
+    chmod +x /usr/local/bin/logmon
+    
+    # Create servermail command (adapted from bastionmail)
+    cat > /usr/local/bin/servermail << 'EOF'
+#!/bin/bash
+# Server Mail Reader - Read local system mail
+
+echo "=== Server Mail Reader ==="
+if [ -f /var/mail/root ]; then
+    echo "📧 Reading local mail for root:"
+    echo ""
+    tail -50 /var/mail/root
+elif [ -f /var/spool/mail/root ]; then
+    echo "📧 Reading local mail for root:"
+    echo ""
+    tail -50 /var/spool/mail/root
+else
+    echo "📭 No local mail found for root"
+    echo ""
+    echo "Mail files checked:"
+    echo "  - /var/mail/root"
+    echo "  - /var/spool/mail/root"
+fi
+EOF
+    
+    chmod +x /usr/local/bin/servermail
+    
+    echo "✅ Advanced monitoring tools installed:"
+    echo "   • serverstatus - Comprehensive server health and status report"
+    echo "   • logmon [type] - Real-time log monitoring (auth|security|system|nginx|all)"
+    echo "   • servermail - Read local system mail and notifications"
+    echo "   • All users can run serverstatus and servermail"
+    echo "   • logmon requires sudo for log access"
+    echo ""
+else
+    echo "Skipping advanced monitoring tools installation"
+fi
+
 # Unattended Reboot Warning System
 echo "Configuring unattended reboot warning system..."
 cat > /etc/apt/apt.conf.d/51unattended-upgrades-server << 'EOF'
@@ -4844,7 +5231,7 @@ echo "✅ Enhanced SSH HMAC configuration applied (no SHA-1)"
 # Systemd Watchdog for Critical Services
 echo "Configuring systemd watchdog for critical services..."
 
-# Enhanced fail2ban service with watchdog
+# Enhanced fail2ban service with watchdog and resource management
 mkdir -p /etc/systemd/system/fail2ban.service.d
 cat > /etc/systemd/system/fail2ban.service.d/watchdog.conf << 'EOF'
 [Service]
@@ -4853,9 +5240,13 @@ Restart=on-failure
 RestartSec=30
 StartLimitInterval=600
 StartLimitBurst=2
+
+# Resource management and priority
+OOMScoreAdjust=-100
+Nice=-5
 EOF
 
-# Enhanced Suricata service with watchdog
+# Enhanced Suricata service with watchdog and resource management
 mkdir -p /etc/systemd/system/suricata.service.d
 cat > /etc/systemd/system/suricata.service.d/watchdog.conf << 'EOF'
 [Service]
@@ -4864,9 +5255,13 @@ Restart=on-failure
 RestartSec=30
 StartLimitInterval=1200
 StartLimitBurst=2
+
+# Resource management - lower priority than critical access services
+Nice=5
+OOMScoreAdjust=100
 EOF
 
-# SSH service watchdog
+# SSH service watchdog with enhanced security hardening
 mkdir -p /etc/systemd/system/ssh.service.d
 cat > /etc/systemd/system/ssh.service.d/watchdog.conf << 'EOF'
 [Service]
@@ -4875,9 +5270,18 @@ Restart=on-failure
 RestartSec=5
 StartLimitInterval=300
 StartLimitBurst=5
+
+# Highest priority and OOM protection for SSH access
+OOMScoreAdjust=-300
+Nice=-8
+
+# Security hardening for production servers
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/log /var/run /run
 EOF
 
-# Nginx service watchdog (if not Docker mode)
+# Nginx service watchdog with resource management (if not Docker mode)
 if [ "$DEPLOYMENT_MODE" != "docker" ]; then
     mkdir -p /etc/systemd/system/nginx.service.d
     cat > /etc/systemd/system/nginx.service.d/watchdog.conf << 'EOF'
@@ -4887,11 +5291,25 @@ Restart=on-failure
 RestartSec=5
 StartLimitInterval=300
 StartLimitBurst=5
+
+# Resource management for web server
+Nice=0
+OOMScoreAdjust=50
+
+# Security hardening for web server
+PrivateTmp=yes
+ReadWritePaths=/var/log/nginx /var/cache/nginx /run
 EOF
 fi
 
 systemctl daemon-reload
-echo "✅ Systemd watchdog configured for critical services"
+echo "✅ Enhanced systemd watchdog and resource management configured for critical services"
+echo "   • SSH: Highest priority (OOM -300, Nice -8) with security hardening"
+echo "   • fail2ban: High priority (OOM -100, Nice -5) for security protection"
+echo "   • Suricata: Medium priority (OOM +100, Nice +5) for network monitoring"
+if [ "$DEPLOYMENT_MODE" != "docker" ]; then
+echo "   • Nginx: Standard priority (OOM +50, Nice 0) with security hardening"
+fi
 
 # Daily Security Configuration Backup
 echo "Setting up daily security configuration backup..."
@@ -4979,10 +5397,16 @@ echo "✅ Daily security configuration backup system configured"
 echo ""
 echo "Advanced security refinements completed:"
 echo "   • AppArmor profile enforcement verification and custom profiles (SSH + Nginx)"
+if [[ ${REPLY:-} =~ ^[Yy]$ ]]; then
+echo "   • Resource Guardian system for proactive resource management (optional)"
+fi
+if [[ ${MONITORING_TOOLS_REPLY:-} =~ ^[Yy]$ ]]; then
+echo "   • Advanced monitoring commands: serverstatus, logmon, servermail (optional)"
+fi
 echo "   • Unattended reboot warning system (wall messages + email alerts)"
 echo "   • Suricata rules maintenance with weekly auto-updates"
 echo "   • Enhanced OpenSSH HMAC tuning (SHA-1 completely disabled)"
-echo "   • Systemd watchdog for fail2ban, suricata, SSH, and nginx services"
+echo "   • Enhanced systemd resource management with priority scheduling and security hardening"
 echo "   • Daily automated backup of all security configurations"
 if [ "$NETDATA_ENABLED" = "true" ]; then
     echo "   • Netdata monitoring with optional Cloud integration"
