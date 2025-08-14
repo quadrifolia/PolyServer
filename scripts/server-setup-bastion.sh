@@ -3,6 +3,22 @@
 # Specialized hardening for bastion hosts used for secure access to internal networks
 # Run as root after fresh Debian 13 (trixie) instance creation
 
+# Enhanced error handling with trap
+set -Eeuo pipefail
+
+# Error trap function
+error_trap() {
+    local exit_code=$?
+    local line_number=$1
+    echo "❌ ERROR: Bastion setup failed at line $line_number with exit code $exit_code" >&2
+    echo "❌ Command: ${BASH_COMMAND}" >&2
+    echo "Setup failed! Check logs for details." >&2
+    exit $exit_code
+}
+
+# Set trap for errors
+trap 'error_trap $LINENO' ERR
+
 # Root privilege check
 if [[ $EUID -ne 0 ]]; then
    echo "❌ This script must be run as root"
@@ -191,6 +207,19 @@ validate_critical_configs() {
         errors=$((errors + 1))
     else
         echo "✅ UFW configuration is valid"
+        # Check UFW status verbose for IPv6 and configuration details
+        ufw_status=$(ufw status verbose 2>/dev/null)
+        if echo "$ufw_status" | grep -q "IPV6: yes"; then
+            echo "✅ UFW IPv6 support enabled"
+        else
+            echo "⚠️ UFW IPv6 support disabled"
+        fi
+        if echo "$ufw_status" | grep -q "Status: active"; then
+            echo "✅ UFW firewall is active"
+        else
+            log_error "UFW firewall is inactive"
+            errors=$((errors + 1))
+        fi
     fi
     
     echo "Checking Fail2ban configuration..."
@@ -202,6 +231,39 @@ validate_critical_configs() {
         fi
     else
         echo "✅ Fail2ban configuration is valid"
+        # Check if fail2ban is using UFW backend as configured
+        if fail2ban-client status 2>/dev/null | grep -q "sshd"; then
+            echo "✅ Fail2ban SSH jail is active"
+        else
+            echo "⚠️ Fail2ban SSH jail not found"
+        fi
+    fi
+    
+    # AppArmor configuration validation
+    echo "Checking AppArmor status..."
+    if command -v aa-status >/dev/null 2>&1; then
+        if aa_status_output=$(aa-status 2>/dev/null); then
+            if echo "$aa_status_output" | grep -q "apparmor module is loaded"; then
+                echo "✅ AppArmor is enabled and loaded"
+                # Count enforce/complain profiles
+                enforce_count=$(echo "$aa_status_output" | grep -c "profiles are in enforce mode" || echo "0")
+                complain_count=$(echo "$aa_status_output" | grep -c "profiles are in complain mode" || echo "0")
+                if [ "$enforce_count" -gt 0 ] || [ "$complain_count" -gt 0 ]; then
+                    echo "✅ AppArmor profiles active (enforce: $enforce_count, complain: $complain_count)"
+                else
+                    echo "⚠️ AppArmor enabled but no active profiles found"
+                fi
+            else
+                log_error "AppArmor module not loaded"
+                errors=$((errors + 1))
+            fi
+        else
+            log_error "Failed to get AppArmor status"
+            errors=$((errors + 1))
+        fi
+    else
+        log_error "AppArmor not installed (aa-status command not found)"
+        errors=$((errors + 1))
     fi
     
     if [ $errors -eq 0 ]; then
@@ -467,33 +529,39 @@ if ! id "$USERNAME" &>/dev/null; then
     fi
 fi
 
-# Create/update comprehensive sudo access for bastion user (always run this)
-echo "Setting up sudo privileges for $USERNAME..."
+# Create restricted sudo access for bastion user (SECURITY HARDENED)
+echo "Setting up restricted sudo privileges for $USERNAME..."
 cat > /etc/sudoers.d/bastion-$USERNAME << EOF
-# Bastion user sudo privileges - comprehensive monitoring access
-# Basic system monitoring (most commands should work without sudo due to group membership)
-$USERNAME ALL=(ALL) NOPASSWD: /usr/bin/systemctl status *, /usr/bin/systemctl restart ssh*, /bin/systemctl status *, /bin/systemctl restart ssh*
-$USERNAME ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active *, /bin/systemctl is-active *
+# Bastion user sudo privileges - RESTRICTED to absolute minimum for security
+# Using Cmnd_Alias with exact paths to prevent privilege escalation
 
-# Network monitoring (netstat/ss for connection info)
-$USERNAME ALL=(ALL) NOPASSWD: /bin/netstat *, /usr/bin/ss *, /usr/bin/netstat *, /sbin/netstat *
+# Define command aliases with exact paths only
+Cmnd_Alias SSH_RESTART = /usr/bin/systemctl restart ssh, /bin/systemctl restart ssh, /usr/bin/systemctl restart sshd, /bin/systemctl restart sshd
+Cmnd_Alias SSH_STATUS = /usr/bin/systemctl status ssh, /bin/systemctl status ssh, /usr/bin/systemctl status sshd, /bin/systemctl status sshd
+Cmnd_Alias SSH_ACTIVE = /usr/bin/systemctl is-active ssh, /bin/systemctl is-active ssh, /usr/bin/systemctl is-active sshd, /bin/systemctl is-active sshd
 
-# UFW firewall access (requires root)
-$USERNAME ALL=(ALL) NOPASSWD: /usr/sbin/ufw status *, /usr/sbin/ufw --version, /sbin/ufw status *, /sbin/ufw --version, /usr/bin/ufw status *, /usr/bin/ufw --version
+# UFW status checking only (no modification allowed)
+Cmnd_Alias UFW_STATUS = /usr/sbin/ufw status, /sbin/ufw status, /usr/bin/ufw status, /usr/sbin/ufw --version, /sbin/ufw --version, /usr/bin/ufw --version
 
-# Fail2ban access (requires root)
-$USERNAME ALL=(ALL) NOPASSWD: /usr/bin/fail2ban-client status *, /usr/bin/fail2ban-client *
+# Fail2ban status checking only (no jail modification)
+Cmnd_Alias FAIL2BAN_STATUS = /usr/bin/fail2ban-client status
 
-# Allow tail for log monitoring
-$USERNAME ALL=(ALL) NOPASSWD: /usr/bin/tail *, /bin/tail *
+# Essential bastion monitoring scripts (custom commands only)
+Cmnd_Alias BASTION_COMMANDS = /usr/local/bin/bastionstat, /usr/local/bin/sshmon, /usr/local/bin/bastionmail
 
-# Allow essential monitoring commands that may need root - including when run via sudo
-$USERNAME ALL=(ALL) NOPASSWD: /usr/local/bin/bastionstat, /usr/local/bin/sshmon, /usr/local/bin/bastionmail
+# Specific log file access (no wildcards)
+Cmnd_Alias LOG_ACCESS = /usr/bin/tail /var/log/auth.log, /usr/bin/tail /var/log/syslog, /usr/bin/tail /var/log/fail2ban.log
 
-# Allow sudo execution of common monitoring tools needed by bastionstat
-$USERNAME ALL=(ALL) NOPASSWD: ALL
+# Grant minimal required privileges
+$USERNAME ALL=(ALL) NOPASSWD: SSH_RESTART, SSH_STATUS, SSH_ACTIVE
+$USERNAME ALL=(ALL) NOPASSWD: UFW_STATUS
+$USERNAME ALL=(ALL) NOPASSWD: FAIL2BAN_STATUS  
+$USERNAME ALL=(ALL) NOPASSWD: BASTION_COMMANDS
+$USERNAME ALL=(ALL) NOPASSWD: LOG_ACCESS
 
+# Security settings
 Defaults:$USERNAME !requiretty
+Defaults:$USERNAME secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 EOF
 chmod 440 /etc/sudoers.d/bastion-$USERNAME
 

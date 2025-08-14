@@ -2,8 +2,21 @@
 # server_setup.sh - Secure Debian 13 server setup for PolyServer applications
 # Run as root after fresh Debian 13 (trixie) instance creation
 
-# Enhanced error handling
-set -euo pipefail
+# Enhanced error handling with trap
+set -Eeuo pipefail
+
+# Error trap function
+error_trap() {
+    local exit_code=$?
+    local line_number=$1
+    log_message "❌ ERROR: Script failed at line $line_number with exit code $exit_code"
+    log_message "❌ Command: ${BASH_COMMAND}"
+    echo "Setup failed! Check $LOG_FILE for details." >&2
+    exit $exit_code
+}
+
+# Set trap for errors
+trap 'error_trap $LINENO' ERR
 
 # ========= Constants and Logging =========
 readonly SCRIPT_NAME="secure-server-setup"
@@ -297,6 +310,19 @@ validate_critical_configs() {
             errors=$((errors + 1))
         else
             log_message "✅ UFW configuration is valid"
+            # Check UFW status verbose for IPv6 and configuration details
+            ufw_status=$(ufw status verbose 2>/dev/null)
+            if echo "$ufw_status" | grep -q "IPV6: yes"; then
+                log_message "✅ UFW IPv6 support enabled"
+            else
+                log_message "⚠️ UFW IPv6 support disabled"
+            fi
+            if echo "$ufw_status" | grep -q "Status: active"; then
+                log_message "✅ UFW firewall is active"
+            else
+                log_error "UFW firewall is inactive"
+                errors=$((errors + 1))
+            fi
         fi
     fi
     
@@ -310,6 +336,12 @@ validate_critical_configs() {
             fi
         else
             log_message "✅ Fail2ban configuration is valid"
+            # Check if fail2ban is using UFW backend as configured
+            if fail2ban-client status 2>/dev/null | grep -q "sshd"; then
+                log_message "✅ Fail2ban SSH jail is active"
+            else
+                log_message "⚠️ Fail2ban SSH jail not found"
+            fi
         fi
     fi
     
@@ -321,6 +353,35 @@ validate_critical_configs() {
             errors=$((errors + 1))
         else
             log_message "✅ Nginx configuration is valid"
+        fi
+    fi
+    
+    # AppArmor configuration validation
+    log_message "Checking AppArmor status..."
+    if [ "$DOCKER_MODE" = "false" ]; then
+        if command -v aa-status >/dev/null 2>&1; then
+            if aa_status_output=$(aa-status 2>/dev/null); then
+                if echo "$aa_status_output" | grep -q "apparmor module is loaded"; then
+                    log_message "✅ AppArmor is enabled and loaded"
+                    # Count enforce/complain profiles
+                    enforce_count=$(echo "$aa_status_output" | grep -c "profiles are in enforce mode" || echo "0")
+                    complain_count=$(echo "$aa_status_output" | grep -c "profiles are in complain mode" || echo "0")
+                    if [ "$enforce_count" -gt 0 ] || [ "$complain_count" -gt 0 ]; then
+                        log_message "✅ AppArmor profiles active (enforce: $enforce_count, complain: $complain_count)"
+                    else
+                        log_message "⚠️ AppArmor enabled but no active profiles found"
+                    fi
+                else
+                    log_error "AppArmor module not loaded"
+                    errors=$((errors + 1))
+                fi
+            else
+                log_error "Failed to get AppArmor status"
+                errors=$((errors + 1))
+            fi
+        else
+            log_error "AppArmor not installed (aa-status command not found)"
+            errors=$((errors + 1))
         fi
     fi
     
@@ -524,6 +585,15 @@ EOF
 EOF
 
     chmod 644 /etc/ssh/banner
+    
+    # Ensure SSH host keys exist (fresh images sometimes defer generation)
+    if [ ! -f /etc/ssh/ssh_host_ed25519_key ] || [ ! -f /etc/ssh/ssh_host_rsa_key ]; then
+        log_message "Generating missing SSH host keys..."
+        ssh-keygen -A
+        log_message "✅ SSH host keys generated"
+    else
+        log_message "✅ SSH host keys already exist"
+    fi
 else
     echo "🐳 Skipping SSH configuration in Docker mode"
 fi
@@ -1430,6 +1500,12 @@ Unattended-Upgrade::Remove-Unused-Dependencies "true";
 
 // Allow package downgrade if needed for security
 Unattended-Upgrade::Allow-downgrade "true";
+EOF
+
+# Configure automatic service restart without interactivity
+cat > /etc/needrestart/conf.d/unattended.conf << 'EOF'
+# Automatically restart services without prompting during unattended upgrades
+\$nrconf{restart} = 'a';
 EOF
 
 # Configure fail2ban for SSH
@@ -4043,7 +4119,7 @@ RuntimeMaxFileSize=20M
 
 # Rate limiting to prevent log flooding
 RateLimitIntervalSec=30s
-RateLimitBurst=10000
+RateLimitBurst=1000
 
 # Compress logs to save space
 Compress=yes
