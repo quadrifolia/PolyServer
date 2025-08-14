@@ -297,36 +297,44 @@ ALLOWED_INTERNAL_PORTS="22,80,443,3306,5432"
 # Example: SSH_PUBLIC_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG... user@domain.com"
 SSH_PUBLIC_KEY=""
 
-# Interactive configuration if key is not set
+# CRITICAL: Prevent lock-out by requiring SSH key
 if [ -z "$SSH_PUBLIC_KEY" ]; then
-    echo "===== BASTION HOST INTERACTIVE SETUP ====="
-    echo ""
-    echo "Bastion hosts require SSH key authentication for security."
-    echo "Please provide your SSH public key for the bastion user."
-    echo ""
-    echo "You can get your public key with:"
-    echo "  cat ~/.ssh/id_ed25519.pub    (for Ed25519 keys - RECOMMENDED)"
-    echo "  cat ~/.ssh/id_rsa.pub        (for RSA keys - minimum 2048 bits)"
-    echo ""
-    
-    while true; do
-        read -r -p "Enter your SSH public key: " SSH_PUBLIC_KEY
-        
-        if [ -z "$SSH_PUBLIC_KEY" ]; then
-            log_error "SSH public key is required for bastion host setup"
-            continue
-        fi
-        
-        if validate_ssh_key "$SSH_PUBLIC_KEY"; then
-            break
-        else
-            echo "Please enter a valid SSH public key (Ed25519 recommended, or RSA ≥2048 bits)"
-        fi
-    done
-    
-    echo ""
-    while true; do
-        read -r -p "Enter email address for security notifications (default: root): " EMAIL_INPUT
+    echo "❌ ERROR: No SSH_PUBLIC_KEY configured" >&2
+    echo "" >&2
+    echo "SECURITY LOCKOUT PREVENTION:" >&2
+    echo "Bastion hosts disable password authentication completely." >&2
+    echo "Without an SSH key, you would be permanently locked out." >&2
+    echo "" >&2
+    echo "Please set SSH_PUBLIC_KEY in the script or provide it via environment variable." >&2
+    echo "" >&2
+    echo "To get your public key, run one of these commands on your local machine:" >&2
+    echo "  cat ~/.ssh/id_ed25519.pub    (for Ed25519 keys - RECOMMENDED)" >&2
+    echo "  cat ~/.ssh/id_rsa.pub        (for RSA keys - minimum 2048 bits)" >&2
+    echo "" >&2
+    echo "Then set it in the script:" >&2
+    echo "  SSH_PUBLIC_KEY=\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG... user@domain.com\"" >&2
+    echo "" >&2
+    echo "Or provide it via environment variable:" >&2
+    echo "  export SSH_PUBLIC_KEY=\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG... user@domain.com\"" >&2
+    echo "  ./server-setup-bastion.sh" >&2
+    echo "" >&2
+    log_error "Refusing to continue to prevent lock-out. SSH key is mandatory for bastion hosts."
+    exit 1
+fi
+
+# Validate the provided SSH key
+if ! validate_ssh_key "$SSH_PUBLIC_KEY"; then
+    echo "❌ ERROR: Invalid SSH key format" >&2
+    echo "Please provide a valid SSH public key (Ed25519 recommended, or RSA ≥2048 bits)" >&2
+    exit 1
+fi
+
+echo "✅ Valid SSH public key provided - proceeding with secure bastion setup"
+
+# Email configuration
+echo ""
+while true; do
+    read -r -p "Enter email address for security notifications (default: root): " EMAIL_INPUT
         if [ -z "$EMAIL_INPUT" ]; then
             LOGWATCH_EMAIL="root"
             break
