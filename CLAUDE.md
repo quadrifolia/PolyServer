@@ -137,6 +137,47 @@ After deploying the base server, additional deployment scripts and workflows sho
 - **Log Management**: Logwatch and logcheck for system monitoring
 - **Resource Monitoring**: Comprehensive system resource tracking
 
+## Advanced Security Features (Optional)
+
+The main server setup now includes optional advanced security features inspired by the bastion host configuration:
+
+### Resource Guardian System
+- **Purpose**: Proactive resource monitoring and management to prevent system overload
+- **Configuration**: Conservative production-safe thresholds
+  - CPU monitoring: 85% threshold for 10+ minutes (with 2-minute warning)
+  - Memory monitoring: 90% warning, 95% critical with emergency cleanup
+  - Load average alerts: 2x CPU count threshold
+- **Safety Features**: 
+  - Email alerts for all actions
+  - Grace periods before termination
+  - Protection of critical system processes
+- **Usage**: Optional during setup, runs every 5 minutes via systemd timer
+
+### Advanced Monitoring Commands
+- **serverstatus**: Comprehensive server health and status report
+  - System information, resource usage, service status
+  - Recent security events and resource alerts
+  - Can be run by any user without special privileges
+  
+- **logmon [type]**: Real-time log monitoring with filtering
+  - Types: auth, security, system, nginx, all
+  - Requires sudo for log file access
+  - Intelligent filtering for relevant security events
+
+- **servermail**: Local system mail reader
+  - Reads system notifications and security alerts
+  - Works with local mail delivery setup
+  - Alternative to external email configuration
+
+### Enhanced Systemd Resource Management
+- **Priority-based service scheduling**:
+  - SSH: Highest priority (OOM -300, Nice -8) with security hardening
+  - fail2ban: High priority (OOM -100, Nice -5) for security protection
+  - Suricata: Medium priority (OOM +100, Nice +5) for network monitoring  
+  - Nginx: Standard priority (OOM +50, Nice 0) with security hardening
+- **Security hardening**: PrivateTmp, ProtectSystem for critical services
+- **Enhanced restart policies**: Intelligent failure handling and recovery
+
 ## Best Practices
 
 - This repository provides the **foundation layer** only
@@ -144,3 +185,4 @@ After deploying the base server, additional deployment scripts and workflows sho
 - All security configurations are application-agnostic
 - DSGVO compliance tools work for any application type
 - Templates can be customized while maintaining security standards
+- **New**: Advanced features are optional and production-safe by design
