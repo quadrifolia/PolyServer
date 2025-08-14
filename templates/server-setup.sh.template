@@ -127,6 +127,182 @@ fi
 
 log_message "✅ Parameter validation completed successfully"
 
+# ========= System Resource Detection =========
+detect_system_resources() {
+    log_message "🔍 Detecting system resources for optimization..."
+    
+    # Detect CPU cores
+    CPU_CORES=$(nproc 2>/dev/null || echo "")
+    if [ -z "$CPU_CORES" ] || [ "$CPU_CORES" -eq 0 ]; then
+        CPU_CORES=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || echo "")
+    fi
+    
+    # Detect total RAM in MB
+    TOTAL_RAM_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "")
+    if [ -n "$TOTAL_RAM_KB" ]; then
+        TOTAL_RAM_MB=$((TOTAL_RAM_KB / 1024))
+        TOTAL_RAM_GB=$((TOTAL_RAM_MB / 1024))
+    else
+        TOTAL_RAM_MB=""
+        TOTAL_RAM_GB=""
+    fi
+    
+    # Detect available RAM (excluding buffers/cache)
+    AVAILABLE_RAM_KB=$(grep MemAvailable /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "")
+    if [ -n "$AVAILABLE_RAM_KB" ]; then
+        AVAILABLE_RAM_MB=$((AVAILABLE_RAM_KB / 1024))
+    else
+        AVAILABLE_RAM_MB=""
+    fi
+    
+    # Verify detection results
+    if [ -n "$CPU_CORES" ] && [ "$CPU_CORES" -gt 0 ] && [ -n "$TOTAL_RAM_MB" ] && [ "$TOTAL_RAM_MB" -gt 0 ]; then
+        log_message "✅ Auto-detected: ${CPU_CORES} CPU cores, ${TOTAL_RAM_MB}MB RAM (${TOTAL_RAM_GB}GB)"
+        RESOURCE_DETECTION_SUCCESS=true
+    else
+        log_message "⚠️ Auto-detection failed or returned invalid values"
+        RESOURCE_DETECTION_SUCCESS=false
+    fi
+    
+    # Fallback: ask user if detection failed or values seem unreasonable
+    if [ "$RESOURCE_DETECTION_SUCCESS" = "false" ] || [ "$CPU_CORES" -gt 128 ] || [ "$TOTAL_RAM_GB" -gt 1024 ]; then
+        echo ""
+        echo "🤔 System resource detection failed or returned unrealistic values."
+        echo "Please manually specify your server resources for optimal configuration:"
+        echo ""
+        
+        while true; do
+            read -p "Number of CPU cores [1-128]: " -r USER_CPU_CORES
+            if [[ "$USER_CPU_CORES" =~ ^[0-9]+$ ]] && [ "$USER_CPU_CORES" -ge 1 ] && [ "$USER_CPU_CORES" -le 128 ]; then
+                CPU_CORES=$USER_CPU_CORES
+                break
+            else
+                echo "Please enter a valid number of CPU cores (1-128)"
+            fi
+        done
+        
+        while true; do
+            read -p "Total RAM in GB [1-1024]: " -r USER_TOTAL_RAM_GB
+            if [[ "$USER_TOTAL_RAM_GB" =~ ^[0-9]+$ ]] && [ "$USER_TOTAL_RAM_GB" -ge 1 ] && [ "$USER_TOTAL_RAM_GB" -le 1024 ]; then
+                TOTAL_RAM_GB=$USER_TOTAL_RAM_GB
+                TOTAL_RAM_MB=$((TOTAL_RAM_GB * 1024))
+                break
+            else
+                echo "Please enter a valid amount of RAM in GB (1-1024)"
+            fi
+        done
+        
+        log_message "✅ User-specified: ${CPU_CORES} CPU cores, ${TOTAL_RAM_GB}GB RAM"
+    fi
+    
+    # Calculate optimization parameters
+    calculate_optimization_parameters
+}
+
+calculate_optimization_parameters() {
+    # Nginx optimization
+    NGINX_WORKERS=$CPU_CORES
+    if [ "$NGINX_WORKERS" -gt 8 ]; then
+        NGINX_WORKERS=8
+    fi
+    NGINX_WORKER_CONNECTIONS=1024  # Standard for most workloads
+    NGINX_CLIENT_BODY_BUFFER_SIZE="16k"
+    NGINX_CLIENT_HEADER_BUFFER_SIZE="1k"
+    
+    # Reserve memory for system (OS, monitoring, security tools)
+    SYSTEM_RESERVED_RAM=1024  # MB
+    if [ "$TOTAL_RAM_MB" -lt 2048 ]; then
+        SYSTEM_RESERVED_RAM=512  # Less overhead for small systems
+    fi
+    AVAILABLE_APP_RAM=$((TOTAL_RAM_MB - SYSTEM_RESERVED_RAM))
+    if [ "$AVAILABLE_APP_RAM" -lt 512 ]; then
+        AVAILABLE_APP_RAM=512
+    fi
+    
+    # PHP-FPM optimization (production-ready settings)
+    PHP_PROCESS_MEMORY=48  # MB per process (conservative for production)
+    PHP_MAX_CHILDREN=$((AVAILABLE_APP_RAM / PHP_PROCESS_MEMORY / 2))  # Use 50% for PHP
+    PHP_START_SERVERS=$((PHP_MAX_CHILDREN / 4))
+    PHP_MIN_SPARE_SERVERS=$((PHP_MAX_CHILDREN / 8))
+    PHP_MAX_SPARE_SERVERS=$((PHP_MAX_CHILDREN / 2))
+    
+    # Ensure reasonable PHP-FPM bounds
+    if [ "$PHP_MAX_CHILDREN" -lt 4 ]; then
+        PHP_MAX_CHILDREN=4
+        PHP_START_SERVERS=2
+        PHP_MIN_SPARE_SERVERS=1
+        PHP_MAX_SPARE_SERVERS=2
+    elif [ "$PHP_MAX_CHILDREN" -gt 100 ]; then
+        PHP_MAX_CHILDREN=100
+        PHP_START_SERVERS=25
+        PHP_MIN_SPARE_SERVERS=10
+        PHP_MAX_SPARE_SERVERS=50
+    fi
+    
+    # PHP memory limits based on available RAM
+    if [ "$TOTAL_RAM_GB" -ge 8 ]; then
+        PHP_MEMORY_LIMIT="256M"
+        PHP_MAX_EXECUTION_TIME=120
+    elif [ "$TOTAL_RAM_GB" -ge 4 ]; then
+        PHP_MEMORY_LIMIT="128M"
+        PHP_MAX_EXECUTION_TIME=90
+    else
+        PHP_MEMORY_LIMIT="64M"
+        PHP_MAX_EXECUTION_TIME=60
+    fi
+    
+    # Node.js PM2 optimization
+    PM2_INSTANCES=$((CPU_CORES - 1))
+    if [ "$PM2_INSTANCES" -lt 1 ]; then
+        PM2_INSTANCES=1
+    elif [ "$PM2_INSTANCES" -gt 8 ]; then
+        PM2_INSTANCES=8
+    fi
+    
+    # Database optimization (MariaDB/MySQL)
+    DB_MAX_CONNECTIONS=$((TOTAL_RAM_GB * 15))
+    if [ "$DB_MAX_CONNECTIONS" -lt 20 ]; then
+        DB_MAX_CONNECTIONS=20
+    elif [ "$DB_MAX_CONNECTIONS" -gt 500 ]; then
+        DB_MAX_CONNECTIONS=500
+    fi
+    
+    # InnoDB settings (30% for mixed servers, can be increased for DB-dedicated)
+    INNODB_BUFFER_POOL_MB=$((TOTAL_RAM_MB * 30 / 100))
+    if [ "$INNODB_BUFFER_POOL_MB" -lt 128 ]; then
+        INNODB_BUFFER_POOL_MB=128
+    fi
+    
+    # InnoDB additional settings
+    INNODB_LOG_FILE_SIZE=$((INNODB_BUFFER_POOL_MB / 4))  # 25% of buffer pool
+    if [ "$INNODB_LOG_FILE_SIZE" -lt 32 ]; then
+        INNODB_LOG_FILE_SIZE=32
+    elif [ "$INNODB_LOG_FILE_SIZE" -gt 512 ]; then
+        INNODB_LOG_FILE_SIZE=512
+    fi
+    
+    # Query cache (disabled by default in MySQL 8.0+, but MariaDB still uses it)
+    QUERY_CACHE_SIZE=$((TOTAL_RAM_MB * 5 / 100))  # 5% of RAM
+    if [ "$QUERY_CACHE_SIZE" -lt 16 ]; then
+        QUERY_CACHE_SIZE=16
+    elif [ "$QUERY_CACHE_SIZE" -gt 128 ]; then
+        QUERY_CACHE_SIZE=128
+    fi
+    
+    # Redis optimization (if installed)
+    REDIS_MAXMEMORY=$((TOTAL_RAM_MB * 25 / 100))  # 25% for Redis cache
+    if [ "$REDIS_MAXMEMORY" -lt 64 ]; then
+        REDIS_MAXMEMORY=64
+    fi
+    
+    log_message "📊 Calculated optimization parameters:"
+    log_message "   🌐 Nginx: $NGINX_WORKERS workers, $NGINX_WORKER_CONNECTIONS connections/worker"
+    log_message "   🐘 PHP-FPM: max_children=$PHP_MAX_CHILDREN, start=$PHP_START_SERVERS, spare=$PHP_MIN_SPARE_SERVERS-$PHP_MAX_SPARE_SERVERS"
+    log_message "   ⚡ Node.js PM2: $PM2_INSTANCES cluster instances"
+    log_message "   🗄️ Database: max_connections=$DB_MAX_CONNECTIONS, innodb_buffer_pool=${INNODB_BUFFER_POOL_MB}MB"
+    log_message "   📝 Redis: maxmemory=${REDIS_MAXMEMORY}MB"
+}
+
 # Helper function for systemctl commands in Docker mode
 docker_systemctl() {
     if [ "$DOCKER_MODE" = "false" ]; then
@@ -426,6 +602,10 @@ create_rollback_point() {
     fi
 }
 
+# ========= System Resource Detection =========
+log_message "===== 0. Detecting system resources ====="
+detect_system_resources
+
 # ========= Basic server hardening =========
 log_message "===== 1. Updating system packages ====="
 safe_apt_update && apt-get upgrade -y
@@ -649,7 +829,46 @@ else
     echo "🐳 Skipping NTP configuration in Docker mode (host handles time sync)"
 fi
 
-echo "===== 6. Optional Security Components ====="
+echo "===== 6. Web Server Selection ====="
+echo "Choose between traditional nginx + PHP-FPM or modern NGINX Unit for better performance:"
+echo ""
+
+# Initialize web server choice
+WEB_SERVER_TYPE="nginx"
+
+echo "🌐 Web Server Architecture Choice:"
+echo ""
+echo "📊 Traditional nginx + PHP-FPM:"
+echo "   • Widely used, battle-tested architecture"
+echo "   • Separate nginx and PHP-FPM processes"
+echo "   • Good performance, extensive documentation"
+echo "   • Industry standard for most deployments"
+echo ""
+echo "🚀 NGINX Unit (Modern Application Server):"
+echo "   • Up to 8-10x faster response times than PHP-FPM"
+echo "   • Single process handles web serving and PHP execution"
+echo "   • Dynamic configuration without restarts"
+echo "   • Better resource management under high load"
+echo "   • Newer technology, smaller community support"
+echo ""
+read -p "Use NGINX Unit for better performance? (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    WEB_SERVER_TYPE="unit"
+    echo "✅ NGINX Unit selected - preparing for high-performance deployment"
+    
+    # Update environment file with web server choice
+    if [ -f "/opt/polyserver/config/defaults.env" ]; then
+        sed -i "s/WEB_SERVER_TYPE=nginx/WEB_SERVER_TYPE=unit/" "/opt/polyserver/config/defaults.env" 2>/dev/null || true
+    fi
+else
+    WEB_SERVER_TYPE="nginx"
+    echo "✅ Traditional nginx + PHP-FPM selected - reliable and well-documented"
+    
+    # Environment file already has nginx as default, no change needed
+fi
+
+echo "===== 6.1. Optional Security Components ====="
 echo "Choose additional security tools to install. Each tool provides specific protection but uses system resources."
 echo ""
 
@@ -697,16 +916,64 @@ if [ "$DOCKER_MODE" = "false" ]; then
     fi
 fi
 
-echo "===== 6.1 Installing core security packages ====="
+echo "===== 6.2 Installing core packages and web server ====="
+
 # Core security packages (always installed)
-CORE_PACKAGES="fail2ban unattended-upgrades apt-listchanges gnupg-agent logwatch apparmor apparmor-utils nginx-extras git awscli"
+CORE_PACKAGES="fail2ban unattended-upgrades apt-listchanges gnupg-agent logwatch apparmor apparmor-utils git awscli"
+
+# Web server specific packages
+if [ "$WEB_SERVER_TYPE" = "unit" ]; then
+    echo "Installing NGINX Unit and PHP packages..."
+    
+    # Add NGINX Unit repository
+    curl -1sLf 'https://packages.nginx.org/keys/nginx_signing.key' | gpg --dearmor > /usr/share/keyrings/nginx-archive-keyring.gpg
+    echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] https://packages.nginx.org/unit/debian/ trixie unit" > /etc/apt/sources.list.d/unit.list
+    
+    apt-get update
+    
+    # Install NGINX Unit core and PHP module
+    WEB_SERVER_PACKAGES="unit unit-php php8.4 php8.4-cli php8.4-fpm php8.4-mysql php8.4-xml php8.4-mbstring php8.4-curl php8.4-zip php8.4-gd php8.4-intl php8.4-bcmath php8.4-opcache php8.4-readline"
+    
+    echo "✅ NGINX Unit selected - using high-performance application server"
+else
+    # Traditional nginx + PHP-FPM
+    WEB_SERVER_PACKAGES="nginx-extras php8.4 php8.4-fpm php8.4-mysql php8.4-xml php8.4-mbstring php8.4-curl php8.4-zip php8.4-gd php8.4-intl php8.4-bcmath php8.4-opcache php8.4-readline"
+    
+    echo "✅ Traditional nginx + PHP-FPM selected - using stable architecture"
+fi
 
 if [ "$DOCKER_MODE" = "true" ]; then
     # Docker-compatible package list
-    apt-get install -y $CORE_PACKAGES lm-sensors
+    apt-get install -y $CORE_PACKAGES $WEB_SERVER_PACKAGES lm-sensors
 else
     # Full package list for production servers
-    apt-get install -y $CORE_PACKAGES lm-sensors hddtemp unbound
+    apt-get install -y $CORE_PACKAGES $WEB_SERVER_PACKAGES lm-sensors hddtemp unbound
+fi
+
+# Web server specific post-installation configuration
+if [ "$WEB_SERVER_TYPE" = "unit" ]; then
+    echo "Configuring NGINX Unit..."
+    systemctl enable unit
+    systemctl start unit
+    
+    # Test Unit installation
+    if systemctl is-active --quiet unit; then
+        echo "✅ NGINX Unit is running"
+    else
+        echo "⚠️ NGINX Unit failed to start - check logs: journalctl -u unit"
+    fi
+else
+    echo "Configuring nginx and PHP-FPM..."
+    systemctl enable nginx
+    systemctl enable php8.4-fpm
+    systemctl start php8.4-fpm
+    
+    # Test installations
+    if systemctl is-active --quiet php8.4-fpm; then
+        echo "✅ PHP-FPM is running"
+    else
+        echo "⚠️ PHP-FPM failed to start - check logs: journalctl -u php8.4-fpm"
+    fi
 fi
 
 echo "===== 6.2 Installing selected security components ====="
@@ -6316,11 +6583,136 @@ else
     log_message "Check $LOG_FILE for details"
 fi
 
+echo "===== 17. Advanced Configuration Options ====="
+log_message "Prompting for optional advanced settings"
+
+# Define environment file for configuration updates
+ENV_FILE="/opt/polyserver/config/defaults.env"
+
+# Function to prompt for optional advanced settings
+prompt_advanced_settings() {
+    echo ""
+    echo "🚀 Advanced Configuration Options"
+    echo "The following settings can help with debugging and monitoring in production:"
+    echo ""
+    
+    # PHP slow log setting
+    echo "📝 PHP Slow Query Logging:"
+    echo "   • Logs PHP scripts that take longer than threshold (useful for performance debugging)"
+    echo "   • Minimal performance impact, helps identify bottlenecks"
+    echo "   • Recommended for production to catch performance issues"
+    echo ""
+    read -p "Enable PHP slow query logging? (Y/n): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        sed -i "s/PHP_SLOW_LOG_ENABLED=false/PHP_SLOW_LOG_ENABLED=true/" "$ENV_FILE" 2>/dev/null || true
+        log_message "PHP slow query logging enabled"
+        echo "✅ PHP slow query logging enabled (threshold: 10 seconds)"
+    fi
+    
+    # MySQL slow query log
+    echo ""
+    echo "📊 MySQL/MariaDB Slow Query Logging:"
+    echo "   • Logs database queries that take longer than threshold"
+    echo "   • Essential for database performance optimization"
+    echo "   • Very low performance impact, highly recommended"
+    echo ""
+    read -p "Enable MySQL slow query logging? (Y/n): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        sed -i "s/MYSQL_SLOW_LOG_ENABLED=true/MYSQL_SLOW_LOG_ENABLED=true/" "$ENV_FILE" 2>/dev/null || true
+        log_message "MySQL slow query logging enabled"
+        echo "✅ MySQL slow query logging enabled (threshold: 2 seconds)"
+    fi
+    
+    # Redis slow log
+    echo ""
+    echo "⚡ Redis Slow Query Logging:"
+    echo "   • Logs Redis commands that take longer than threshold"
+    echo "   • Helps identify cache performance issues"
+    echo "   • Very lightweight monitoring feature"
+    echo ""
+    read -p "Enable Redis slow query logging? (Y/n): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        sed -i "s/REDIS_SLOW_LOG_ENABLED=true/REDIS_SLOW_LOG_ENABLED=true/" "$ENV_FILE" 2>/dev/null || true
+        log_message "Redis slow query logging enabled"
+        echo "✅ Redis slow query logging enabled (threshold: 10ms)"
+    fi
+    
+    # PHP OPcache advanced settings
+    echo ""
+    echo "🔧 PHP OPcache Optimization:"
+    echo "   • Enables advanced PHP bytecode caching for better performance"
+    echo "   • Reduces CPU usage and improves response times"
+    echo "   • Uses ~128MB RAM for caching compiled PHP code"
+    echo ""
+    read -p "Enable PHP OPcache optimization? (Y/n): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        sed -i "s/PHP_OPCACHE_ENABLED=true/PHP_OPCACHE_ENABLED=true/" "$ENV_FILE" 2>/dev/null || true
+        log_message "PHP OPcache optimization enabled"
+        echo "✅ PHP OPcache optimization enabled"
+    fi
+    
+    # Request termination timeout for PHP
+    echo ""
+    echo "⏱️ PHP Request Termination Timeout:"
+    echo "   • Automatically kills long-running PHP processes"
+    echo "   • Prevents resource exhaustion from runaway scripts"
+    echo "   • Recommended for production to ensure stability"
+    echo ""
+    read -p "Enable PHP request termination timeout (600s)? (Y/n): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        sed -i "s/PHP_REQUEST_TERMINATE_TIMEOUT=\"\"/PHP_REQUEST_TERMINATE_TIMEOUT=\"600\"/" "$ENV_FILE" 2>/dev/null || true
+        log_message "PHP request termination timeout enabled"
+        echo "✅ PHP request termination timeout enabled (600 seconds)"
+    fi
+    
+    echo ""
+    echo "🎯 Advanced settings configuration completed"
+    echo "All settings can be modified later in: $ENV_FILE"
+}
+
+# Only prompt for advanced settings if not in automated mode
+if [ -z "$AUTOMATED_INSTALL" ]; then
+    prompt_advanced_settings
+else
+    log_message "Skipping advanced settings prompt in automated mode"
+fi
+
 echo "===== 18. Setup complete! ====="
 log_message "Server setup completed successfully"
 echo "Server has been secured and Docker installed."
 echo "IMPORTANT: SSH is now running on port $SSH_PORT"
 echo "Use the following command to connect: ssh -p $SSH_PORT $USERNAME@your-server-ip"
+echo ""
+echo ""
+echo "📊 System Resource Optimization Applied:"
+if [ -n "$NGINX_WORKERS" ] && [ "$NGINX_WORKERS" != "auto" ]; then
+    echo "   • Nginx: $NGINX_WORKERS workers, $NGINX_WORKER_CONNECTIONS connections each"
+fi
+if [ -n "$PHP_MAX_CHILDREN" ]; then
+    echo "   • PHP-FPM: Up to $PHP_MAX_CHILDREN processes, ${PHP_MEMORY_LIMIT}MB memory limit per process"
+fi
+if [ -n "$MYSQL_INNODB_BUFFER_POOL_SIZE" ]; then
+    echo "   • MariaDB: ${MYSQL_INNODB_BUFFER_POOL_SIZE}MB InnoDB buffer pool, $MYSQL_MAX_CONNECTIONS max connections"
+fi
+if [ -n "$REDIS_MAX_MEMORY" ]; then
+    echo "   • Redis: ${REDIS_MAX_MEMORY}MB max memory, $REDIS_MAX_CLIENTS max clients"
+fi
+echo ""
+echo "📁 Configuration templates available for deployment:"
+if [ "$WEB_SERVER_TYPE" = "unit" ]; then
+    echo "   • NGINX Unit: templates/unit/ (high-performance application server)"
+    echo "   • PHP 8.4: templates/php/ (optimized for ${TOTAL_RAM_MB}MB RAM)"
+else
+    echo "   • Nginx: templates/nginx/ (optimized for $CPU_CORES cores)"
+    echo "   • PHP 8.4: templates/php/ (optimized for ${TOTAL_RAM_MB}MB RAM)"
+fi
+echo "   • MariaDB: templates/mariadb/ (production-ready settings)"
+echo "   • Redis: templates/redis/ (security-hardened)"
 echo ""
 echo "Next steps:"
 echo "1. Edit /etc/dsgvo/contacts.conf to add your DPO contact information"
@@ -6329,7 +6721,7 @@ echo "3. Run compliance check: /opt/polyserver/scripts/dsgvo-compliance-check.sh
 if [ "$NETDATA_ENABLED" = "true" ]; then
     echo "4. Access Netdata dashboard: ssh -L 19999:127.0.0.1:19999 {{USERNAME}}@server"
     echo "5. Add to Netdata Cloud (optional): run 'netdata-access' for instructions"
-    echo "6. Deploy your applications using the PolyServer foundation"
+    echo "6. Deploy your applications using the optimized configuration templates"
 else
-    echo "4. Deploy your applications using the PolyServer foundation"
+    echo "4. Deploy your applications using the optimized configuration templates"
 fi

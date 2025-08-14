@@ -1,0 +1,185 @@
+# MariaDB Server Configuration for PolyServer
+# Performance-optimized and security-hardened
+
+[mariadb]
+
+####################
+# Connection Settings
+####################
+
+# Resource-optimized connection limits
+max_connections = {{MYSQL_MAX_CONNECTIONS}}
+max_user_connections = {{MYSQL_MAX_USER_CONNECTIONS}}
+max_connect_errors = 100
+connect_timeout = 10
+wait_timeout = 28800
+interactive_timeout = 28800
+
+# Thread cache for connection performance
+thread_cache_size = {{MYSQL_THREAD_CACHE_SIZE}}
+
+####################
+# InnoDB Settings (Performance Critical)
+####################
+
+# Memory allocation
+innodb_buffer_pool_size = {{MYSQL_INNODB_BUFFER_POOL_SIZE}}M
+innodb_buffer_pool_instances = {{MYSQL_INNODB_BUFFER_POOL_INSTANCES}}
+innodb_log_buffer_size = {{MYSQL_INNODB_LOG_BUFFER_SIZE}}M
+
+# Log file settings
+innodb_log_file_size = {{MYSQL_INNODB_LOG_FILE_SIZE}}M
+innodb_log_files_in_group = 2
+
+# I/O settings
+innodb_io_capacity = {{MYSQL_INNODB_IO_CAPACITY}}
+innodb_io_capacity_max = {{MYSQL_INNODB_IO_CAPACITY_MAX}}
+innodb_read_io_threads = {{MYSQL_INNODB_READ_IO_THREADS}}
+innodb_write_io_threads = {{MYSQL_INNODB_WRITE_IO_THREADS}}
+
+# File format and performance
+innodb_file_format = Barracuda
+innodb_file_per_table = 1
+innodb_flush_log_at_trx_commit = 1
+innodb_flush_method = O_DIRECT
+
+####################
+# Query Cache (Deprecated in MariaDB 10.6+, but kept for compatibility)
+####################
+
+# Note: Query cache is disabled by default in modern MariaDB
+query_cache_type = 0
+query_cache_size = 0
+
+####################
+# MyISAM Settings (for system tables)
+####################
+
+key_buffer_size = {{MYSQL_KEY_BUFFER_SIZE}}M
+myisam_sort_buffer_size = 64M
+myisam_max_sort_file_size = 2G
+myisam_repair_threads = 1
+
+####################
+# Network and Security
+####################
+
+# Network settings
+bind-address = 127.0.0.1
+port = 3306
+socket = /run/mysqld/mysqld.sock
+
+# Security settings
+local-infile = 0
+skip-show-database
+sql_mode = STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION
+
+####################
+# Logging and Monitoring
+####################
+
+# General query log (usually disabled in production)
+{{#MYSQL_GENERAL_LOG_ENABLED}}
+general_log = 1
+general_log_file = /var/log/mysql/mysql.log
+{{/MYSQL_GENERAL_LOG_ENABLED}}
+
+# Slow query log (recommended for monitoring)
+{{#MYSQL_SLOW_LOG_ENABLED}}
+slow_query_log = 1
+slow_query_log_file = /var/log/mysql/mysql-slow.log
+long_query_time = {{MYSQL_SLOW_QUERY_TIME}}
+log_queries_not_using_indexes = {{MYSQL_LOG_QUERIES_NOT_USING_INDEXES}}
+{{/MYSQL_SLOW_LOG_ENABLED}}
+
+# Error logging
+log_error = /var/log/mysql/error.log
+log_warnings = 2
+
+####################
+# Buffer Pool and Cache Settings
+####################
+
+# Sort and join buffers
+sort_buffer_size = {{MYSQL_SORT_BUFFER_SIZE}}M
+join_buffer_size = {{MYSQL_JOIN_BUFFER_SIZE}}M
+read_buffer_size = 2M
+read_rnd_buffer_size = 4M
+
+# Temporary tables
+tmp_table_size = {{MYSQL_TMP_TABLE_SIZE}}M
+max_heap_table_size = {{MYSQL_MAX_HEAP_TABLE_SIZE}}M
+
+####################
+# Table Settings
+####################
+
+# Table cache
+table_open_cache = {{MYSQL_TABLE_OPEN_CACHE}}
+table_definition_cache = {{MYSQL_TABLE_DEFINITION_CACHE}}
+
+# Maximum packet size
+max_allowed_packet = 64M
+
+####################
+# Binary Logging (for replication/backup)
+####################
+
+{{#MYSQL_BINLOG_ENABLED}}
+# Binary logging
+log_bin = /var/log/mysql/mysql-bin.log
+binlog_format = ROW
+binlog_cache_size = 1M
+max_binlog_cache_size = 2G
+max_binlog_size = 100M
+expire_logs_days = {{MYSQL_BINLOG_EXPIRE_DAYS}}
+{{/MYSQL_BINLOG_ENABLED}}
+
+####################
+# Replication (if enabled)
+####################
+
+{{#MYSQL_REPLICATION_ENABLED}}
+server-id = {{MYSQL_SERVER_ID}}
+relay_log = /var/log/mysql/mysql-relay-bin.log
+relay_log_index = /var/log/mysql/mysql-relay-bin.index
+{{/MYSQL_REPLICATION_ENABLED}}
+
+####################
+# Advanced Performance Tuning
+####################
+
+# Additional InnoDB tuning
+innodb_adaptive_hash_index = 1
+innodb_change_buffering = all
+innodb_old_blocks_time = 1000
+innodb_stats_on_metadata = 0
+
+# Optional: Performance Schema (can impact performance)
+{{#MYSQL_PERFORMANCE_SCHEMA_ENABLED}}
+performance_schema = ON
+performance_schema_max_table_instances = 400
+performance_schema_max_table_handles = 4000
+{{/MYSQL_PERFORMANCE_SCHEMA_ENABLED}}
+
+####################
+# Character Sets
+####################
+
+character_set_server = utf8mb4
+collation_server = utf8mb4_unicode_ci
+init_connect = 'SET NAMES utf8mb4'
+
+[mysqldump]
+quick
+quote-names
+max_allowed_packet = 64M
+
+[mysql]
+default-character-set = utf8mb4
+
+[isamchk]
+key_buffer_size = 128M
+sort_buffer_size = 128M
+read_buffer = 8M
+write_buffer = 8M

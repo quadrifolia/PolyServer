@@ -155,7 +155,9 @@ polyserver/
 │   │   ├── health_alarm_notify.conf.template
 │   │   └── health.d/
 │   │       └── cgroups.conf.template
-│   ├── nginx/                           # Web server templates (mode-specific)
+│   ├── mariadb/                         # Database server templates
+│   │   └── 50-server.cnf.template           # Performance-optimized MariaDB configuration
+│   ├── nginx/                           # Traditional web server templates (mode-specific)
 │   │   ├── nginx-baremetal.conf.template    # Nginx config for bare metal mode
 │   │   ├── nginx-docker.conf.template       # Nginx config for Docker mode (reverse proxy)
 │   │   ├── default-baremetal.conf.template  # Default site for bare metal mode
@@ -163,6 +165,14 @@ polyserver/
 │   │   ├── index.html.template
 │   │   ├── proxy_params.template
 │   │   └── security.conf.template
+│   ├── php/                             # PHP-FPM configuration templates
+│   │   ├── www.conf.template                 # PHP-FPM pool configuration
+│   │   └── php.ini.template                  # Security-hardened PHP configuration
+│   ├── redis/                           # Redis cache configuration
+│   │   └── redis.conf.template               # Performance and security optimized Redis
+│   ├── unit/                            # NGINX Unit application server templates
+│   │   ├── config.json.template              # Unit config for bare metal mode
+│   │   └── config-docker.json.template       # Unit config for Docker mode (reverse proxy)
 │   ├── scripts/                         # Script templates
 │   │   ├── backup.sh.template
 │   │   └── s3backup.sh.template
@@ -874,11 +884,33 @@ During server setup, you can optionally install additional application component
   - Storage driver optimization (overlay2)
   - Resource limits and security profiles
 
-### 🌐 **Web Application Servers**
-- **Nginx Unit**: Modern application server supporting multiple languages
-  - PHP, Python, Node.js, Go, and Ruby support
-  - Dynamic configuration via REST API
-  - Built-in load balancing and SSL termination
+### 🌐 **Web Application Server Choice**
+
+During server setup, you can choose between two high-performance web server architectures:
+
+#### **Traditional nginx + PHP-FPM** (Default)
+- **Industry Standard**: Battle-tested architecture used by millions of websites
+- **Separate Processes**: nginx handles HTTP, PHP-FPM processes PHP requests
+- **Extensive Documentation**: Large community, abundant resources and tutorials
+- **Resource Usage**: Moderate memory usage, predictable performance
+- **Best For**: Established workflows, large teams, complex nginx configurations
+
+#### **NGINX Unit** (High-Performance Option)
+- **Modern Architecture**: Single process handles both web serving and application execution
+- **Superior Performance**: 8-10x faster response times than traditional PHP-FPM
+- **Dynamic Configuration**: RESTful API for configuration changes without restarts
+- **Better Resource Management**: More efficient under high load conditions
+- **Multi-Language Support**: PHP, Python, Node.js, Go, Ruby, and more
+- **Best For**: High-traffic sites, performance-critical applications, modern deployments
+
+**Performance Comparison:**
+- Response time: NGINX Unit ~7.6ms vs PHP-FPM ~60ms (99th percentile)
+- Load handling: Unit handles 1000 requests without failures vs PHP-FPM with 200 failures
+- Resource efficiency: Better memory and CPU utilization under stress
+
+**Template Support:**
+- Traditional setup uses `templates/nginx/` and `templates/php/` configurations
+- NGINX Unit setup uses `templates/unit/` with optimized JSON configurations
 
 ### 🐘 **Database Systems**
 - **MariaDB**: High-performance MySQL-compatible database

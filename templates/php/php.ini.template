@@ -1,0 +1,148 @@
+# PHP Configuration for PolyServer
+# Security-hardened and performance-optimized
+
+####################
+# Core Settings
+####################
+
+# Resource limits
+memory_limit = {{PHP_MEMORY_LIMIT}}M
+max_execution_time = {{PHP_MAX_EXECUTION_TIME}}
+max_input_time = {{PHP_MAX_INPUT_TIME}}
+max_input_vars = 1000
+
+# File upload settings
+file_uploads = On
+upload_max_filesize = {{PHP_UPLOAD_MAX_FILESIZE}}M
+max_file_uploads = 20
+post_max_size = {{PHP_POST_MAX_SIZE}}M
+
+# Output settings
+output_buffering = 4096
+implicit_flush = Off
+
+####################
+# Security Settings
+####################
+
+# Disable dangerous functions
+disable_functions = exec,passthru,shell_exec,system,proc_open,popen,curl_exec,curl_multi_exec,parse_ini_file,show_source,highlight_file,ini_alter,ini_get_all,ini_restore,get_current_user,system,phpinfo,php_uname,getmyuid,getmypid,leak,listen,diskfreespace,tmpfile,link,ignore_user_aborts,set_time_limit,dl
+
+# File system security
+allow_url_fopen = Off
+allow_url_include = Off
+auto_prepend_file = 
+auto_append_file = 
+enable_dl = Off
+
+# Information disclosure prevention
+expose_php = Off
+display_errors = Off
+display_startup_errors = Off
+log_errors = On
+ignore_repeated_errors = Off
+ignore_repeated_source = Off
+report_memleaks = On
+html_errors = Off
+error_reporting = E_ALL & ~E_DEPRECATED & ~E_STRICT
+
+# Log settings
+log_errors_max_len = 1024
+error_log = /var/log/php/error.log
+
+####################
+# Session Security
+####################
+
+session.auto_start = 0
+session.use_strict_mode = 1
+session.cookie_httponly = 1
+session.cookie_secure = 1
+session.cookie_samesite = "Strict"
+session.use_cookies = 1
+session.use_only_cookies = 1
+session.name = PHPSESSID
+session.hash_function = sha256
+session.hash_bits_per_character = 5
+session.gc_maxlifetime = 1440
+session.gc_probability = 1
+session.gc_divisor = 1000
+
+####################
+# Performance Settings
+####################
+
+# OPcache settings (if OPcache is enabled)
+{{#PHP_OPCACHE_ENABLED}}
+opcache.enable = 1
+opcache.enable_cli = 0
+opcache.memory_consumption = {{PHP_OPCACHE_MEMORY}}
+opcache.interned_strings_buffer = {{PHP_OPCACHE_STRINGS_BUFFER}}
+opcache.max_accelerated_files = {{PHP_OPCACHE_MAX_FILES}}
+opcache.revalidate_freq = 2
+opcache.fast_shutdown = 1
+opcache.enable_file_override = 0
+opcache.validate_timestamps = 1
+opcache.save_comments = 1
+{{/PHP_OPCACHE_ENABLED}}
+
+# Realpath cache
+realpath_cache_size = {{PHP_REALPATH_CACHE_SIZE}}k
+realpath_cache_ttl = 120
+
+####################
+# Optional: APCu Settings (if enabled)
+####################
+{{#PHP_APCU_ENABLED}}
+apc.enabled = 1
+apc.shm_size = {{PHP_APCU_MEMORY}}M
+apc.ttl = 7200
+apc.user_ttl = 7200
+apc.gc_ttl = 3600
+apc.num_files_hint = 1024
+apc.enable_cli = 0
+{{/PHP_APCU_ENABLED}}
+
+####################
+# Date and Locale
+####################
+
+date.timezone = {{SERVER_TIMEZONE}}
+default_charset = "UTF-8"
+
+####################
+# Mail Settings (for security)
+####################
+
+SMTP = localhost
+smtp_port = 25
+sendmail_path = /usr/sbin/sendmail -t -i
+
+####################
+# Miscellaneous
+####################
+
+# Resource control
+max_input_nesting_level = 64
+user_ini.filename = 
+user_ini.cache_ttl = 300
+
+# Network timeouts
+default_socket_timeout = 60
+
+# Data handling
+precision = 14
+serialize_precision = -1
+
+# CLI settings (when running from command line)
+auto_globals_jit = On
+
+# Optional: XDebug settings (development only - never enable in production)
+{{#PHP_XDEBUG_ENABLED}}
+zend_extension = xdebug.so
+xdebug.mode = develop,debug
+xdebug.start_with_request = trigger
+xdebug.client_host = 127.0.0.1
+xdebug.client_port = 9003
+xdebug.log = /var/log/php/xdebug.log
+{{/PHP_XDEBUG_ENABLED}}
