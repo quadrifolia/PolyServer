@@ -4053,6 +4053,17 @@ fs.suid_dumpable = 0
 fs.protected_hardlinks = 1
 fs.protected_symlinks = 1
 
+# Debian 13 Trixie security enhancements
+# Control Flow Integrity (CFI) hardening - available on supported hardware
+# Note: These features are automatically enabled by the kernel on supported CPUs
+# Intel CET (Control-flow Enforcement Technology) - amd64
+# ARM PAC (Pointer Authentication) and BTI (Branch Target Identification) - arm64
+# No explicit kernel parameters needed as they're enabled at compile time
+
+# Additional memory protection
+vm.mmap_rnd_bits = 32
+vm.mmap_rnd_compat_bits = 16
+
 # Automatic reboot after kernel panic (headless environment)
 kernel.panic = 10
 kernel.panic_on_oops = 1
