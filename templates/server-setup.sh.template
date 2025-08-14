@@ -649,22 +649,84 @@ else
     echo "🐳 Skipping NTP configuration in Docker mode (host handles time sync)"
 fi
 
-echo "===== 6. Installing security packages ====="
+echo "===== 6. Optional Security Components ====="
+echo "Choose additional security tools to install. Each tool provides specific protection but uses system resources."
+echo ""
+
+# Optional security components configuration
+SECURITY_COMPONENTS=""
+
+# ClamAV Antivirus
+echo "📡 ClamAV Antivirus Scanner:"
+echo "   • Provides: Real-time malware detection, scheduled system scans, email protection"
+echo "   • Resource usage: HIGH (500MB+ RAM, significant CPU during scans)" 
+echo "   • Best for: Production servers, mail servers, file servers"
+echo "   • Skip if: Small VPS (<2GB RAM), containers, minimal footprint deployments"
+echo ""
+read -p "Install ClamAV antivirus scanner? (Y/n): " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+    SECURITY_COMPONENTS="$SECURITY_COMPONENTS clamav"
+fi
+
+# Rootkit Detection
+echo "🔍 Rootkit Detection Tools (rkhunter + chkrootkit):"
+echo "   • Provides: Daily rootkit scans, system integrity verification, backdoor detection"
+echo "   • Resource usage: LOW (minimal RAM, CPU during daily scans only)"
+echo "   • Best for: All servers - essential for compromise detection"
+echo "   • Skip if: Highly constrained container environments only"
+echo ""
+read -p "Install rootkit detection tools? (Y/n): " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+    SECURITY_COMPONENTS="$SECURITY_COMPONENTS rootkit-detection"
+fi
+
+# Suricata IDS (only for bare metal)
+if [ "$DOCKER_MODE" = "false" ]; then
+    echo "🛡️ Suricata Network Intrusion Detection:"
+    echo "   • Provides: Real-time network threat detection, traffic analysis, attack prevention"
+    echo "   • Resource usage: MEDIUM (200MB+ RAM, moderate CPU for packet inspection)"
+    echo "   • Best for: Internet-facing servers, high-value targets"
+    echo "   • Skip if: Internal servers, limited bandwidth, minimal attack surface"
+    echo ""
+    read -p "Install Suricata intrusion detection system? (Y/n): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        SECURITY_COMPONENTS="$SECURITY_COMPONENTS suricata"
+    fi
+fi
+
+echo "===== 6.1 Installing core security packages ====="
+# Core security packages (always installed)
+CORE_PACKAGES="fail2ban unattended-upgrades apt-listchanges gnupg-agent logwatch apparmor apparmor-utils nginx-extras git awscli"
+
 if [ "$DOCKER_MODE" = "true" ]; then
-    # Docker-compatible package list (excluding packages that don't work in containers)
-    apt-get install -y unattended-upgrades apt-listchanges \
-        gnupg-agent \
-        logwatch clamav clamav-daemon lm-sensors \
-        rkhunter chkrootkit apparmor apparmor-utils \
-        nginx-extras git awscli
+    # Docker-compatible package list
+    apt-get install -y $CORE_PACKAGES lm-sensors
 else
     # Full package list for production servers
-    apt-get install -y fail2ban unattended-upgrades apt-listchanges \
-        gnupg-agent \
-        logwatch clamav clamav-daemon lm-sensors hddtemp \
-        rkhunter chkrootkit unbound apparmor apparmor-utils \
-        nginx-extras suricata git awscli
+    apt-get install -y $CORE_PACKAGES lm-sensors hddtemp unbound
 fi
+
+echo "===== 6.2 Installing selected security components ====="
+if [[ $SECURITY_COMPONENTS == *"clamav"* ]]; then
+    echo "Installing ClamAV antivirus scanner..."
+    apt-get install -y clamav clamav-daemon
+fi
+
+if [[ $SECURITY_COMPONENTS == *"rootkit-detection"* ]]; then
+    echo "Installing rootkit detection tools..."
+    apt-get install -y rkhunter chkrootkit  
+fi
+
+if [[ $SECURITY_COMPONENTS == *"suricata"* ]]; then
+    echo "Installing Suricata intrusion detection system..."
+    apt-get install -y suricata
+fi
+
+echo "✅ Security package installation completed"
+echo "Installed components: $SECURITY_COMPONENTS"
 
 echo "===== 6.0.1 Installing CPU microcode updates ====="
 
@@ -1584,12 +1646,14 @@ else
     echo "🐳 Skipping hardware sensor detection in Docker mode"
 fi
 
-# Configure ClamAV with resource optimization
-echo "===== 8. Configuring ClamAV with resource optimization ====="
-# Optimize ClamAV for production server environment with resource awareness
-# This prevents ClamAV from consuming excessive CPU/memory that could impact applications
+echo "===== 8. Configuring selected security components ====="
 
-if [ "$DOCKER_MODE" = "false" ]; then
+if [[ $SECURITY_COMPONENTS == *"clamav"* ]]; then
+    echo "===== 8.1 Configuring ClamAV with resource optimization ====="
+    # Optimize ClamAV for production server environment with resource awareness
+    # This prevents ClamAV from consuming excessive CPU/memory that could impact applications
+
+    if [ "$DOCKER_MODE" = "false" ]; then
     # Stop services during configuration (only in non-Docker mode)
     systemctl stop clamav-daemon clamav-freshclam 2>/dev/null || true
 
@@ -1839,9 +1903,13 @@ if [ "$DOCKER_MODE" = "false" ]; then
     echo "   • Manual scan: clamscan -r /path/to/scan"
     echo "   • Monitor resources: systemctl show clamav-daemon --property=CPUUsageNSec,MemoryCurrent"
 fi
+else
+    echo "⏭️ ClamAV antivirus not selected - skipping configuration"
+fi
 
-# Install Linux Malware Detect (maldet)
-echo "===== 8.1 Installing Linux Malware Detect (maldet) ====="
+if [[ $SECURITY_COMPONENTS == *"clamav"* ]]; then
+    # Install Linux Malware Detect (maldet) - complement to ClamAV
+    echo "===== 8.2 Installing Linux Malware Detect (maldet) ====="
 # Create temporary directory for installation
 mkdir -p /tmp/maldet
 cd /tmp/maldet
