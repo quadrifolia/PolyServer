@@ -26,6 +26,7 @@ This repository provides a comprehensive, security-hardened Debian server founda
   - [Compliance Setup](#compliance-setup)
 - [Base Server Features](#base-server-features)
 - [Base Server Components](#base-server-components)
+- [Optional Application Components](#optional-application-components)
 - [Updating and Maintenance](#updating-and-maintenance)
   - [Update Schedule Recommendations](#update-schedule-recommendations)
   - [Updating Applications](#updating-applications)
@@ -89,13 +90,17 @@ This repository provides a comprehensive, security-hardened Debian server founda
 PolyServer provides a **foundational layer** for secure Debian server deployments with:
 
 ### 🔒 **Security-First Design**
-- 20+ integrated security tools and frameworks
-- ModSecurity WAF, Suricata IDS, fail2ban protection with advanced monitoring
-- Comprehensive audit framework and file integrity monitoring
-- Enhanced persistence detection and SUID/SGID binary monitoring
-- APT package pinning for critical security packages
-- AppArmor mandatory access control with custom profiles
-- Full DSGVO/GDPR compliance toolkit with automated breach response
+- **25+ integrated security tools and frameworks**
+- **Post-quantum cryptography**: SSH with hybrid key exchange algorithms for future-proof security
+- **Dual-stack security**: IPv4/IPv6 support with DNSSEC validation and integrity protection
+- **Defense in depth**: ModSecurity WAF, Suricata IDS, fail2ban with UFW/nftables backend
+- **Comprehensive audit framework**: auditd with file integrity monitoring and persistence detection
+- **Enhanced access control**: AppArmor mandatory access control with restrictive sudoers configuration
+- **DNS security**: Unbound with DNSSEC validation, dual-stack support, and fallback DNS
+- **Malware protection**: ClamAV, Linux Malware Detect, and rootkit detection (RKHunter, chkrootkit)
+- **Container security**: Trivy vulnerability scanning with severity-based filtering
+- **Automated security updates**: Unattended upgrades with intelligent service restart management
+- **Full DSGVO/GDPR compliance toolkit** with automated breach response and forensics collection
 
 ### ⚡ **Performance Optimized**
 - Unbound DNS caching for improved response times
@@ -124,7 +129,9 @@ polyserver/
 │   ├── dsgvo-compliance-check.sh        # GDPR compliance verification
 │   ├── maldet-config.sh                 # Malware detection configuration
 │   ├── setup-dsgvo.sh                   # DSGVO compliance setup
-│   └── trivy-scan.sh                    # Security vulnerability scanning
+│   ├── trivy-scan.sh                    # Security vulnerability scanning
+│   ├── remove-apparmor.sh               # AppArmor removal utility
+│   └── ssh-disable-password-auth.sh     # SSH security hardening
 ├── templates/                           # Template files for configuration
 │   ├── defaults.env                     # Base system configuration variables
 │   ├── server-setup.sh.template         # Server hardening script template
@@ -162,9 +169,11 @@ polyserver/
 │   │   └── local.yaml.template
 │   ├── systemd/                         # System service templates
 │   │   └── application.service.template
-│   └── unbound/                         # DNS caching templates
+│   └── unbound/                         # DNS resolver templates
 │       ├── dhclient.conf.template
 │       └── local.conf.template
+├── config/                              # Generated configuration files (git-ignored)
+│   └── [generated from templates/]     # Output directory for processed templates
 ├── CLAUDE.md                            # Claude Code AI assistant context and commands
 ├── DSGVO.md                             # DSGVO/GDPR compliance guide
 ├── DSGVO-TOOLS.md                       # DSGVO/GDPR tools documentation
@@ -852,6 +861,98 @@ The PolyServer foundation includes:
 4. **DSGVO/GDPR compliance** tools and procedures
 5. **Template-based configuration** for easy customization
 6. **Incident response tools** for security events
+
+## Optional Application Components
+
+During server setup, you can optionally install additional application components for your specific use case. These components are installed with secure configurations and production-ready defaults.
+
+### 🐳 **Container Platform**
+- **Docker with Security Optimizations**: Container runtime with hardened daemon configuration
+  - Secure daemon configuration with logging restrictions
+  - User namespace remapping for enhanced security
+  - Storage driver optimization (overlay2)
+  - Resource limits and security profiles
+
+### 🌐 **Web Application Servers**
+- **Nginx Unit**: Modern application server supporting multiple languages
+  - PHP, Python, Node.js, Go, and Ruby support
+  - Dynamic configuration via REST API
+  - Built-in load balancing and SSL termination
+
+### 🐘 **Database Systems**
+- **MariaDB**: High-performance MySQL-compatible database
+  - Secure installation with disabled remote root access
+  - Performance optimization for server environments
+  - Automatic security hardening configuration
+  
+- **PostgreSQL**: Advanced open-source relational database
+  - Role-based access control
+  - SSL/TLS encryption enabled by default
+  - Performance tuning for production workloads
+
+### 📦 **Caching and Storage**
+- **Redis**: In-memory data structure store
+  - Secure configuration with authentication
+  - Memory optimization settings
+  - Persistence configuration for data durability
+
+### 🔧 **Development Platforms**
+
+#### **PHP Development Stack**
+- **PHP 8.4 with php-fpm**: Latest PHP with FastCGI Process Manager
+  - Common extensions: mysqli, pdo, curl, gd, mbstring, xml, zip
+  - OPcache enabled for performance
+  - Security hardening (disabled dangerous functions)
+
+- **PHP Development Tools** (optional):
+  - **Composer**: Dependency management
+  - **Xdebug**: Debugging and profiling extension
+
+#### **Node.js Development Stack**
+- **Node.js with PM2**: JavaScript runtime with process manager
+  - Latest LTS version (v22.x) from NodeSource repository
+  - PM2 process manager for production deployments
+  - Cluster mode support for scalability
+
+- **Node.js Development Tools** (optional):
+  - **Yarn**: Fast, reliable package manager
+  - **TypeScript**: Static type checking
+
+### 🔧 **Development Tools**
+- **Git**: Version control with optimized configuration
+  - Security-focused default configurations
+  - Performance optimizations for large repositories
+  - Integration with system security monitoring
+
+### 🖥️ **Advanced Monitoring Tools** (Optional)
+- **serverstatus**: Comprehensive server health and status reporting
+- **logmon**: Real-time log monitoring for different log types (auth, security, system, nginx)
+- **servermail**: Local system mail and notification reader
+
+### Installation Process
+
+Optional components are presented during the interactive server setup process:
+
+```bash
+# During server setup, you'll be prompted:
+Install/Configure Docker with security optimizations? (y/N): 
+Install Nginx Unit (modern application server)? (y/N): 
+Install PHP 8.4 with php-fpm and common extensions? (y/N): 
+  Include PHP development tools (Composer, Xdebug)? (y/N): 
+Install MariaDB with secure configuration? (y/N): 
+Install PostgreSQL with secure configuration? (y/N): 
+Install Node.js with PM2 process manager? (y/N): 
+  Include development tools (Yarn, TypeScript)? (y/N): 
+Install Redis with secure configuration? (y/N): 
+Install Git with optimized configuration? (y/N): 
+Install advanced server monitoring commands? (y/N): 
+```
+
+Each component is installed with:
+- **Security-first configuration**: All services configured with security best practices
+- **Performance optimization**: Tuned for production server environments
+- **Integration with monitoring**: Automatic integration with system monitoring and logging
+- **DSGVO compliance**: Data handling procedures documented where applicable
 
 ## Updating and Maintenance
 
