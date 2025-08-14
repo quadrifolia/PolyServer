@@ -900,20 +900,85 @@ echo "postfix postfix/mailname string $(hostname -f)" | debconf-set-selections
 # Update package lists before installing
 apt-get update
 
-# Create ClamAV user before package installation to prevent warnings
-if ! id "clamav" &>/dev/null; then
-    echo "Creating clamav user before package installation..."
-    useradd --system --home-dir /var/lib/clamav --shell /bin/false clamav
-    echo "✅ ClamAV user created"
+echo "===== 5. Optional Security Components for Bastion ====="
+echo "Choose security tools for this bastion host. Bastions have unique requirements:"
+echo ""
+
+# Optional security components configuration
+SECURITY_COMPONENTS=""
+
+# ClamAV Antivirus
+echo "📡 ClamAV Antivirus Scanner:"
+echo "   • Provides: File scanning for uploads/downloads through bastion"
+echo "   • Resource usage: HIGH (500MB+ RAM, CPU spikes during scans)"
+echo "   • Best for: Bastions handling file transfers, mail relaying, web access"
+echo "   • Skip if: Network-only bastion, small VPS (<2GB RAM), pure SSH gateway"
+echo ""
+read -p "Install ClamAV antivirus scanner? (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    SECURITY_COMPONENTS="$SECURITY_COMPONENTS clamav"
+    # Create ClamAV user before package installation
+    if ! id "clamav" &>/dev/null; then
+        echo "Creating clamav user before package installation..."
+        useradd --system --home-dir /var/lib/clamav --shell /bin/false clamav
+        echo "✅ ClamAV user created"
+    fi
 fi
 
-# Full package list for production bastion hosts
-apt-get install -y fail2ban unattended-upgrades apt-listchanges \
-    logwatch clamav clamav-daemon lm-sensors \
-    rkhunter chkrootkit unbound \
-    suricata tcpdump netcat-openbsd mailutils postfix
+# Rootkit Detection  
+echo "🔍 Rootkit Detection Tools (rkhunter + chkrootkit):"
+echo "   • Provides: Daily compromise detection, system integrity verification"
+echo "   • Resource usage: LOW (minimal RAM, brief CPU usage during daily scans)"
+echo "   • Best for: ALL bastions - critical for detecting compromise"
+echo "   • Skip if: Only highly constrained environments"
+echo ""
+read -p "Install rootkit detection tools? (Y/n): " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+    SECURITY_COMPONENTS="$SECURITY_COMPONENTS rootkit-detection"
+fi
 
-echo "===== 6.0.1 Configuring ClamAV with resource optimization for bastion hosts ====="
+# Suricata IDS
+echo "🛡️ Suricata Network Intrusion Detection:"
+echo "   • Provides: Network traffic analysis, intrusion detection, threat monitoring"
+echo "   • Resource usage: MEDIUM (200MB+ RAM, CPU for packet inspection)"
+echo "   • Best for: Internet-facing bastions, high-security environments"  
+echo "   • Skip if: Internal bastions, limited bandwidth, minimal threat model"
+echo ""
+read -p "Install Suricata intrusion detection? (Y/n): " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+    SECURITY_COMPONENTS="$SECURITY_COMPONENTS suricata"
+fi
+
+echo "===== 5.1 Installing core bastion packages ====="
+# Core packages (always installed for bastion functionality)
+apt-get install -y fail2ban unattended-upgrades apt-listchanges \
+    logwatch lm-sensors unbound \
+    tcpdump netcat-openbsd mailutils postfix
+
+echo "===== 5.2 Installing selected security components ====="
+if [[ $SECURITY_COMPONENTS == *"clamav"* ]]; then
+    echo "Installing ClamAV antivirus scanner..."
+    apt-get install -y clamav clamav-daemon
+fi
+
+if [[ $SECURITY_COMPONENTS == *"rootkit-detection"* ]]; then
+    echo "Installing rootkit detection tools..."
+    apt-get install -y rkhunter chkrootkit
+fi
+
+if [[ $SECURITY_COMPONENTS == *"suricata"* ]]; then
+    echo "Installing Suricata intrusion detection..."
+    apt-get install -y suricata
+fi
+
+echo "✅ Bastion security package installation completed"
+echo "Selected components: ${SECURITY_COMPONENTS:-none}"
+
+if [[ $SECURITY_COMPONENTS == *"clamav"* ]]; then
+    echo "===== 6.0.1 Configuring ClamAV with resource optimization for bastion hosts ====="
 # Optimize ClamAV for bastion host environment with limited resources
 # This prevents ClamAV from consuming excessive CPU/memory that could impact critical services
 
@@ -1323,6 +1388,9 @@ echo "   3. Wait for database update: journalctl -u clamav-freshclam -f"
 echo "   4. Start daemon: systemctl start clamav-daemon"
 echo "   5. Enable both services: systemctl enable clamav-freshclam clamav-daemon"
 echo "   6. Verify status: systemctl status clamav-daemon clamav-freshclam"
+else
+    echo "⏭️ ClamAV antivirus not selected - skipping configuration"
+fi
 
 echo "===== 6.0.2 Configuring Unbound DNS with IPv4-only for bastion hosts ====="
 # Configure Unbound DNS resolver with IPv4-only to prevent binding issues
@@ -3447,8 +3515,9 @@ EOF
 # Restart rsyslog to apply new configuration
 systemctl restart rsyslog
 
-# Configure chkrootkit
-echo "===== 10.1 Configuring chkrootkit ====="
+if [[ $SECURITY_COMPONENTS == *"rootkit-detection"* ]]; then
+    # Configure chkrootkit
+    echo "===== 10.1 Configuring chkrootkit ====="
 # Create chkrootkit scan script with proper log handling
 cat > /etc/cron.daily/chkrootkit-scan << EOF
 #!/bin/bash
@@ -3533,6 +3602,9 @@ echo "  sudo cp -a -f /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expe
 echo ""
 echo "This will eliminate false positives from legitimate security tools like Suricata."
 echo ""
+else
+    echo "⏭️ Rootkit detection tools not selected - skipping chkrootkit configuration"
+fi
 
 # Configure Logcheck (make it less noisy - logwatch provides better daily reports)
 echo "===== 10.2 Configuring Logcheck (minimal noise) ====="
