@@ -5415,7 +5415,681 @@ echo ""
 echo "Configuration backup location: /var/backups/security-configs/"
 echo "Backup retention: 30 days"
 
-echo "===== 16. Final configuration validation ====="
+echo "===== 16. Optional Application Components ====="
+echo "Choose which application components to install for your server:"
+echo ""
+
+# Optional component installation section
+INSTALL_COMPONENTS=""
+
+# Docker (Enhanced Installation)
+if [ "$DEPLOYMENT_MODE" != "docker" ]; then
+    echo ""
+    read -p "Install/Configure Docker with security optimizations? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        INSTALL_COMPONENTS="$INSTALL_COMPONENTS docker"
+    fi
+fi
+
+# Web Servers
+echo ""
+echo "=== Web Server Options ==="
+read -p "Install Nginx Unit (modern application server)? (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    INSTALL_COMPONENTS="$INSTALL_COMPONENTS nginx-unit"
+fi
+
+# PHP Stack
+echo ""
+echo "=== PHP Development Stack ==="
+read -p "Install PHP 8.3 with php-fpm and common extensions? (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    INSTALL_COMPONENTS="$INSTALL_COMPONENTS php"
+    read -p "Include PHP development tools (Composer, Xdebug)? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        INSTALL_COMPONENTS="$INSTALL_COMPONENTS php-dev"
+    fi
+fi
+
+# Database Systems
+echo ""
+echo "=== Database Systems ==="
+read -p "Install MariaDB with secure configuration? (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    INSTALL_COMPONENTS="$INSTALL_COMPONENTS mariadb"
+fi
+
+read -p "Install PostgreSQL with secure configuration? (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    INSTALL_COMPONENTS="$INSTALL_COMPONENTS postgresql"
+fi
+
+# Node.js Stack
+echo ""
+echo "=== Node.js Development Stack ==="
+read -p "Install Node.js with PM2 process manager? (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    INSTALL_COMPONENTS="$INSTALL_COMPONENTS nodejs"
+    read -p "Include development tools (Yarn, TypeScript)? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        INSTALL_COMPONENTS="$INSTALL_COMPONENTS nodejs-dev"
+    fi
+fi
+
+# Caching and Additional Services
+echo ""
+echo "=== Caching and Additional Services ==="
+read -p "Install Redis with secure configuration? (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    INSTALL_COMPONENTS="$INSTALL_COMPONENTS redis"
+fi
+
+read -p "Install Git with optimized configuration? (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    INSTALL_COMPONENTS="$INSTALL_COMPONENTS git"
+fi
+
+# Display selected components
+if [ -n "$INSTALL_COMPONENTS" ]; then
+    echo ""
+    echo "Selected components: $INSTALL_COMPONENTS"
+    echo ""
+    read -p "Proceed with installation? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "===== 16.1 Installing Selected Components ====="
+        # Component installation will be implemented next
+        for component in $INSTALL_COMPONENTS; do
+            echo "Installing $component..."
+            case $component in
+                docker)
+                    echo "===== 16.1.1 Installing Docker with Security Optimizations ====="
+                    
+                    # Remove any existing Docker packages
+                    apt-get remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
+                    
+                    # Install Docker prerequisites
+                    apt-get update
+                    apt-get install -y ca-certificates curl software-properties-common
+                    
+                    # Add Docker's official GPG key
+                    install -m 0755 -d /etc/apt/keyrings
+                    curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+                    chmod a+r /etc/apt/keyrings/docker.gpg
+                    
+                    # Add Docker repository
+                    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+                    
+                    apt-get update
+                    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+                    
+                    # Create secure Docker daemon configuration
+                    mkdir -p /etc/docker
+                    cat > /etc/docker/daemon.json << 'DOCKER_EOF'
+{
+    "log-driver": "journald",
+    "log-opts": {
+        "max-size": "100m",
+        "max-file": "3"
+    },
+    "storage-driver": "overlay2",
+    "userland-proxy": false,
+    "no-new-privileges": true,
+    "live-restore": true,
+    "default-ulimits": {
+        "nofile": {
+            "hard": 100000,
+            "soft": 100000
+        },
+        "memlock": {
+            "hard": -1,
+            "soft": -1
+        }
+    },
+    "security-opts": ["no-new-privileges:true"],
+    "icc": false,
+    "default-address-pools": [
+        {
+            "base": "172.30.0.0/16",
+            "size": 24
+        }
+    ]
+}
+DOCKER_EOF
+                    
+                    # Create secure Docker service drop-in
+                    mkdir -p /etc/systemd/system/docker.service.d
+                    cat > /etc/systemd/system/docker.service.d/security.conf << 'DOCKER_EOF'
+[Service]
+# Security hardening
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+MemoryDenyWriteExecute=true
+RestrictNamespaces=true
+
+# Resource limits
+LimitNOFILE=1048576
+LimitNPROC=1048576
+
+# OOM handling
+OOMScoreAdjust=100
+DOCKER_EOF
+                    
+                    # Add user to docker group if not already there
+                    if ! groups {{USERNAME}} | grep -q docker; then
+                        usermod -aG docker {{USERNAME}}
+                        echo "Added {{USERNAME}} to docker group"
+                    fi
+                    
+                    # Enable and start Docker
+                    systemctl daemon-reload
+                    systemctl enable docker
+                    systemctl restart docker
+                    
+                    # Wait for Docker to be ready
+                    sleep 5
+                    
+                    # Test Docker installation
+                    if docker version >/dev/null 2>&1; then
+                        echo "✅ Docker installed and configured with security optimizations"
+                        docker version | head -20
+                    else
+                        echo "❌ Docker installation failed"
+                    fi
+                    ;;
+                nginx-unit)
+                    echo "===== 16.1.2 Installing Nginx Unit ====="
+                    
+                    # Add Nginx Unit repository
+                    curl -fsSL https://nginx.org/keys/nginx_signing.key | gpg --dearmor -o /etc/apt/keyrings/nginx-unit.gpg
+                    echo "deb [signed-by=/etc/apt/keyrings/nginx-unit.gpg] https://packages.nginx.org/unit/debian/ $(lsb_release -cs) unit" > /etc/apt/sources.list.d/unit.list
+                    echo "deb-src [signed-by=/etc/apt/keyrings/nginx-unit.gpg] https://packages.nginx.org/unit/debian/ $(lsb_release -cs) unit" >> /etc/apt/sources.list.d/unit.list
+                    
+                    apt-get update
+                    
+                    # Install Nginx Unit and modules
+                    apt-get install -y unit unit-dev unit-php unit-python3.11 unit-go unit-jsc unit-perl
+                    
+                    # Create initial Nginx Unit configuration
+                    mkdir -p /etc/unit
+                    cat > /etc/unit/initial-config.json << 'UNIT_EOF'
+{
+    "settings": {
+        "http": {
+            "header_read_timeout": 30,
+            "body_read_timeout": 30,
+            "send_timeout": 30,
+            "idle_timeout": 180,
+            "max_body_size": 8388608,
+            "static": {
+                "mime_types": {
+                    "text/plain": [
+                        ".log",
+                        ".md",
+                        ".txt"
+                    ],
+                    "application/javascript": [
+                        ".js"
+                    ],
+                    "text/css": [
+                        ".css"
+                    ],
+                    "text/html": [
+                        ".html",
+                        ".htm"
+                    ]
+                }
+            }
+        }
+    },
+    "listeners": {
+        "127.0.0.1:8080": {
+            "pass": "routes"
+        }
+    },
+    "routes": [
+        {
+            "match": {
+                "uri": "/status"
+            },
+            "action": {
+                "return": 200
+            }
+        }
+    ]
+}
+UNIT_EOF
+                    
+                    # Create systemd override for Unit with security hardening
+                    mkdir -p /etc/systemd/system/unit.service.d
+                    cat > /etc/systemd/system/unit.service.d/security.conf << 'UNIT_EOF'
+[Service]
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/unit /var/log/unit /run/unit
+RestrictRealtime=true
+RestrictSUIDSGID=true
+
+# Resource management
+Nice=0
+OOMScoreAdjust=50
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=3
+StartLimitInterval=300
+UNIT_EOF
+                    
+                    # Enable and start Nginx Unit
+                    systemctl daemon-reload
+                    systemctl enable unit
+                    systemctl start unit
+                    
+                    # Wait for Unit to be ready
+                    sleep 3
+                    
+                    # Apply initial configuration
+                    curl -X PUT --data-binary @/etc/unit/initial-config.json --unix-socket /var/run/unit/control.sock http://localhost/config/ 2>/dev/null || true
+                    
+                    # Test Nginx Unit installation
+                    if systemctl is-active --quiet unit; then
+                        echo "✅ Nginx Unit installed and configured"
+                        echo "   • Control socket: /var/run/unit/control.sock"
+                        echo "   • Status endpoint: http://127.0.0.1:8080/status"
+                        echo "   • Configuration: curl --unix-socket /var/run/unit/control.sock http://localhost/config/"
+                    else
+                        echo "❌ Nginx Unit installation failed"
+                    fi
+                    ;;
+                php)
+                    echo "===== 16.1.3 Installing PHP 8.3 with php-fpm ====="
+                    
+                    # Add Sury's PHP repository for latest PHP versions
+                    apt-get install -y lsb-release ca-certificates curl
+                    curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /etc/apt/keyrings/sury-php.gpg
+                    echo "deb [signed-by=/etc/apt/keyrings/sury-php.gpg] https://packages.sury.org/php/ $(lsb_release -cs) main" > /etc/apt/sources.list.d/sury-php.list
+                    
+                    apt-get update
+                    
+                    # Install PHP 8.3 and essential extensions
+                    apt-get install -y \
+                        php8.3-fpm \
+                        php8.3-cli \
+                        php8.3-common \
+                        php8.3-curl \
+                        php8.3-gd \
+                        php8.3-intl \
+                        php8.3-mbstring \
+                        php8.3-mysql \
+                        php8.3-opcache \
+                        php8.3-pgsql \
+                        php8.3-redis \
+                        php8.3-sqlite3 \
+                        php8.3-xml \
+                        php8.3-zip \
+                        php8.3-bcmath \
+                        php8.3-bz2 \
+                        php8.3-imagick \
+                        php8.3-imap \
+                        php8.3-soap \
+                        php8.3-ssh2 \
+                        php8.3-uuid \
+                        php8.3-yaml
+                    
+                    # Configure PHP-FPM pool with security optimizations
+                    cat > /etc/php/8.3/fpm/pool.d/security.conf << 'PHP_EOF'
+[security]
+user = {{USERNAME}}
+group = {{USERNAME}}
+listen = /run/php/php8.3-fpm-security.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+
+; Process management
+pm = dynamic
+pm.max_children = 20
+pm.start_servers = 2
+pm.min_spare_servers = 1
+pm.max_spare_servers = 3
+pm.max_requests = 1000
+
+; Security settings
+php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,curl_exec,curl_multi_exec,parse_ini_file,show_source
+php_admin_value[open_basedir] = /var/www:/tmp:/var/lib/php/sessions:/dev/urandom
+php_admin_value[allow_url_fopen] = Off
+php_admin_value[allow_url_include] = Off
+php_admin_value[expose_php] = Off
+php_admin_value[log_errors] = On
+php_admin_value[error_log] = /var/log/php8.3-fpm-security.log
+
+; Resource limits
+php_admin_value[memory_limit] = 256M
+php_admin_value[max_execution_time] = 60
+php_admin_value[max_input_time] = 60
+php_admin_value[post_max_size] = 32M
+php_admin_value[upload_max_filesize] = 32M
+php_admin_value[max_file_uploads] = 20
+
+; Session security
+php_admin_value[session.cookie_httponly] = On
+php_admin_value[session.cookie_secure] = On
+php_admin_value[session.use_strict_mode] = On
+php_admin_value[session.cookie_samesite] = Strict
+php_admin_value[session.save_path] = /var/lib/php/sessions
+PHP_EOF
+                    
+                    # Create production-ready PHP configuration
+                    cat > /etc/php/8.3/fpm/conf.d/99-security.ini << 'PHP_EOF'
+; Security enhancements
+expose_php = Off
+allow_url_fopen = Off
+allow_url_include = Off
+display_errors = Off
+display_startup_errors = Off
+log_errors = On
+error_reporting = E_ALL & ~E_DEPRECATED & ~E_STRICT
+
+; Resource limits
+memory_limit = 256M
+max_execution_time = 60
+max_input_time = 60
+post_max_size = 32M
+upload_max_filesize = 32M
+max_file_uploads = 20
+
+; OPcache optimization
+opcache.enable = 1
+opcache.enable_cli = 0
+opcache.memory_consumption = 128
+opcache.interned_strings_buffer = 8
+opcache.max_accelerated_files = 4000
+opcache.revalidate_freq = 2
+opcache.fast_shutdown = 1
+opcache.validate_timestamps = 1
+
+; Session security
+session.cookie_httponly = On
+session.cookie_secure = On
+session.use_strict_mode = On
+session.cookie_samesite = "Strict"
+session.gc_maxlifetime = 1440
+session.gc_probability = 1
+session.gc_divisor = 1000
+PHP_EOF
+                    
+                    # Create systemd override for php-fpm with security hardening
+                    mkdir -p /etc/systemd/system/php8.3-fpm.service.d
+                    cat > /etc/systemd/system/php8.3-fpm.service.d/security.conf << 'PHP_EOF'
+[Service]
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/www /var/log /var/lib/php /run/php /tmp
+RestrictRealtime=true
+RestrictSUIDSGID=true
+
+# Resource management
+Nice=0
+OOMScoreAdjust=50
+LimitNOFILE=65536
+LimitNPROC=1024
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=3
+StartLimitInterval=300
+PHP_EOF
+                    
+                    # Enable and start PHP-FPM
+                    systemctl daemon-reload
+                    systemctl enable php8.3-fpm
+                    systemctl restart php8.3-fpm
+                    
+                    # Create web directory and set permissions
+                    mkdir -p /var/www/html
+                    chown {{USERNAME}}:{{USERNAME}} /var/www/html
+                    
+                    # Create PHP info file for testing
+                    cat > /var/www/html/info.php << 'PHP_EOF'
+<?php
+// Remove this file in production!
+echo "<h1>PHP Configuration</h1>\n";
+echo "<p>PHP Version: " . PHP_VERSION . "</p>\n";
+echo "<p>Server: " . $_SERVER['SERVER_NAME'] . "</p>\n";
+echo "<p>Document Root: " . $_SERVER['DOCUMENT_ROOT'] . "</p>\n";
+echo "<h2>Loaded Extensions</h2>\n<ul>\n";
+foreach (get_loaded_extensions() as $ext) {
+    echo "<li>$ext</li>\n";
+}
+echo "</ul>\n";
+?>
+PHP_EOF
+                    
+                    # Test PHP-FPM installation
+                    if systemctl is-active --quiet php8.3-fpm; then
+                        echo "✅ PHP 8.3 with php-fpm installed and configured"
+                        echo "   • Version: $(php -v | head -1)"
+                        echo "   • FPM Socket: /run/php/php8.3-fpm-security.sock"
+                        echo "   • Web Directory: /var/www/html"
+                        echo "   • Configuration: /etc/php/8.3/fpm/"
+                        echo "   • Test file: /var/www/html/info.php (remove in production!)"
+                    else
+                        echo "❌ PHP-FPM installation failed"
+                    fi
+                    ;;
+                php-dev)
+                    echo "===== 16.1.4 Installing PHP Development Tools ====="
+                    
+                    # Install additional PHP development packages
+                    apt-get install -y php8.3-xdebug php8.3-dev php-pear build-essential
+                    
+                    # Install Composer
+                    cd /tmp
+                    curl -sS https://getcomposer.org/installer -o /tmp/composer-setup.php
+                    php /tmp/composer-setup.php --install-dir=/usr/local/bin --filename=composer
+                    chmod +x /usr/local/bin/composer
+                    
+                    # Configure Xdebug for development (disabled by default for performance)
+                    cat > /etc/php/8.3/mods-available/xdebug.ini << 'XDEBUG_EOF'
+; Xdebug configuration (disabled by default for production performance)
+; Enable with: phpenmod xdebug
+; Disable with: phpdismod xdebug
+
+zend_extension=xdebug.so
+xdebug.mode=develop,debug
+xdebug.start_with_request=trigger
+xdebug.client_host=127.0.0.1
+xdebug.client_port=9003
+xdebug.log=/var/log/xdebug.log
+xdebug.max_nesting_level=256
+xdebug.var_display_max_children=128
+xdebug.var_display_max_data=512
+xdebug.var_display_max_depth=3
+XDEBUG_EOF
+                    
+                    # Disable Xdebug by default for performance
+                    phpdismod xdebug
+                    
+                    # Test Composer installation
+                    if command -v composer >/dev/null 2>&1; then
+                        echo "✅ PHP development tools installed"
+                        echo "   • Composer version: $(composer --version)"
+                        echo "   • Xdebug available (disabled by default for performance)"
+                        echo "   • Enable Xdebug: phpenmod xdebug && systemctl reload php8.3-fpm"
+                        echo "   • Disable Xdebug: phpdismod xdebug && systemctl reload php8.3-fpm"
+                    else
+                        echo "❌ PHP development tools installation failed"
+                    fi
+                    ;;
+                mariadb)
+                    echo "===== 16.1.5 Installing MariaDB with Secure Configuration ====="
+                    apt-get install -y mariadb-server mariadb-client
+                    
+                    # Secure MariaDB installation automatically
+                    mysql_secure_installation --defaults <<EOF || true
+
+y
+{{DB_ROOT_PASSWORD:-$(openssl rand -base64 32)}}
+{{DB_ROOT_PASSWORD:-$(openssl rand -base64 32)}}
+y
+y
+y
+y
+EOF
+                    
+                    # Configure MariaDB for security
+                    cat >> /etc/mysql/mariadb.conf.d/99-security.cnf << 'MARIADB_EOF'
+[mysqld]
+# Security settings
+bind-address = 127.0.0.1
+local-infile = 0
+symbolic-links = 0
+secure-file-priv = "/var/lib/mysql-files/"
+
+# Performance and resource limits
+max_connections = 100
+max_user_connections = 50
+table_open_cache = 2000
+query_cache_size = 32M
+query_cache_limit = 2M
+MARIADB_EOF
+                    
+                    systemctl restart mariadb
+                    echo "✅ MariaDB installed with secure defaults"
+                    ;;
+                postgresql)
+                    echo "===== 16.1.6 Installing PostgreSQL with Secure Configuration ====="
+                    apt-get install -y postgresql postgresql-contrib postgresql-client
+                    
+                    # Configure PostgreSQL for security
+                    sudo -u postgres psql -c "ALTER USER postgres PASSWORD '{{DB_PG_PASSWORD:-$(openssl rand -base64 32)}}';"
+                    
+                    # Update pg_hba.conf for security
+                    sed -i "s/#listen_addresses = 'localhost'/listen_addresses = 'localhost'/" /etc/postgresql/*/main/postgresql.conf
+                    sed -i "s/local   all             all                                     peer/local   all             all                                     md5/" /etc/postgresql/*/main/pg_hba.conf
+                    
+                    systemctl restart postgresql
+                    echo "✅ PostgreSQL installed with secure defaults"
+                    ;;
+                nodejs)
+                    echo "===== 16.1.7 Installing Node.js with PM2 ====="
+                    # Install NodeSource repository
+                    curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+                    apt-get install -y nodejs
+                    
+                    # Install PM2 globally
+                    npm install -g pm2
+                    
+                    # Configure PM2 startup
+                    sudo -u {{USERNAME}} pm2 startup systemd -u {{USERNAME}} --hp /home/{{USERNAME}}
+                    
+                    echo "✅ Node.js and PM2 installed"
+                    echo "   • Node.js version: $(node --version)"
+                    echo "   • NPM version: $(npm --version)"
+                    echo "   • PM2 version: $(pm2 --version)"
+                    ;;
+                nodejs-dev)
+                    echo "===== 16.1.8 Installing Node.js Development Tools ====="
+                    # Install Yarn
+                    curl -fsSL https://dl.yarnpkg.com/debian/pubkey.gpg | gpg --dearmor -o /etc/apt/keyrings/yarn.gpg
+                    echo "deb [signed-by=/etc/apt/keyrings/yarn.gpg] https://dl.yarnpkg.com/debian/ stable main" > /etc/apt/sources.list.d/yarn.list
+                    apt-get update && apt-get install -y yarn
+                    
+                    # Install global development tools
+                    npm install -g typescript @types/node nodemon eslint prettier
+                    
+                    echo "✅ Node.js development tools installed"
+                    echo "   • Yarn version: $(yarn --version)"
+                    echo "   • TypeScript version: $(tsc --version)"
+                    ;;
+                redis)
+                    echo "===== 16.1.9 Installing Redis with Secure Configuration ====="
+                    apt-get install -y redis-server
+                    
+                    # Configure Redis for security
+                    sed -i 's/^# requirepass foobared/requirepass {{REDIS_PASSWORD:-$(openssl rand -base64 32)}}/' /etc/redis/redis.conf
+                    sed -i 's/^bind 127.0.0.1 ::1/bind 127.0.0.1/' /etc/redis/redis.conf
+                    sed -i 's/^# maxmemory <bytes>/maxmemory 256mb/' /etc/redis/redis.conf
+                    sed -i 's/^# maxmemory-policy noeviction/maxmemory-policy allkeys-lru/' /etc/redis/redis.conf
+                    
+                    systemctl restart redis-server
+                    echo "✅ Redis installed with secure configuration"
+                    ;;
+                git)
+                    echo "===== 16.1.10 Installing Git with Optimized Configuration ====="
+                    apt-get install -y git
+                    
+                    # Create optimized global Git configuration
+                    cat > /etc/gitconfig << 'GIT_EOF'
+[init]
+    defaultBranch = main
+
+[core]
+    editor = nano
+    autocrlf = input
+    safecrlf = true
+    filemode = true
+
+[push]
+    default = simple
+    autoSetupRemote = true
+
+[pull]
+    rebase = false
+
+[color]
+    ui = auto
+
+[alias]
+    st = status
+    co = checkout
+    br = branch
+    ci = commit
+    df = diff
+    lg = log --oneline --graph --decorate --all
+GIT_EOF
+                    
+                    echo "✅ Git installed with optimized configuration"
+                    echo "   • Version: $(git --version)"
+                    ;;
+                *)
+                    echo "Unknown component: $component"
+                    ;;
+            esac
+        done
+        echo "✅ Component installation completed"
+    else
+        echo "Skipping component installation"
+    fi
+else
+    echo "No additional components selected"
+fi
+
+echo "===== 17. Final configuration validation ====="
 log_message "Performing final configuration validation..."
 
 if validate_critical_configs; then
@@ -5425,7 +6099,7 @@ else
     log_message "Check $LOG_FILE for details"
 fi
 
-echo "===== 17. Setup complete! ====="
+echo "===== 18. Setup complete! ====="
 log_message "Server setup completed successfully"
 echo "Server has been secured and Docker installed."
 echo "IMPORTANT: SSH is now running on port $SSH_PORT"

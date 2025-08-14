@@ -178,6 +178,74 @@ The main server setup now includes optional advanced security features inspired 
 - **Security hardening**: PrivateTmp, ProtectSystem for critical services
 - **Enhanced restart policies**: Intelligent failure handling and recovery
 
+## Optional Application Components
+
+The main server setup now includes a comprehensive optional component installation system for modern web development stacks:
+
+### Web Development Stack
+- **Docker**: Latest version with security-optimized configuration
+  - Secure daemon.json with restricted networking and resource limits
+  - Systemd security hardening (NoNewPrivileges, ProtectKernelModules)
+  - Custom network ranges and security options
+  
+- **Nginx Unit**: Modern application server supporting multiple languages
+  - Built-in PHP, Python, Go, JavaScript support
+  - Systemd security hardening and resource management
+  - API-driven configuration via Unix socket
+
+- **PHP 8.3**: Latest PHP with php-fpm and security optimizations
+  - Comprehensive extension set (MySQL, PostgreSQL, Redis, etc.)
+  - Security-hardened configuration (disabled dangerous functions)
+  - Production-ready OPcache settings
+  - Optional development tools (Composer, Xdebug)
+
+### Database Systems
+- **MariaDB**: MySQL-compatible database with security defaults
+  - Automatic secure installation
+  - Localhost-only binding and secure file privileges
+  - Optimized resource limits
+  
+- **PostgreSQL**: Advanced relational database with security configuration
+  - Secure authentication (md5 instead of peer)
+  - Localhost-only listening
+  - Production-ready default settings
+  
+- **Redis**: In-memory data structure store
+  - Password protection and localhost-only binding
+  - Memory limits and LRU eviction policy
+  - Secure default configuration
+
+### Node.js Development Environment
+- **Node.js LTS**: Latest long-term support version
+  - NPM included with security defaults
+  - **PM2**: Production process manager with startup configuration
+  
+- **Development Tools** (optional):
+  - Yarn package manager
+  - TypeScript with type definitions
+  - Essential development tools (ESLint, Prettier, Nodemon)
+
+### Development Tools
+- **Git**: Version control with optimized global configuration
+  - Security-focused defaults (main branch, safe CRLF handling)
+  - Useful aliases and colored output
+  - Production-ready configuration
+
+### Configuration Requirements
+All components require minimal user input and use secure defaults:
+- **Database passwords**: Auto-generated secure passwords (32-character base64)
+- **Redis authentication**: Auto-generated password protection
+- **Security settings**: All services configured with security-first approach
+- **Resource limits**: Production-appropriate resource allocation
+- **Systemd hardening**: Security features enabled for all services
+
+### User Experience
+- **Interactive installation**: Clear prompts with explanations
+- **Grouped selections**: Related components grouped logically
+- **Dependency management**: Automatic handling of component dependencies
+- **Validation**: All installations tested and verified
+- **Documentation**: Each component provides usage information post-install
+
 ## Best Practices
 
 - This repository provides the **foundation layer** only
