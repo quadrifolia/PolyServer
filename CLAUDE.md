@@ -193,7 +193,7 @@ The main server setup now includes a comprehensive optional component installati
   - Systemd security hardening and resource management
   - API-driven configuration via Unix socket
 
-- **PHP 8.3**: Latest PHP with php-fpm and security optimizations
+- **PHP 8.4**: Latest PHP with php-fpm and security optimizations (from official Debian 13 repositories)
   - Comprehensive extension set (MySQL, PostgreSQL, Redis, etc.)
   - Security-hardened configuration (disabled dangerous functions)
   - Production-ready OPcache settings

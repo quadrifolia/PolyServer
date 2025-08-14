@@ -5444,7 +5444,7 @@ fi
 # PHP Stack
 echo ""
 echo "=== PHP Development Stack ==="
-read -p "Install PHP 8.3 with php-fpm and common extensions? (y/N): " -n 1 -r
+read -p "Install PHP 8.4 with php-fpm and common extensions? (y/N): " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     INSTALL_COMPONENTS="$INSTALL_COMPONENTS php"
@@ -5722,46 +5722,42 @@ UNIT_EOF
                     fi
                     ;;
                 php)
-                    echo "===== 16.1.3 Installing PHP 8.3 with php-fpm ====="
-                    
-                    # Add Sury's PHP repository for latest PHP versions
-                    apt-get install -y lsb-release ca-certificates curl
-                    curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /etc/apt/keyrings/sury-php.gpg
-                    echo "deb [signed-by=/etc/apt/keyrings/sury-php.gpg] https://packages.sury.org/php/ $(lsb_release -cs) main" > /etc/apt/sources.list.d/sury-php.list
+                    echo "===== 16.1.3 Installing PHP 8.4 with php-fpm ====="
+                    echo "Using official Debian 13 repositories (PHP 8.4 is default)"
                     
                     apt-get update
                     
-                    # Install PHP 8.3 and essential extensions
+                    # Install PHP 8.4 and essential extensions from official Debian repositories
                     apt-get install -y \
-                        php8.3-fpm \
-                        php8.3-cli \
-                        php8.3-common \
-                        php8.3-curl \
-                        php8.3-gd \
-                        php8.3-intl \
-                        php8.3-mbstring \
-                        php8.3-mysql \
-                        php8.3-opcache \
-                        php8.3-pgsql \
-                        php8.3-redis \
-                        php8.3-sqlite3 \
-                        php8.3-xml \
-                        php8.3-zip \
-                        php8.3-bcmath \
-                        php8.3-bz2 \
-                        php8.3-imagick \
-                        php8.3-imap \
-                        php8.3-soap \
-                        php8.3-ssh2 \
-                        php8.3-uuid \
-                        php8.3-yaml
+                        php8.4-fpm \
+                        php8.4-cli \
+                        php8.4-common \
+                        php8.4-curl \
+                        php8.4-gd \
+                        php8.4-intl \
+                        php8.4-mbstring \
+                        php8.4-mysql \
+                        php8.4-opcache \
+                        php8.4-pgsql \
+                        php8.4-redis \
+                        php8.4-sqlite3 \
+                        php8.4-xml \
+                        php8.4-zip \
+                        php8.4-bcmath \
+                        php8.4-bz2 \
+                        php8.4-imagick \
+                        php8.4-imap \
+                        php8.4-soap \
+                        php8.4-ssh2 \
+                        php8.4-uuid \
+                        php8.4-yaml
                     
                     # Configure PHP-FPM pool with security optimizations
-                    cat > /etc/php/8.3/fpm/pool.d/security.conf << 'PHP_EOF'
+                    cat > /etc/php/8.4/fpm/pool.d/security.conf << 'PHP_EOF'
 [security]
 user = {{USERNAME}}
 group = {{USERNAME}}
-listen = /run/php/php8.3-fpm-security.sock
+listen = /run/php/php8.4-fpm-security.sock
 listen.owner = www-data
 listen.group = www-data
 listen.mode = 0660
@@ -5781,7 +5777,7 @@ php_admin_value[allow_url_fopen] = Off
 php_admin_value[allow_url_include] = Off
 php_admin_value[expose_php] = Off
 php_admin_value[log_errors] = On
-php_admin_value[error_log] = /var/log/php8.3-fpm-security.log
+php_admin_value[error_log] = /var/log/php8.4-fpm-security.log
 
 ; Resource limits
 php_admin_value[memory_limit] = 256M
@@ -5800,7 +5796,7 @@ php_admin_value[session.save_path] = /var/lib/php/sessions
 PHP_EOF
                     
                     # Create production-ready PHP configuration
-                    cat > /etc/php/8.3/fpm/conf.d/99-security.ini << 'PHP_EOF'
+                    cat > /etc/php/8.4/fpm/conf.d/99-security.ini << 'PHP_EOF'
 ; Security enhancements
 expose_php = Off
 allow_url_fopen = Off
@@ -5839,8 +5835,8 @@ session.gc_divisor = 1000
 PHP_EOF
                     
                     # Create systemd override for php-fpm with security hardening
-                    mkdir -p /etc/systemd/system/php8.3-fpm.service.d
-                    cat > /etc/systemd/system/php8.3-fpm.service.d/security.conf << 'PHP_EOF'
+                    mkdir -p /etc/systemd/system/php8.4-fpm.service.d
+                    cat > /etc/systemd/system/php8.4-fpm.service.d/security.conf << 'PHP_EOF'
 [Service]
 # Security hardening
 NoNewPrivileges=true
@@ -5866,8 +5862,8 @@ PHP_EOF
                     
                     # Enable and start PHP-FPM
                     systemctl daemon-reload
-                    systemctl enable php8.3-fpm
-                    systemctl restart php8.3-fpm
+                    systemctl enable php8.4-fpm
+                    systemctl restart php8.4-fpm
                     
                     # Create web directory and set permissions
                     mkdir -p /var/www/html
@@ -5890,12 +5886,12 @@ echo "</ul>\n";
 PHP_EOF
                     
                     # Test PHP-FPM installation
-                    if systemctl is-active --quiet php8.3-fpm; then
-                        echo "✅ PHP 8.3 with php-fpm installed and configured"
+                    if systemctl is-active --quiet php8.4-fpm; then
+                        echo "✅ PHP 8.4 with php-fpm installed and configured"
                         echo "   • Version: $(php -v | head -1)"
-                        echo "   • FPM Socket: /run/php/php8.3-fpm-security.sock"
+                        echo "   • FPM Socket: /run/php/php8.4-fpm-security.sock"
                         echo "   • Web Directory: /var/www/html"
-                        echo "   • Configuration: /etc/php/8.3/fpm/"
+                        echo "   • Configuration: /etc/php/8.4/fpm/"
                         echo "   • Test file: /var/www/html/info.php (remove in production!)"
                     else
                         echo "❌ PHP-FPM installation failed"
@@ -5905,7 +5901,7 @@ PHP_EOF
                     echo "===== 16.1.4 Installing PHP Development Tools ====="
                     
                     # Install additional PHP development packages
-                    apt-get install -y php8.3-xdebug php8.3-dev php-pear build-essential
+                    apt-get install -y php8.4-xdebug php8.4-dev php-pear build-essential
                     
                     # Install Composer
                     cd /tmp
@@ -5914,7 +5910,7 @@ PHP_EOF
                     chmod +x /usr/local/bin/composer
                     
                     # Configure Xdebug for development (disabled by default for performance)
-                    cat > /etc/php/8.3/mods-available/xdebug.ini << 'XDEBUG_EOF'
+                    cat > /etc/php/8.4/mods-available/xdebug.ini << 'XDEBUG_EOF'
 ; Xdebug configuration (disabled by default for production performance)
 ; Enable with: phpenmod xdebug
 ; Disable with: phpdismod xdebug
@@ -5939,8 +5935,8 @@ XDEBUG_EOF
                         echo "✅ PHP development tools installed"
                         echo "   • Composer version: $(composer --version)"
                         echo "   • Xdebug available (disabled by default for performance)"
-                        echo "   • Enable Xdebug: phpenmod xdebug && systemctl reload php8.3-fpm"
-                        echo "   • Disable Xdebug: phpdismod xdebug && systemctl reload php8.3-fpm"
+                        echo "   • Enable Xdebug: phpenmod xdebug && systemctl reload php8.4-fpm"
+                        echo "   • Disable Xdebug: phpdismod xdebug && systemctl reload php8.4-fpm"
                     else
                         echo "❌ PHP development tools installation failed"
                     fi
