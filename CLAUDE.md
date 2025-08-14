@@ -107,8 +107,8 @@ PolyServer is a foundational security-hardened Debian server setup repository de
 
 After deploying the base server, additional deployment scripts and workflows should be created for specific applications:
 
-- **React/Next.js + PM2**: Frontend application deployment
-- **PHP Backend**: PHP-FPM and backend service configuration
+- **React/Next.js + PM2**: Frontend application deployment with Node.js 22.x LTS  
+- **PHP Backend**: PHP-FPM 8.4 and backend service configuration
 - **Other Applications**: Custom application-specific configurations
 
 ## Security & Compliance Features
