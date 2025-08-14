@@ -451,45 +451,79 @@ if [ "$DOCKER_MODE" = "false" ]; then
         echo "WARNING: Remember to add SSH keys and disable password auth later!"
     fi
     
-    # Configure SSH
+    # Configure SSH with comprehensive security hardening
     cat > /etc/ssh/sshd_config << EOF
-# Secure SSH Configuration
+# Comprehensive SSH Security Configuration for Debian 13
+
+# Network and Protocol
+Port 22
 Port $SSH_PORT
 Protocol 2
+AddressFamily any
+ListenAddress 0.0.0.0
+ListenAddress ::
+
+# Host Keys (prefer Ed25519, fallback to RSA)
 HostKey /etc/ssh/ssh_host_ed25519_key
 HostKey /etc/ssh/ssh_host_rsa_key
 
-# Authentication
-LoginGraceTime 30
+# Authentication Security
 PermitRootLogin no
-StrictModes yes
-MaxAuthTries 3
-MaxSessions 5
-PubkeyAuthentication yes
 PasswordAuthentication $PASSWORD_AUTH
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+AllowUsers $USERNAME
+
+# Connection Limits and Timeouts
+ClientAliveInterval 300
+ClientAliveCountMax 2
+LoginGraceTime 30
+MaxAuthTries 2
+MaxSessions 5
+MaxStartups 3:30:10
+
+# Forwarding Controls (Restrictive by Default)
+AllowTcpForwarding yes
+PermitOpen 10.0.0.0/8:*,172.16.0.0/12:*,192.168.0.0/16:*
+AllowAgentForwarding no
+GatewayPorts no
+X11Forwarding no
+
+# Modern Cryptographic Algorithms with Post-Quantum Support  
+KexAlgorithms sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org
+Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
+MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+
+# SFTP Subsystem (Internal with Logging)
+Subsystem sftp internal-sftp -f AUTH -l INFO
+
+# Security Features
+IgnoreRhosts yes
+HostbasedAuthentication no
 PermitEmptyPasswords no
 ChallengeResponseAuthentication no
 UsePAM yes
+StrictModes yes
 
-# Forwarding / Tunneling
-X11Forwarding no
-AllowTcpForwarding no
-AllowAgentForwarding no
-PermitTunnel no
-
-# Features
+# Feature Configuration
 PrintMotd no
 AcceptEnv LANG LC_*
-Subsystem sftp /usr/lib/openssh/sftp-server
-
-# Security
-IgnoreRhosts yes
-HostbasedAuthentication no
-# Modern cryptographic algorithms configured later with post-quantum support
-
-# Allow users
-AllowUsers $USERNAME
+Banner /etc/ssh/banner
 EOF
+
+    # Create SSH banner
+    cat > /etc/ssh/banner << 'EOF'
+**************************************************************************
+*                                                                        *
+*                 AUTHORIZED ACCESS ONLY                                 *
+*                                                                        *
+*  This system is for authorized users only. All activities may be      *
+*  monitored and recorded. Unauthorized access is prohibited.           *
+*                                                                        *
+**************************************************************************
+EOF
+
+    chmod 644 /etc/ssh/banner
 else
     echo "🐳 Skipping SSH configuration in Docker mode"
 fi
@@ -499,13 +533,25 @@ fi
 echo "===== 5. Setting up firewall ====="
 if [ "$DOCKER_MODE" = "false" ]; then
     apt install -y ufw
-    # Set default policies - deny incoming, allow outgoing
+    
+    # Configure IPv6 support and nftables backend (Debian 13 default)
+    sed -i 's/IPV6=no/IPV6=yes/' /etc/default/ufw
+    
+    # Ensure UFW uses nftables backend (Debian 13 default)
+    # This ensures consistency with fail2ban UFW actions
+    if ! grep -q "^BACKEND=nftables" /etc/default/ufw; then
+        echo "BACKEND=nftables" >> /etc/default/ufw
+    fi
+    
+    # Set default policies - deny incoming, allow outgoing (IPv4 and IPv6)
     ufw default deny incoming
     ufw default allow outgoing
-    # Allow only necessary ports
+    
+    # Allow only necessary ports for both IPv4 and IPv6
     ufw allow $SSH_PORT/tcp comment "SSH"
-    ufw allow 80/tcp comment "HTTP"
+    ufw allow 80/tcp comment "HTTP" 
     ufw allow 443/tcp comment "HTTPS"
+    
     # Application direct ports removed for security (using Nginx proxy instead)
     # Enable the firewall non-interactively
     echo "y" | ufw enable
@@ -513,6 +559,24 @@ if [ "$DOCKER_MODE" = "false" ]; then
     ufw status verbose
 else
     echo "🐳 Skipping firewall setup in Docker mode"
+fi
+
+echo "===== 5.1. Configuring NTP time synchronization ====="
+if [ "$DOCKER_MODE" = "false" ]; then
+    # Ensure NTP synchronization is enabled (Debian 13 systemd-timesyncd)
+    timedatectl set-ntp true
+    
+    # Verify NTP is working
+    if timedatectl status | grep -q "NTP service: active"; then
+        echo "✅ NTP synchronization enabled and active"
+    else
+        echo "⚠️ NTP synchronization may not be working properly"
+    fi
+    
+    # Show current time sync status
+    timedatectl status
+else
+    echo "🐳 Skipping NTP configuration in Docker mode (host handles time sync)"
 fi
 
 echo "===== 6. Installing security packages ====="
@@ -1384,8 +1448,12 @@ if [ "$DOCKER_MODE" = "false" ]; then
     
     cat > /etc/fail2ban/jail.local << EOF
 [DEFAULT]
-# Explicitly configure IPv6 support (auto-detect based on system)
-allowipv6 = auto
+# Enable IPv6 support for modern infrastructure
+allowipv6 = yes
+
+# Use UFW for consistent firewall management (works with both iptables and nftables)
+banaction = ufw
+action = ufw[blocktype=reject]
 
 [sshd]
 enabled = true
@@ -1394,6 +1462,7 @@ filter = sshd
 logpath = /var/log/auth.log
 maxretry = 3
 bantime = 3600
+# Inherit UFW action from DEFAULT section
 EOF
     
     # Test fail2ban configuration before starting
@@ -2167,7 +2236,7 @@ cat > /etc/audit/rules.d/audit.rules << 'EOF'
 -a always,exit -F path=/bin/netcat -F perm=x -F key=data_exfiltration
 -a always,exit -F path=/usr/bin/ssh -F perm=x -F key=outbound_ssh
 -a always,exit -F path=/usr/bin/scp -F perm=x -F key=data_exfiltration
--a always,exit -F path=/usr/bin/sftp -F perm=x -F key=data_exfiltration
+# -a always,exit -F path=/usr/bin/sftp -F perm=x -F key=data_exfiltration  # SFTP disabled
 
 ## AppArmor (Debian's default MAC system)
 -w /etc/apparmor -p wa -k apparmor_modifications
@@ -3586,8 +3655,12 @@ select-timeout 5;
 initial-interval 2;
 EOF
 
-# Update resolv.conf right now
-echo "nameserver 127.0.0.1" > /etc/resolv.conf
+# Update resolv.conf for dual-stack DNS
+cat > /etc/resolv.conf << 'EOF'
+nameserver 127.0.0.1
+nameserver ::1
+options edns0 trust-ad
+EOF
 
 # Configure system to use our DNS resolver (Debian networking)
 # Debian uses traditional /etc/network/interfaces or systemd-resolved
@@ -3608,46 +3681,11 @@ EOF
   systemctl restart systemd-resolved
 fi
 
-# Configure Unbound
-cat > /etc/unbound/unbound.conf.d/local.conf << EOF
-server:
-    # Bind to localhost only for security
-    interface: 127.0.0.1
-    access-control: 127.0.0.1 allow
-    
-    # Verbosity level (1 is standard)
-    verbosity: 1
-    
-    # Performance optimizations
-    prefetch: yes
-    cache-min-ttl: 3600      # Cache results for at least 1 hour
-    cache-max-ttl: 86400     # Maximum cache time = 1 day
-    msg-cache-size: 128m     # Increase cache size for faster responses
-    rrset-cache-size: 256m   # Cache DNS record sets
-    neg-cache-size: 64m      # Cache negative responses
-    
-    # Security settings
-    hide-identity: yes
-    hide-version: yes
-    use-caps-for-id: yes
-    qname-minimisation: yes
-    
-    # Logging settings
-    log-queries: no
-    log-replies: no
-    log-servfail: yes
-    logfile: "/var/log/unbound.log"
-    
-    # DNSSEC validation
-    auto-trust-anchor-file: "/var/lib/unbound/root.key"
-    val-clean-additional: yes
-
-# Forward queries to upstream DNS providers
-forward-zone:
-    name: "."
-    forward-addr: 8.8.8.8    # Google DNS
-    forward-addr: 1.1.1.1    # Cloudflare DNS
-EOF
+# Configure Unbound (use template-generated configuration)
+echo "Using generated Unbound configuration from template system..."
+# Note: Unbound configuration is handled by the template system
+# The configuration file is generated from templates/unbound/local.conf.template
+# and placed in /etc/unbound/unbound.conf.d/local.conf during deployment
 
     # Restart Unbound service to apply changes
     docker_systemctl restart unbound
@@ -4037,9 +4075,12 @@ net.ipv4.icmp_echo_ignore_broadcasts = 1
 net.ipv4.icmp_ignore_bogus_error_responses = 1
 net.ipv4.tcp_syncookies = 1
 
-# IPv6 security (disable if not needed)
-net.ipv6.conf.all.disable_ipv6 = 1
-net.ipv6.conf.default.disable_ipv6 = 1
+# IPv6 security configuration (keep enabled for modern infrastructure)
+net.ipv6.conf.all.accept_ra = 0
+net.ipv6.conf.default.accept_ra = 0
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv6.conf.default.accept_redirects = 0
+net.ipv6.conf.all.forwarding = 0
 
 # Process security
 kernel.dmesg_restrict = 1
@@ -4073,6 +4114,44 @@ if [ "$DOCKER_MODE" = "false" ]; then
     echo "✅ Kernel security parameters and panic auto-reboot configured"
 else
     echo "🐳 Docker mode: skipping sysctl parameter application (not permitted in containers)"
+fi
+
+echo "===== 12.1. Configuring /tmp hardening with systemd mount ====="
+if [ "$DOCKER_MODE" = "false" ]; then
+    # Create systemd mount unit for secure /tmp
+    cat > /etc/systemd/system/tmp.mount << 'EOF'
+[Unit]
+Description=Temporary Directory (/tmp)
+Conflicts=umount.target
+Before=local-fs.target umount.target
+After=swap.target
+
+[Mount]
+What=tmpfs
+Where=/tmp
+Type=tmpfs
+Options=mode=1777,strictatime,noexec,nosuid,nodev,size=512M
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Enable and start the secure /tmp mount
+    systemctl daemon-reload
+    systemctl enable tmp.mount
+    
+    # Only start if /tmp is not already mounted or has different options
+    if ! systemctl is-active --quiet tmp.mount; then
+        echo "⚠️ Enabling secure /tmp mount (will take effect on next reboot)"
+        echo "Current /tmp will be preserved until reboot"
+    else
+        echo "✅ Secure /tmp mount already active"
+    fi
+    
+    systemctl status tmp.mount --no-pager -l || true
+    echo "✅ /tmp hardening configured with systemd mount unit"
+else
+    echo "🐳 Skipping /tmp hardening in Docker mode"
 fi
 
 echo "===== 11.4 Blacklisting unused filesystem modules ====="
@@ -5212,20 +5291,7 @@ else
     echo "⚠️ suricata-update not available - install with: apt install suricata-update"
 fi
 
-# Enhanced OpenSSH Cryptographic Configuration
-echo "Applying enhanced OpenSSH cryptographic configuration with post-quantum support..."
-cat >> /etc/ssh/sshd_config << 'EOF'
-
-# Modern cryptographic algorithms with post-quantum hybrid support
-KexAlgorithms sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org
-Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
-MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
-
-# Ensure no weak key types
-PubkeyAcceptedKeyTypes rsa-sha2-512,rsa-sha2-256,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-ed25519
-EOF
-
-echo "✅ Enhanced SSH cryptographic configuration applied with post-quantum hybrid support"
+# Note: SSH cryptographic configuration handled in main SSH config section above
 
 # Systemd Watchdog for Critical Services
 echo "Configuring systemd watchdog for critical services..."

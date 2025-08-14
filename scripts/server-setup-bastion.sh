@@ -219,7 +219,7 @@ validate_critical_configs() {
 
 USERNAME="bastion"                      # Bastion user to create
 HOSTNAME="bastion"                      # Bastion hostname  
-SSH_PORT="${SSH_PORT:-2222}"           # Custom SSH port (configurable via environment, default 2222)
+SSH_PORT="${SSH_PORT:-2222}"            # Custom SSH port (configurable via environment, default 2222)
 LOGWATCH_EMAIL="root"                   # Security notification email
 MAX_SSH_SESSIONS="5"                    # Maximum concurrent SSH sessions
 SSH_LOGIN_GRACE_TIME="30"               # SSH login grace time
@@ -554,7 +554,7 @@ PrintLastLog yes
 AcceptEnv LANG LC_*
 
 # Subsystems
-Subsystem sftp /usr/lib/openssh/sftp-server
+# Subsystem sftp /usr/lib/openssh/sftp-server  # Disabled - bastions use SSH tunneling, not file transfers
 
 # Security hardening
 IgnoreRhosts yes
@@ -626,7 +626,16 @@ fi
 echo "Configuring UFW firewall rules..."
 ufw --force reset
 
-# Set restrictive default policies
+# Configure IPv6 support and nftables backend (Debian 13 default)  
+sed -i 's/IPV6=no/IPV6=yes/' /etc/default/ufw
+
+# Ensure UFW uses nftables backend (Debian 13 default)
+# This ensures consistency with fail2ban UFW actions
+if ! grep -q "^BACKEND=nftables" /etc/default/ufw; then
+    echo "BACKEND=nftables" >> /etc/default/ufw
+fi
+
+# Set restrictive default policies (IPv4 and IPv6)
 ufw default deny incoming
 ufw default deny outgoing
 ufw default deny forward
@@ -790,6 +799,21 @@ if [ "$SSH_PORT" != "22" ]; then
 else
     echo "✅ SSH port remains 22 (no port change needed)"
 fi
+echo ""
+
+echo "===== 5.1. Configuring NTP time synchronization ====="
+# Ensure NTP synchronization is enabled (critical for bastion logging)
+timedatectl set-ntp true
+
+# Verify NTP is working
+if timedatectl status | grep -q "NTP service: active"; then
+    echo "✅ NTP synchronization enabled and active"
+else
+    echo "⚠️ NTP synchronization may not be working properly"
+fi
+
+# Show current time sync status
+timedatectl status
 echo ""
 
 echo "===== 6. Installing security packages for bastion monitoring ====="
@@ -2429,8 +2453,12 @@ protocol = tcp
 chain = INPUT
 port = 0:65535
 fail2ban_agent = Fail2Ban/%(fail2ban_version)s
-# Explicitly disable IPv6 for bastion hosts (IPv4 only)
-allowipv6 = false
+# Enable IPv6 support for modern infrastructure
+allowipv6 = yes
+
+# Use UFW for consistent firewall management (works with both iptables and nftables)
+banaction = ufw
+action = ufw[blocktype=reject]
 
 [sshd]
 enabled = true
@@ -4495,9 +4523,12 @@ net.ipv4.icmp_echo_ignore_broadcasts = 1
 net.ipv4.icmp_ignore_bogus_error_responses = 1
 net.ipv4.tcp_syncookies = 1
 
-# IPv6 security (disable if not needed)
-net.ipv6.conf.all.disable_ipv6 = 1
-net.ipv6.conf.default.disable_ipv6 = 1
+# IPv6 security configuration (keep enabled for modern infrastructure)
+net.ipv6.conf.all.accept_ra = 0
+net.ipv6.conf.default.accept_ra = 0
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv6.conf.default.accept_redirects = 0
+net.ipv6.conf.all.forwarding = 0
 
 # Process security
 kernel.dmesg_restrict = 1

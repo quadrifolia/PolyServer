@@ -76,7 +76,7 @@
 -a always,exit -F path=/bin/netcat -F perm=x -F key=data_exfiltration
 -a always,exit -F path=/usr/bin/ssh -F perm=x -F key=outbound_ssh
 -a always,exit -F path=/usr/bin/scp -F perm=x -F key=data_exfiltration
--a always,exit -F path=/usr/bin/sftp -F perm=x -F key=data_exfiltration
+# -a always,exit -F path=/usr/bin/sftp -F perm=x -F key=data_exfiltration  # SFTP disabled
 
 ## AppArmor (Debian's default MAC system)
 -w /etc/apparmor -p wa -k apparmor_modifications
