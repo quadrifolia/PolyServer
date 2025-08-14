@@ -99,7 +99,8 @@ PolyServer provides a **foundational layer** for secure Debian server deployment
 - **DNS security**: Unbound with DNSSEC validation, dual-stack support, and fallback DNS
 - **Malware protection**: ClamAV, Linux Malware Detect, and rootkit detection (RKHunter, chkrootkit)
 - **Container security**: Trivy vulnerability scanning with severity-based filtering
-- **Automated security updates**: Unattended upgrades with intelligent service restart management
+- **Automated security updates**: Unattended upgrades with intelligent service restart management (needrestart automation)
+- **Production hardening**: SSH host key generation, journald rate limiting (1000 burst), error handling with trap functions
 - **Full DSGVO/GDPR compliance toolkit** with automated breach response and forensics collection
 
 ### ⚡ **Performance Optimized**
