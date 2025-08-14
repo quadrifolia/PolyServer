@@ -1,7 +1,7 @@
 #!/bin/bash
-# server-setup-bastion.sh - Secure Debian 12 bastion host setup
+# server-setup-bastion.sh - Secure Debian 13 bastion host setup
 # Specialized hardening for bastion hosts used for secure access to internal networks
-# Run as root after fresh Debian 12 (bookworm) instance creation
+# Run as root after fresh Debian 13 (trixie) instance creation
 
 # Root privilege check
 if [[ $EUID -ne 0 ]]; then
@@ -350,7 +350,7 @@ else
 fi
 
 echo "===== BASTION HOST HARDENING SETUP ====="
-echo "This script will configure a Debian 12 server as a secure bastion host"
+echo "This script will configure a Debian 13 server as a secure bastion host"
 echo "Bastion hosts require strict security configuration and monitoring"
 echo ""
 echo "✅ Running as root (required for system configuration)"
@@ -359,6 +359,8 @@ echo ""
 
 # ========= Basic server hardening =========
 echo "===== 1. Updating system packages ====="
+# Debian 13 (Trixie) includes APT 3.0 with improved UI, Solver3 dependency resolver,
+# and enhanced cryptographic support using OpenSSL/Sequoia instead of GnuTLS/GnuPG
 # Wait for any running package management processes to complete
 wait_for_dpkg_lock() {
     local timeout=300  # 5 minutes timeout
@@ -1491,7 +1493,7 @@ if [ "$CPU_VENDOR" = "AuthenticAMD" ]; then
     if ! apt-cache search amd64-microcode | grep -q amd64-microcode; then
         echo "Adding non-free-firmware repository for AMD microcode..."
         
-        # Check if we're using the new sources.list format (Debian 12+)
+        # Check if we're using the new sources.list format (Debian 12+, still applicable in Debian 13)
         if [ -f /etc/apt/sources.list.d/debian.sources ]; then
             # Update existing debian.sources file to include non-free-firmware
             if ! grep -q "non-free-firmware" /etc/apt/sources.list.d/debian.sources; then
@@ -1547,6 +1549,7 @@ update-initramfs -u -k all
 echo "Checking for kernel updates..."
 CURRENT_KERNEL=$(uname -r)
 echo "Current kernel: $CURRENT_KERNEL"
+echo "Note: Debian 13 (Trixie) ships with Linux kernel 6.12 LTS (supported until Dec 2026)"
 
 # Check for available kernel updates
 if apt list --upgradable 2>/dev/null | grep -q linux-image; then
@@ -1565,7 +1568,7 @@ if apt-cache search linux-image | grep -q backports; then
     echo ""
     echo "💡 Backports kernel available for better hardware support:"
     apt-cache search linux-image | grep backports | head -3
-    echo "   Consider: apt install -t bookworm-backports linux-image-amd64"
+    echo "   Consider: apt install -t trixie-backports linux-image-amd64"
 fi
 
 # Show current CPU vulnerabilities status
@@ -4506,6 +4509,17 @@ kernel.yama.ptrace_scope = 1
 fs.suid_dumpable = 0
 fs.protected_hardlinks = 1
 fs.protected_symlinks = 1
+
+# Debian 13 Trixie security enhancements
+# Control Flow Integrity (CFI) hardening - available on supported hardware
+# Note: These features are automatically enabled by the kernel on supported CPUs
+# Intel CET (Control-flow Enforcement Technology) - amd64
+# ARM PAC (Pointer Authentication) and BTI (Branch Target Identification) - arm64
+# No explicit kernel parameters needed as they're enabled at compile time
+
+# Additional memory protection
+vm.mmap_rnd_bits = 32
+vm.mmap_rnd_compat_bits = 16
 EOF
 
 # Apply kernel parameters

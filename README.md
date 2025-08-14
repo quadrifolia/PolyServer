@@ -399,7 +399,7 @@ PolyServer provides flexible SSH authentication configuration:
 
 **Set up your server:**
 
-1. Provision a Debian 12 (bookworm) server from your preferred provider
+1. Provision a Debian 13 (trixie) server from your preferred provider
    - Recommended specs: 2+ vCores, 4GB+ RAM, 50GB+ SSD
    - Ensure SSH access with public key authentication
    - Record the server IP address and initial SSH port (usually 22)
@@ -459,7 +459,7 @@ A bastion host is a specialized server that:
 ### Setting Up a Bastion Host
 
 **Prerequisites:**
-- Fresh Debian 12 (bookworm) server
+- Fresh Debian 13 (trixie) server
 - SSH public key for authentication (required - no password auth allowed)
 - **Root access to the server** (or sudo privileges)
 

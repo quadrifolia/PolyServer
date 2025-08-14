@@ -1,6 +1,6 @@
 #!/bin/bash
-# server_setup.sh - Secure Debian 12 server setup for PolyServer applications
-# Run as root after fresh Debian 12 (bookworm) instance creation
+# server_setup.sh - Secure Debian 13 server setup for PolyServer applications
+# Run as root after fresh Debian 13 (trixie) instance creation
 
 # Enhanced error handling
 set -euo pipefail
@@ -567,7 +567,7 @@ if [ "$CPU_VENDOR" = "AuthenticAMD" ]; then
     if ! apt-cache search amd64-microcode | grep -q amd64-microcode; then
         echo "Adding non-free-firmware repository for AMD microcode..."
         
-        # Check if we're using the new sources.list format (Debian 12+)
+        # Check if we're using the new sources.list format (Debian 12+, still applicable in Debian 13)
         if [ -f /etc/apt/sources.list.d/debian.sources ]; then
             # Update existing debian.sources file to include non-free-firmware
             if ! grep -q "non-free-firmware" /etc/apt/sources.list.d/debian.sources; then
@@ -639,7 +639,7 @@ if apt-cache search linux-image | grep -q backports; then
     echo ""
     echo "💡 Backports kernel available for better hardware support:"
     apt-cache search linux-image | grep backports | head -3
-    echo "   Consider: apt install -t bookworm-backports linux-image-amd64"
+    echo "   Consider: apt install -t trixie-backports linux-image-amd64"
 fi
 
 # Show current CPU vulnerabilities status
