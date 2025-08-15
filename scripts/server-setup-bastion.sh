@@ -613,6 +613,7 @@ MaxStartups 3:30:10
 
 # Key-based authentication only (NO password auth on bastions)
 PubkeyAuthentication yes
+AuthenticationMethods publickey
 PasswordAuthentication no
 PermitEmptyPasswords no
 ChallengeResponseAuthentication no
@@ -621,10 +622,10 @@ UsePAM no
 AuthorizedKeysFile .ssh/authorized_keys
 
 # Forwarding and Tunneling - Essential for bastion functionality
-AllowTcpForwarding yes
+AllowTcpForwarding local
 AllowStreamLocalForwarding yes
 AllowAgentForwarding no
-PermitTunnel yes
+PermitTunnel no
 GatewayPorts no
 
 # X11 and other features - Disabled for security
@@ -811,16 +812,11 @@ if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
     echo "✅ Added UFW rule for SMTP port $SMTP_PORT"
 fi
 
-# Allow outgoing NTP for time synchronization
-ufw allow out 123/udp comment "NTP time sync"
+# NTP rule already configured above
 
 # Use connection tracking instead of broad port ranges (SECURITY FIX)
 # UFW automatically handles established connections when using stateful rules
-# Only explicitly allow necessary outbound connections
-ufw allow out 53/udp comment "DNS resolution"
-ufw allow out 53/tcp comment "DNS resolution over TCP"
-ufw allow out 80/tcp comment "HTTP for updates"
-ufw allow out 443/tcp comment "HTTPS for updates"
+# DNS and HTTP/HTTPS rules already configured above
 ufw allow out 22/tcp comment "SSH for bastion connections"
 ufw allow out $SSH_PORT/tcp comment "SSH on custom port"
 
@@ -1239,7 +1235,7 @@ if [ "$INSTALL_MALDET" = true ]; then
     cd /tmp/maldet-install
 
     echo "Downloading Linux Malware Detect..."
-    if wget -q http://www.rfxn.com/downloads/maldetect-current.tar.gz; then
+    if wget -q https://www.rfxn.com/downloads/maldetect-current.tar.gz; then
         echo "✅ Downloaded maldetect successfully"
         
         # Extract and install with error handling
@@ -1422,7 +1418,7 @@ server:
     
     # DNSSEC - disable for simplified bastion configuration
     # trust-anchor-file: "/var/lib/unbound/root.key"
-    # auto-trust-anchor-file: "/var/lib/unbound/root.key"
+    auto-trust-anchor-file: "/var/lib/unbound/root.key"
     
     # Private address handling
     private-address: 192.168.0.0/16
@@ -1445,8 +1441,8 @@ include-toplevel: "/etc/unbound/unbound.conf.d/*.conf"
 EOF
 
 # Disable unbound-resolvconf service (causes issues in bastion environment)
-systemctl disable unbound-resolvconf 2>/dev/null || true
-systemctl mask unbound-resolvconf 2>/dev/null || true
+#systemctl disable unbound-resolvconf 2>/dev/null || true
+#systemctl mask unbound-resolvconf 2>/dev/null || true
 
 # Create systemd override for Unbound to ensure IPv4-only operation
 mkdir -p /etc/systemd/system/unbound.service.d
@@ -2602,7 +2598,7 @@ bantime = 3600
 enabled = true
 filter = recidive
 logpath = /var/log/fail2ban.log
-action = iptables-multiport[name=recidive, port="all"]
+action = %(banaction)s[name=recidive, port="all"]
 bantime = 86400
 findtime = 86400
 maxretry = 5
@@ -2611,7 +2607,7 @@ maxretry = 5
 enabled = true
 filter = systemd
 logpath = /var/log/syslog
-action = iptables-multiport[name=systemd, port="all"]
+action = %(banaction)s[name=systemd, port="all"]
 bantime = 3600
 findtime = 600
 maxretry = 5

@@ -730,9 +730,10 @@ MaxSessions 5
 MaxStartups 3:30:10
 
 # Forwarding Controls (Restrictive by Default)
-AllowTcpForwarding yes
+AllowTcpForwarding local
 PermitOpen 10.0.0.0/8:*,172.16.0.0/12:*,192.168.0.0/16:*
 AllowAgentForwarding no
+PermitTunnel no
 GatewayPorts no
 X11Forwarding no
 
@@ -2151,7 +2152,7 @@ if [ "$INSTALL_MALDET" = true ]; then
     cd /tmp/maldet
 
 # Download the latest version
-wget http://www.rfxn.com/downloads/maldetect-current.tar.gz
+wget https://www.rfxn.com/downloads/maldetect-current.tar.gz
 
 # Extract and install
 tar -xzf maldetect-current.tar.gz
