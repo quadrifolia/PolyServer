@@ -354,12 +354,6 @@ wait_for_dpkg_lock() {
 
 # Enhanced package management with lock handling
 safe_apt_update() {
-    # Safe dpkg lock waiting function
-    wait_for_dpkg_lock() {
-      while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
-         || fuser /var/cache/apt/archives/lock >/dev/null 2>&1 \
-         || pgrep -x unattended-upgrade >/dev/null 2>&1; do sleep 3; done
-    }
     wait_for_dpkg_lock
     # Configure dpkg properly before update
     dpkg --configure -a
