@@ -340,32 +340,31 @@ echo "✅ Valid SSH public key provided - proceeding with secure bastion setup"
 echo ""
 while true; do
     read -r -p "Enter email address for security notifications (default: root): " EMAIL_INPUT
-        if [ -z "$EMAIL_INPUT" ]; then
-            LOGWATCH_EMAIL="root"
-            break
-        elif validate_email "$EMAIL_INPUT"; then
-            LOGWATCH_EMAIL="$EMAIL_INPUT"
-            break
-        else
-            echo "Please enter a valid email address"
-        fi
-    done
+    if [ -z "$EMAIL_INPUT" ]; then
+        LOGWATCH_EMAIL="root"
+        break
+    elif validate_email "$EMAIL_INPUT"; then
+        LOGWATCH_EMAIL="$EMAIL_INPUT"
+        break
+    else
+        echo "Please enter a valid email address"
+    fi
+done
     
-    echo ""
-    while true; do
-        read -r -p "Enter SSH port for bastion access (default: 2222): " SSH_PORT_INPUT
-        if [ -z "$SSH_PORT_INPUT" ]; then
-            SSH_PORT="2222"
-            break
-        elif [[ "$SSH_PORT_INPUT" =~ ^[0-9]+$ ]] && [ "$SSH_PORT_INPUT" -ge 1024 ] && [ "$SSH_PORT_INPUT" -le 65535 ]; then
-            SSH_PORT="$SSH_PORT_INPUT"
-            break
-        else
-            echo "Please enter a valid port number (1024-65535)"
-        fi
-    done
-    echo ""
-fi
+echo ""
+while true; do
+    read -r -p "Enter SSH port for bastion access (default: 2222): " SSH_PORT_INPUT
+    if [ -z "$SSH_PORT_INPUT" ]; then
+        SSH_PORT="2222"
+        break
+    elif [[ "$SSH_PORT_INPUT" =~ ^[0-9]+$ ]] && [ "$SSH_PORT_INPUT" -ge 1024 ] && [ "$SSH_PORT_INPUT" -le 65535 ]; then
+        SSH_PORT="$SSH_PORT_INPUT"
+        break
+    else
+        echo "Please enter a valid port number (1024-65535)"
+    fi
+done
+echo ""
 
 # SMTP Configuration for reliable email delivery
 echo "===== SMTP EMAIL CONFIGURATION ====="
@@ -406,6 +405,7 @@ if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
             break
         fi
     done
+
     read -r -p "Use TLS/STARTTLS? (y/n, default: y): " SMTP_TLS
     SMTP_TLS=${SMTP_TLS:-y}
     
@@ -586,8 +586,8 @@ create_rollback_point "pre-ssh"
 # Backup original SSH config
 cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
     
-    # Create highly secure SSH configuration for bastion host
-    cat > /etc/ssh/sshd_config << EOF
+# Create highly secure SSH configuration for bastion host
+cat > /etc/ssh/sshd_config << EOF
 # Bastion Host SSH Configuration - Maximum Security
 # This configuration prioritizes security over convenience
 
@@ -666,8 +666,8 @@ SyslogFacility AUTH
 Banner /etc/ssh/banner
 EOF
     
-    # Create SSH banner for bastion host
-    cat > /etc/ssh/banner << EOF
+# Create SSH banner for bastion host
+cat > /etc/ssh/banner << EOF
 ***************************************************************************
                           BASTION HOST ACCESS
 ***************************************************************************
@@ -946,6 +946,7 @@ apt-get install -y fail2ban unattended-upgrades apt-listchanges \
     $( [ "$INSTALL_SURICATA" = true ] && echo "suricata" )
 
 echo "✅ Bastion security package installation completed"
+
 INSTALLED_COMPONENTS=""
 [ "$INSTALL_CLAMAV" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS clamav"
 [ "$INSTALL_RKHUNTER" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS rkhunter"
@@ -954,14 +955,14 @@ echo "Installed optional components:${INSTALLED_COMPONENTS:-none}"
 
 if [ "$INSTALL_CLAMAV" = true ]; then
     echo "===== 6.0.1 Configuring ClamAV with resource optimization for bastion hosts ====="
-# Optimize ClamAV for bastion host environment with limited resources
-# This prevents ClamAV from consuming excessive CPU/memory that could impact critical services
+    # Optimize ClamAV for bastion host environment with limited resources
+    # This prevents ClamAV from consuming excessive CPU/memory that could impact critical services
 
-# Stop services during configuration
-systemctl stop clamav-daemon clamav-freshclam 2>/dev/null || true
+    # Stop services during configuration
+    systemctl stop clamav-daemon clamav-freshclam 2>/dev/null || true
 
-# Configure ClamAV daemon with resource-conscious settings
-cat > /etc/clamav/clamd.conf << EOF
+    # Configure ClamAV daemon with resource-conscious settings
+    cat > /etc/clamav/clamd.conf << EOF
 # ClamAV Daemon Configuration - Optimized for Bastion Hosts
 User clamav
 LocalSocket /run/clamav/clamd.ctl
@@ -1041,8 +1042,8 @@ ScanPartialMessages false
 OLE2BlockMacros false
 EOF
 
-# Configure freshclam with reduced frequency to prevent resource spikes
-cat > /etc/clamav/freshclam.conf << EOF
+    # Configure freshclam with reduced frequency to prevent resource spikes
+    cat > /etc/clamav/freshclam.conf << EOF
 # ClamAV Freshclam Configuration - Optimized for Bastion Hosts
 DatabaseOwner clamav
 
@@ -1075,12 +1076,12 @@ TestDatabases yes
 Bytecode true
 EOF
 
-# Create systemd resource limits for ClamAV services
-echo "Setting up systemd resource limits for ClamAV services..."
+    # Create systemd resource limits for ClamAV services
+    echo "Setting up systemd resource limits for ClamAV services..."
 
-# ClamAV daemon resource limits
-mkdir -p /etc/systemd/system/clamav-daemon.service.d
-cat > /etc/systemd/system/clamav-daemon.service.d/resource-limits.conf << EOF
+    # ClamAV daemon resource limits
+    mkdir -p /etc/systemd/system/clamav-daemon.service.d
+    cat > /etc/systemd/system/clamav-daemon.service.d/resource-limits.conf << EOF
 [Service]
 # Proper memory limits for ClamAV daemon (minimum 1GB required)
 CPUQuota=25%
@@ -1113,9 +1114,9 @@ ReadWritePaths=/var/lib/clamav /var/log/clamav /run/clamav
 TasksMax=50
 EOF
 
-# Freshclam resource limits
-mkdir -p /etc/systemd/system/clamav-freshclam.service.d
-cat > /etc/systemd/system/clamav-freshclam.service.d/resource-limits.conf << EOF
+    # Freshclam resource limits
+    mkdir -p /etc/systemd/system/clamav-freshclam.service.d
+    cat > /etc/systemd/system/clamav-freshclam.service.d/resource-limits.conf << EOF
 [Service]
 # Proper memory limits for virus definition updates (minimum 768MB required)
 CPUQuota=15%
@@ -1147,13 +1148,13 @@ ReadWritePaths=/var/lib/clamav /var/log/clamav
 TasksMax=20
 EOF
 
-# Create log directory with proper permissions
-mkdir -p /var/log/clamav
-chown clamav:clamav /var/log/clamav
-chmod 755 /var/log/clamav
+    # Create log directory with proper permissions
+    mkdir -p /var/log/clamav
+    chown clamav:clamav /var/log/clamav
+    chmod 755 /var/log/clamav
 
-# Set up logrotate for ClamAV logs
-cat > /etc/logrotate.d/clamav << EOF
+    # Set up logrotate for ClamAV logs
+    cat > /etc/logrotate.d/clamav << EOF
 /var/log/clamav/*.log {
     weekly
     rotate 12
@@ -1168,35 +1169,35 @@ cat > /etc/logrotate.d/clamav << EOF
 }
 EOF
 
-# Reload systemd and start services with new configurations
-systemctl daemon-reload
+    # Reload systemd and start services with new configurations
+    systemctl daemon-reload
 
-# Enable services but don't start immediately - let the user decide
-systemctl enable clamav-daemon clamav-freshclam
+    # Enable services but don't start immediately - let the user decide
+    systemctl enable clamav-daemon clamav-freshclam
 
-echo "✅ ClamAV configured with resource allocation for bastion environment"
-echo "   • CPU limited to 25% (daemon) / 15% (updater)"
-echo "   • Memory INCREASED to 1536MB (daemon) / 1024MB (updater)"
-echo "   • Update frequency: 2x daily (instead of 24x)"
-echo "   • Optimized scan limits and timeouts"
-echo "   • Enhanced OOM protection and process isolation"
+    echo "✅ ClamAV configured with resource allocation for bastion environment"
+    echo "   • CPU limited to 25% (daemon) / 15% (updater)"
+    echo "   • Memory INCREASED to 1536MB (daemon) / 1024MB (updater)"
+    echo "   • Update frequency: 2x daily (instead of 24x)"
+    echo "   • Optimized scan limits and timeouts"
+    echo "   • Enhanced OOM protection and process isolation"
 fi
 
 if [ "$INSTALL_CLAMAV" = true ]; then
-# Install Linux Malware Detect (maldet) for enhanced malware protection
-echo "===== 7.1 Installing Linux Malware Detect (maldet) ====="
+    # Install Linux Malware Detect (maldet) for enhanced malware protection
+    echo "===== 7.1 Installing Linux Malware Detect (maldet) ====="
 
-# Create temporary directory for installation
-mkdir -p /tmp/maldet-install
-cd /tmp/maldet-install
+    # Create temporary directory for installation
+    mkdir -p /tmp/maldet-install
+    cd /tmp/maldet-install
 
-echo "Downloading Linux Malware Detect..."
-if wget -q http://www.rfxn.com/downloads/maldetect-current.tar.gz; then
-    echo "✅ Downloaded maldetect successfully"
-    
-    # Extract and install with error handling
-    echo "Extracting maldetect archive..."
-    if tar -xzf maldetect-current.tar.gz 2>/dev/null; then
+    echo "Downloading Linux Malware Detect..."
+    if wget -q http://www.rfxn.com/downloads/maldetect-current.tar.gz; then
+        echo "✅ Downloaded maldetect successfully"
+        
+        # Extract and install with error handling
+        echo "Extracting maldetect archive..."
+        if tar -xzf maldetect-current.tar.gz 2>/dev/null; then
         echo "✅ Archive extracted successfully"
         
         # Find the extracted directory (more robust method)
@@ -1316,17 +1317,18 @@ else
     echo "   Check internet connectivity and try again later"
     cd /
     rm -rf /tmp/maldet-install
+    fi
+    echo ""
+    echo "📋 ClamAV Management Commands:"
+    echo "   • Start services: systemctl start clamav-daemon clamav-freshclam"
+    echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
+    echo "   • View logs: journalctl -u clamav-daemon -f"
+    echo "   • Manual scan: clamscan -r /path/to/scan"
+    echo ""
+    echo "⚠️  IMPORTANT: ClamAV services are enabled but not started automatically"
+    echo "   Start them manually after verifying system resources are adequate"
 fi
-echo ""
-echo "📋 ClamAV Management Commands:"
-echo "   • Start services: systemctl start clamav-daemon clamav-freshclam"
-echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
-echo "   • View logs: journalctl -u clamav-daemon -f"
-echo "   • Manual scan: clamscan -r /path/to/scan"
-echo ""
-echo "⚠️  IMPORTANT: ClamAV services are enabled but not started automatically"
-echo "   Start them manually after verifying system resources are adequate"
-fi
+
 echo ""
 echo "📋 ClamAV Resource Requirements:"
 echo "   • Memory: Minimum 512MB available RAM"
@@ -1366,9 +1368,6 @@ echo "   3. Wait for database update: journalctl -u clamav-freshclam -f"
 echo "   4. Start daemon: systemctl start clamav-daemon"
 echo "   5. Enable both services: systemctl enable clamav-freshclam clamav-daemon"
 echo "   6. Verify status: systemctl status clamav-daemon clamav-freshclam"
-else
-    echo "⏭️ ClamAV antivirus not selected - skipping configuration"
-fi
 
 echo "===== 6.0.2 Configuring Unbound DNS with IPv4-only for bastion hosts ====="
 # Configure Unbound DNS resolver with IPv4-only to prevent binding issues
@@ -2338,11 +2337,11 @@ syntax on
 EOF
     chown $USERNAME:$USERNAME /home/$USERNAME/.vimrc
 
-# Create global executable commands for bastion functions
-echo "===== 6.2.2 Creating global bastion commands ====="
+    # Create global executable commands for bastion functions
+    echo "===== 6.2.2 Creating global bastion commands ====="
 
-# Create bastionstat command
-cat > /usr/local/bin/bastionstat << EOF
+    # Create bastionstat command
+    cat > /usr/local/bin/bastionstat << EOF
 #!/bin/bash
 # Bastion Host Status Command
 # This command can be run by the bastion user without entering a password
@@ -2482,10 +2481,10 @@ fi
 systemctl is-active --quiet postfix && echo "✅ Mail system (Postfix): Active" || echo "❌ Mail system (Postfix): Inactive"
 EOF
 
-chmod +x /usr/local/bin/bastionstat
+    chmod +x /usr/local/bin/bastionstat
 
-# Create sshmon command
-cat > /usr/local/bin/sshmon << EOF
+    # Create sshmon command
+    cat > /usr/local/bin/sshmon << EOF
 #!/bin/bash
 # SSH Activity Monitor for Bastion Host
 # IMPORTANT: Run as root (sudo sshmon) for access to auth.log
@@ -2498,10 +2497,10 @@ echo ""
 sudo tail -f /var/log/auth.log | grep --line-buffered "sshd"
 EOF
 
-chmod +x /usr/local/bin/sshmon
+    chmod +x /usr/local/bin/sshmon
 
-# Create mail reading command for bastion
-cat > /usr/local/bin/bastionmail << EOF
+    # Create mail reading command for bastion
+    cat > /usr/local/bin/bastionmail << EOF
 #!/bin/bash
 # Read local mail on bastion host
 echo "=== Bastion Host Local Mail ==="
@@ -2521,12 +2520,12 @@ else
 fi
 EOF
 
-chmod +x /usr/local/bin/bastionmail
+    chmod +x /usr/local/bin/bastionmail
 
-echo "✅ Global bastion commands created:"
-echo "   • sudo bastionstat - Show bastion host status (requires root)"
-echo "   • sudo sshmon - Monitor SSH activity in real-time (requires root)"
-echo "   • bastionmail - Read local mail"
+    echo "✅ Global bastion commands created:"
+    echo "   • sudo bastionstat - Show bastion host status (requires root)"
+    echo "   • sudo sshmon - Monitor SSH activity in real-time (requires root)"
+    echo "   • bastionmail - Read local mail"
 fi
 
 # Configure automatic security updates
@@ -2559,8 +2558,9 @@ EOF
 
 echo "===== 7. Configuring fail2ban for bastion protection ====="
 create_rollback_point "pre-fail2ban"
+
 # Enhanced fail2ban configuration for bastion hosts
-    cat > /etc/fail2ban/jail.local << EOF
+cat > /etc/fail2ban/jail.local << EOF
 [DEFAULT]
 # Default ban time and find time (more aggressive for bastions)
 bantime = 3600
@@ -2619,8 +2619,8 @@ findtime = 600
 maxretry = 5
 EOF
 
-    # Create custom filter for SSH brute force detection
-    cat > /etc/fail2ban/filter.d/sshd-ddos.conf << EOF
+# Create custom filter for SSH brute force detection
+cat > /etc/fail2ban/filter.d/sshd-ddos.conf << EOF
 # Fail2Ban filter for SSH brute force attacks
 [Definition]
 failregex = sshd\[<pid>\]: Did not receive identification string from <HOST>
@@ -2630,8 +2630,8 @@ failregex = sshd\[<pid>\]: Did not receive identification string from <HOST>
 ignoreregex =
 EOF
 
-    # Create systemd filter for service monitoring
-    cat > /etc/fail2ban/filter.d/systemd.conf << EOF
+# Create systemd filter for service monitoring
+cat > /etc/fail2ban/filter.d/systemd.conf << EOF
 # Fail2ban filter for systemd service failures
 # Monitors for repeated service failures that could indicate attacks
 
@@ -3043,7 +3043,7 @@ fi
 
 # Always create fallback rules to ensure we have something
 echo "Creating minimal audit rules as safety fallback..."
-    cat > /etc/audit/rules.d/bastion-audit.rules << EOF
+cat > /etc/audit/rules.d/bastion-audit.rules << EOF
 ## Minimal Bastion Audit Rules - Fallback Configuration
 -D
 -b 8192
@@ -3124,7 +3124,7 @@ if [ -z "$BASTION_IP" ]; then
 fi
 
 if [ "$INSTALL_SURICATA" = true ]; then
-echo "Configuring Suricata for interface: $INTERFACE, IP: $BASTION_IP"
+    echo "Configuring Suricata for interface: $INTERFACE, IP: $BASTION_IP"
     
     # Configure Suricata for bastion host monitoring with HOME_NET
     cat > /etc/suricata/suricata.yaml << EOF
@@ -3298,10 +3298,10 @@ EOF
 }
 EOF
 
-# Configure Suricata systemd resource limits for bastion host
-echo "===== 9.4.1 Configuring Suricata Resource Management ====="
-mkdir -p /etc/systemd/system/suricata.service.d
-cat > /etc/systemd/system/suricata.service.d/resource-limits.conf << EOF
+    # Configure Suricata systemd resource limits for bastion host
+    echo "===== 9.4.1 Configuring Suricata Resource Management ====="
+    mkdir -p /etc/systemd/system/suricata.service.d
+    cat > /etc/systemd/system/suricata.service.d/resource-limits.conf << EOF
 [Service]
 # Resource limits for bastion host (more conservative than production)
 CPUQuota=30%
@@ -3326,127 +3326,128 @@ TimeoutStartSec=120
 TimeoutStopSec=30
 EOF
 
-systemctl daemon-reload
+    systemctl daemon-reload
 
-# Ensure required directories and files exist before testing
-echo "Preparing Suricata configuration..."
-mkdir -p /etc/suricata/rules /var/log/suricata /var/lib/suricata/rules
+    # Ensure required directories and files exist before testing
+    echo "Preparing Suricata configuration..."
+    mkdir -p /etc/suricata/rules /var/log/suricata /var/lib/suricata/rules
 
-# Create minimal default rules file if it doesn't exist
-if [ ! -f /etc/suricata/rules/suricata.rules ]; then
-    echo "Creating initial Suricata rules file..."
-    cat > /etc/suricata/rules/suricata.rules << EOF
+    # Create minimal default rules file if it doesn't exist
+    if [ ! -f /etc/suricata/rules/suricata.rules ]; then
+        echo "Creating initial Suricata rules file..."
+        cat > /etc/suricata/rules/suricata.rules << EOF
 # Default Suricata rules for bastion host
 # This file is required by Suricata configuration
 EOF
-fi
+    fi
 
-# Test Suricata configuration
-echo "Testing Suricata configuration..."
-if suricata -T -c /etc/suricata/suricata.yaml >/tmp/suricata-test.log 2>&1; then
-    echo "✅ Suricata configuration is valid"
-    
-    # Create log directory with proper permissions
-    mkdir -p /var/log/suricata /var/lib/suricata
-    
-    # Ensure suricata user exists
-    if ! id suricata >/dev/null 2>&1; then
-        echo "Creating suricata user..."
-        useradd --system --home-dir /var/lib/suricata --shell /bin/false suricata
-    fi
-    
-    # Set proper ownership and permissions
-    chown -R suricata:suricata /var/log/suricata /var/lib/suricata 2>/dev/null || chown -R root:root /var/log/suricata /var/lib/suricata
-    chmod 755 /var/log/suricata /var/lib/suricata
-    
-    # Reload systemd configuration
-    systemctl daemon-reload
-    
-    # Enable Suricata for automatic startup
-    systemctl enable suricata
-    
-    # Start Suricata with error handling
-    echo "Starting Suricata IDS service..."
-    if start_service_with_retry suricata; then
-        echo "✅ Suricata IDS started successfully"
-        
-        # Wait for service to initialize
-        sleep 5
-        
-        # Verify Suricata is running
-        if systemctl is-active --quiet suricata; then
-            echo "✅ Suricata IDS is running and monitoring network traffic"
-            
-            # Show Suricata status
-            systemctl --no-pager status suricata | head -10
-        else
-            echo "⚠️ Suricata started but may not be fully operational"
-            echo "Checking Suricata logs:"
-            journalctl -u suricata --no-pager -l --since="2 minutes ago" | tail -10
+    # Test Suricata configuration
+    echo "Testing Suricata configuration..."
+    if suricata -T -c /etc/suricata/suricata.yaml >/tmp/suricata-test.log 2>&1; then
+        echo "✅ Suricata configuration is valid"
+
+        # Create log directory with proper permissions
+        mkdir -p /var/log/suricata /var/lib/suricata
+
+        # Ensure suricata user exists
+        if ! id suricata >/dev/null 2>&1; then
+            echo "Creating suricata user..."
+            useradd --system --home-dir /var/lib/suricata --shell /bin/false suricata
         fi
-    else
-        echo "❌ Failed to start Suricata IDS"
-        echo "Checking systemctl status:"
-        systemctl --no-pager status suricata
-        echo ""
-        echo "Recent logs:"
-        journalctl -u suricata --no-pager -l --since="2 minutes ago"
-        echo ""
-        echo "⚠️ Suricata IDS disabled due to startup failure"
-        systemctl disable suricata 2>/dev/null || true
-        echo "   Network monitoring will be limited to other security tools"
-    fi
-else
-    echo "❌ Suricata configuration test failed"
-    echo "Configuration errors:"
-    cat /tmp/suricata-test.log
-    
-    echo "Attempting to fix common Suricata issues..."
-    
-    # Directories and rules file already created above
-    echo "Suricata directories and basic rules file already exist"
-    
-    # Check interface exists
-    if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
-        echo "⚠️ Network interface $INTERFACE not found, using fallback configuration"
-        # Get first available interface
-        FALLBACK_INTERFACE=$(ip -o link show | grep -v lo | head -1 | awk -F': ' '{print $2}')
-        echo "Using fallback interface: $FALLBACK_INTERFACE"
-        
-        # Update Suricata config with fallback interface
-        sed -i "s/interface: $INTERFACE/interface: $FALLBACK_INTERFACE/" /etc/suricata/suricata.yaml
-    fi
-    
-    # Retry configuration test
-    echo "Retesting Suricata configuration with fixes..."
-    if suricata -T -c /etc/suricata/suricata.yaml >/tmp/suricata-retest.log 2>&1; then
-        echo "✅ Suricata configuration"
-        
+
+        # Set proper ownership and permissions
+        chown -R suricata:suricata /var/log/suricata /var/lib/suricata 2>/dev/null || chown -R root:root /var/log/suricata /var/lib/suricata
+        chmod 755 /var/log/suricata /var/lib/suricata
+
+        # Reload systemd configuration
         systemctl daemon-reload
+
+        # Enable Suricata for automatic startup
         systemctl enable suricata
-        
+
+        # Start Suricata with error handling
+        echo "Starting Suricata IDS service..."
         if start_service_with_retry suricata; then
-            echo "✅ Suricata IDS started successfully after fixes"
+            echo "✅ Suricata IDS started successfully"
+
+            # Wait for service to initialize
+            sleep 5
+
+            # Verify Suricata is running
+            if systemctl is-active --quiet suricata; then
+                echo "✅ Suricata IDS is running and monitoring network traffic"
+
+                # Show Suricata status
+                systemctl --no-pager status suricata | head -10
+            else
+                echo "⚠️ Suricata started but may not be fully operational"
+                echo "Checking Suricata logs:"
+                journalctl -u suricata --no-pager -l --since="2 minutes ago" | tail -10
+            fi
         else
-            echo "❌ Suricata still fails to start - disabling"
+            echo "❌ Failed to start Suricata IDS"
+            echo "Checking systemctl status:"
+            systemctl --no-pager status suricata
+            echo ""
+            echo "Recent logs:"
+            journalctl -u suricata --no-pager -l --since="2 minutes ago"
+            echo ""
+            echo "⚠️ Suricata IDS disabled due to startup failure"
             systemctl disable suricata 2>/dev/null || true
-            echo "⚠️ Suricata IDS disabled - network monitoring limited"
+            echo "   Network monitoring will be limited to other security tools"
         fi
     else
-        echo "❌ Suricata configuration still invalid"
-        echo "Final error details:"
-        cat /tmp/suricata-retest.log
-        
-        # Disable Suricata if it still invalid
-        systemctl disable suricata 2>/dev/null || true
-        echo "⚠️ Suricata IDS disabled due to configuration errors"
-        echo "   Other security tools (fail2ban, auditd) will provide protection"
-        echo "   Manual Suricata configuration may be required"
-    fi
-fi
+        echo "❌ Suricata configuration test failed"
+        echo "Configuration errors:"
+        cat /tmp/suricata-test.log
 
-# Cleanup test logs
-rm -f /tmp/suricata-test.log /tmp/suricata-retest.log
+        echo "Attempting to fix common Suricata issues..."
+
+        # Directories and rules file already created above
+        echo "Suricata directories and basic rules file already exist"
+
+        # Check interface exists
+        if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
+            echo "⚠️ Network interface $INTERFACE not found, using fallback configuration"
+            # Get first available interface
+            FALLBACK_INTERFACE=$(ip -o link show | grep -v lo | head -1 | awk -F': ' '{print $2}')
+            echo "Using fallback interface: $FALLBACK_INTERFACE"
+
+            # Update Suricata config with fallback interface
+            sed -i "s/interface: $INTERFACE/interface: $FALLBACK_INTERFACE/" /etc/suricata/suricata.yaml
+        fi
+
+        # Retry configuration test
+        echo "Retesting Suricata configuration with fixes..."
+        if suricata -T -c /etc/suricata/suricata.yaml >/tmp/suricata-retest.log 2>&1; then
+            echo "✅ Suricata configuration"
+
+            systemctl daemon-reload
+            systemctl enable suricata
+
+            if start_service_with_retry suricata; then
+                echo "✅ Suricata IDS started successfully after fixes"
+            else
+                echo "❌ Suricata still fails to start - disabling"
+                systemctl disable suricata 2>/dev/null || true
+                echo "⚠️ Suricata IDS disabled - network monitoring limited"
+            fi
+        else
+            echo "❌ Suricata configuration still invalid"
+            echo "Final error details:"
+            cat /tmp/suricata-retest.log
+
+            # Disable Suricata if it still invalid
+            systemctl disable suricata 2>/dev/null || true
+            echo "⚠️ Suricata IDS disabled due to configuration errors"
+            echo "   Other security tools (fail2ban, auditd) will provide protection"
+            echo "   Manual Suricata configuration may be required"
+        fi
+    fi
+
+    # Cleanup test logs
+    rm -f /tmp/suricata-test.log /tmp/suricata-retest.log
+fi
 
 echo "===== 10. Setting up comprehensive logging and monitoring ====="
 
@@ -3498,8 +3499,9 @@ systemctl restart rsyslog
 if [ "$INSTALL_RKHUNTER" = true ]; then
     # Configure chkrootkit
     echo "===== 10.1 Configuring chkrootkit ====="
-# Create chkrootkit scan script with proper log handling
-cat > /etc/cron.daily/chkrootkit-scan << EOF
+
+    # Create chkrootkit scan script with proper log handling
+    cat > /etc/cron.daily/chkrootkit-scan << EOF
 #!/bin/bash
 # Run a daily chkrootkit scan
 
@@ -3565,23 +3567,23 @@ if grep -q "INFECTED" "\$TODAY_LOG"; then
 fi
 EOF
 
-chmod 755 /etc/cron.daily/chkrootkit-scan
+    chmod 755 /etc/cron.daily/chkrootkit-scan
 
-# Run initial chkrootkit scan to create baseline
-echo "Running initial chkrootkit scan to create baseline..."
-mkdir -p /var/log/chkrootkit
-/etc/cron.daily/chkrootkit-scan
+    # Run initial chkrootkit scan to create baseline
+    echo "Running initial chkrootkit scan to create baseline..."
+    mkdir -p /var/log/chkrootkit
+    /etc/cron.daily/chkrootkit-scan
 
-echo ""
-echo "📝 IMPORTANT: chkrootkit baseline setup"
-echo "The initial chkrootkit baseline was created, but you should update it after"
-echo "all services are running and the system is in its final state."
-echo ""
-echo "After 24-48 hours of operation, run this command to update the baseline:"
-echo "  sudo cp -a -f /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected"
-echo ""
-echo "This will eliminate false positives from legitimate security tools like Suricata."
-echo ""
+    echo ""
+    echo "📝 IMPORTANT: chkrootkit baseline setup"
+    echo "The initial chkrootkit baseline was created, but you should update it after"
+    echo "all services are running and the system is in its final state."
+    echo ""
+    echo "After 24-48 hours of operation, run this command to update the baseline:"
+    echo "  sudo cp -a -f /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected"
+    echo ""
+    echo "This will eliminate false positives from legitimate security tools like Suricata."
+    echo ""
 else
     echo "⏭️ Rootkit detection tools not selected - skipping chkrootkit configuration"
 fi
@@ -5482,8 +5484,6 @@ else
     echo "⚠️ AppArmor utilities not found - keeping basic installation"
 fi
 
-echo "✅ AppArmor retained for defense-in-depth security"
-
 # Unattended Reboot Warning System
 echo "Configuring unattended reboot warning system..."
 if [ "$EUID" -ne 0 ]; then
@@ -5534,21 +5534,21 @@ EOF
 fi
 
 if [ "$INSTALL_SURICATA" = true ]; then
-# Suricata Rules Maintenance
-echo "Setting up Suricata rules maintenance..."
-if command -v suricata-update >/dev/null 2>&1; then
-    # Configure suricata-update with timeout
-    echo "Configuring Suricata rules update (this may take a moment)..."
-    timeout 60 suricata-update update-sources || echo "⚠️ Suricata update-sources timed out"
-    timeout 30 suricata-update enable-source et/open || echo "⚠️ ET Open source enable failed"
-    timeout 30 suricata-update enable-source oisf/trafficid || echo "⚠️ OISF TrafficID source enable failed"
-    
-    # Create weekly rules update job
-    if [ "$EUID" -ne 0 ]; then
-        echo "⚠️ Not running as root - cannot create Suricata cron job"
-        echo "   Job would be created at: /etc/cron.weekly/suricata-update"
-    else
-        cat > /etc/cron.weekly/suricata-update << EOF
+    # Suricata Rules Maintenance
+    echo "Setting up Suricata rules maintenance..."
+    if command -v suricata-update >/dev/null 2>&1; then
+        # Configure suricata-update with timeout
+        echo "Configuring Suricata rules update (this may take a moment)..."
+        timeout 60 suricata-update update-sources || echo "⚠️ Suricata update-sources timed out"
+        timeout 30 suricata-update enable-source et/open || echo "⚠️ ET Open source enable failed"
+        timeout 30 suricata-update enable-source oisf/trafficid || echo "⚠️ OISF TrafficID source enable failed"
+
+        # Create weekly rules update job
+        if [ "$EUID" -ne 0 ]; then
+            echo "⚠️ Not running as root - cannot create Suricata cron job"
+            echo "   Job would be created at: /etc/cron.weekly/suricata-update"
+        else
+            cat > /etc/cron.weekly/suricata-update << EOF
 #!/bin/bash
 # Weekly Suricata rules update for bastion host
 
@@ -5570,13 +5570,13 @@ else
     logger -p daemon.error "Suricata rules update failed - configuration test error"
 fi
 EOF
-        
-        chmod +x /etc/cron.weekly/suricata-update
-        echo "✅ Suricata rules auto-update configured"
+
+            chmod +x /etc/cron.weekly/suricata-update
+            echo "✅ Suricata rules auto-update configured"
+        fi
+    else
+        echo "⚠️ suricata-update not available - install with: apt install suricata-update"
     fi
-else
-    echo "⚠️ suricata-update not available - install with: apt install suricata-update"
-fi
 fi
 
 # Smart Systemd Service Hardening for Critical Services
@@ -5635,7 +5635,6 @@ ProtectSystem=strict
 # ProtectHome=yes disabled - blocks SSH key authentication
 ReadWritePaths=/var/log /var/run /run
 EOF
-
 
     # Unbound DNS watchdog - essential for bastion name resolution
     mkdir -p /etc/systemd/system/unbound.service.d
