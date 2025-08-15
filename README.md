@@ -822,7 +822,7 @@ The PolyServer foundation provides a comprehensive set of security, performance,
 - **AppArmor**: Mandatory access control for applications
 - **Audit Framework**: Comprehensive system activity monitoring
 - **File Integrity Monitoring**: AIDE for detecting unauthorized changes
-- **Malware Protection**: ClamAV and Linux Malware Detect
+- **Optional Malware Protection**: ClamAV and Linux Malware Detect (configurable)
 
 #### Access Control
 - **SSH Hardening**: Flexible authentication (key-based or password), custom ports
@@ -868,7 +868,7 @@ The PolyServer foundation provides a comprehensive set of security, performance,
 The PolyServer foundation includes:
 1. **Hardened base system** with security-first configurations
 2. **Comprehensive monitoring** with Netdata, audit logs, and intrusion detection
-3. **Automated security updates** and malware scanning
+3. **Automated security updates** and optional malware scanning
 4. **DSGVO/GDPR compliance** tools and procedures
 5. **Template-based configuration** for easy customization
 6. **Incident response tools** for security events
@@ -1561,7 +1561,23 @@ Netdata configuration is located at `/etc/netdata/netdata.conf` and is automatic
 
 ### Malware Protection
 
-The server is configured with two complementary malware detection systems:
+The server can be configured with complementary malware detection systems (optional components):
+
+**Enable malware protection components:**
+
+```bash
+# Enable ClamAV antivirus (high resource usage)
+export INSTALL_CLAMAV=true
+
+# Enable Linux Malware Detect (medium resource usage)  
+export INSTALL_MALDET=true
+
+# Enable rootkit detection tools (low resource usage)
+export INSTALL_RKHUNTER=true
+
+# Enable Suricata network intrusion detection (medium resource usage)
+export INSTALL_SURICATA=true
+```
 
 #### ClamAV Antivirus
 
@@ -1588,7 +1604,7 @@ sudo freshclam
 maldet provides specialized protection against web-based malware common in hosting environments:
 
 - **Web-focused signatures**: Detects PHP/Perl/Python/Shell malware, backdoors, and web exploits
-- **Integration with ClamAV**: Uses both maldet and ClamAV signatures
+- **Optional ClamAV integration**: Can use both maldet and ClamAV signatures if both are enabled
 - **File quarantine**: Isolates suspicious files for review
 - **Daily scans**: Automatic scanning of critical directories
 - **Email alerts**: Detailed reports of detected threats

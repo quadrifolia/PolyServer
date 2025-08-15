@@ -63,6 +63,7 @@ DEPLOYMENT_MODE="{{DEPLOYMENT_MODE}}"     # Deployment mode (docker/standalone)
 
 # Optional Security Components (resource-conscious defaults)
 : "${INSTALL_CLAMAV:=false}"              # Install ClamAV antivirus (high resource usage)
+: "${INSTALL_MALDET:=false}"              # Install Linux Malware Detect (medium resource usage)
 : "${INSTALL_RKHUNTER:=false}"            # Install rootkit detection tools (low resource usage)  
 : "${INSTALL_SURICATA:=false}"            # Install Suricata IDS (medium resource usage)
 
@@ -926,6 +927,7 @@ fi
 echo "✅ Security package installation completed"
 INSTALLED_COMPONENTS=""
 [ "$INSTALL_CLAMAV" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS clamav"
+[ "$INSTALL_MALDET" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS maldet"
 [ "$INSTALL_RKHUNTER" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS rkhunter"
 [ "$INSTALL_SURICATA" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS suricata"
 echo "Installed optional security components:${INSTALLED_COMPONENTS:-none}"
@@ -2141,12 +2143,12 @@ else
     echo "⏭️ ClamAV antivirus not selected - skipping configuration"
 fi
 
-if [ "$INSTALL_CLAMAV" = true ]; then
-    # Install Linux Malware Detect (maldet) - complement to ClamAV
+if [ "$INSTALL_MALDET" = true ]; then
+    # Install Linux Malware Detect (maldet) - enhanced malware protection
     echo "===== 8.2 Installing Linux Malware Detect (maldet) ====="
-# Create temporary directory for installation
-mkdir -p /tmp/maldet
-cd /tmp/maldet
+    # Create temporary directory for installation
+    mkdir -p /tmp/maldet
+    cd /tmp/maldet
 
 # Download the latest version
 wget http://www.rfxn.com/downloads/maldetect-current.tar.gz
@@ -2289,9 +2291,10 @@ chmod 755 /etc/cron.daily/maldet-scan
 # Force initial maldet signature update
 /usr/local/sbin/maldet --update-sigs
 
-# Clean up
-cd /
-rm -rf /tmp/maldet
+    # Clean up
+    cd /
+    rm -rf /tmp/maldet
+fi
 
 # Create daily scan script
 cat > /etc/cron.daily/clamscan << 'EOF'

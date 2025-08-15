@@ -14,7 +14,7 @@ PolyServer implements defense-in-depth security with 25+ integrated security too
 | **Network Security** | Dual-stack firewall, intrusion detection | UFW/nftables, Suricata IDS, ModSecurity WAF |
 | **Access Control** | Restrictive sudo, MAC, SSH key-only auth | AppArmor, sudoers with Cmnd_Alias, SSH keys |
 | **DNS Security** | DNSSEC validation, secure caching | Unbound with dual-stack IPv4/IPv6 support |
-| **Malware Protection** | Multi-layer malware detection | ClamAV, Linux Malware Detect, RKHunter, chkrootkit |
+| **Malware Protection** | Optional multi-layer malware detection | ClamAV, Linux Malware Detect, RKHunter, chkrootkit (configurable) |
 | **Container Security** | Vulnerability scanning, secure runtime | Trivy scanner, Docker security optimizations |
 | **Audit & Monitoring** | Comprehensive system auditing | auditd, Netdata, file integrity monitoring |
 | **Update Management** | Automated security updates | Unattended upgrades with restart management |
