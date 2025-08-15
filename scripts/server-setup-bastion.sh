@@ -6,6 +6,11 @@
 # Enhanced error handling with trap
 set -Eeuo pipefail
 
+# Root and OS verification
+if [ "$(id -u)" -ne 0 ]; then echo "Run as root"; exit 1; fi
+. /etc/os-release
+case "$ID:$VERSION_ID" in debian:12*|debian:13*) : ;; *) echo "This script targets Debian 12/13"; exit 1;; esac
+
 # Error trap function
 error_trap() {
     local exit_code=$?
@@ -459,13 +464,15 @@ wait_for_dpkg_lock() {
     done
 }
 
+# Safe dpkg lock waiting function
+wait_for_dpkg_lock() {
+  while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+     || fuser /var/cache/apt/archives/lock >/dev/null 2>&1 \
+     || pgrep -x unattended-upgrade >/dev/null 2>&1; do sleep 3; done
+}
+
 echo "Checking for running package management processes..."
 wait_for_dpkg_lock
-
-# Kill any running apt/dpkg processes
-pkill -f apt-get 2>/dev/null || true
-pkill -f dpkg 2>/dev/null || true
-sleep 2
 
 # Configure dpkg properly before update
 dpkg --configure -a
@@ -593,7 +600,6 @@ cat > /etc/ssh/sshd_config << EOF
 # This configuration prioritizes security over convenience
 
 # Network Configuration
-Port 22
 Port $SSH_PORT
 Protocol 2
 AddressFamily inet
@@ -906,7 +912,7 @@ echo "postfix postfix/main_mailer_type string 'Local only'" | debconf-set-select
 echo "postfix postfix/mailname string $(hostname -f)" | debconf-set-selections
 
 # Update package lists before installing
-apt-get update
+wait_for_dpkg_lock; apt-get update
 
 echo "===== 5. Optional Security Components for Bastion ====="
 echo "Choose security tools for this bastion host. Bastions have unique requirements:"
@@ -932,7 +938,7 @@ echo ""
 
 echo "===== 5.1 Installing core bastion packages ====="
 # Core packages (always installed for bastion functionality)
-apt-get install -y fail2ban unattended-upgrades apt-listchanges \
+wait_for_dpkg_lock; apt-get install -y fail2ban unattended-upgrades apt-listchanges \
     logwatch lm-sensors unbound apparmor apparmor-utils \
     tcpdump netcat-openbsd mailutils postfix \
     $( [ "$INSTALL_CLAMAV" = true ] && echo "clamav clamav-daemon" ) \
@@ -4643,6 +4649,8 @@ net.ipv4.conf.all.accept_source_route = 0
 net.ipv4.conf.default.accept_source_route = 0
 net.ipv4.conf.all.log_martians = 1
 net.ipv4.conf.default.log_martians = 1
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
 net.ipv4.icmp_echo_ignore_broadcasts = 1
 net.ipv4.icmp_ignore_bogus_error_responses = 1
 net.ipv4.tcp_syncookies = 1
@@ -5676,7 +5684,7 @@ HIGH_MEMORY_THRESHOLD=85
 CRITICAL_MEMORY_THRESHOLD=95
 
 # Whitelist of critical processes that should never be killed (ENHANCED FOR SAFETY)
-CRITICAL_PROCESSES="sshd|systemd|kernel|init|fail2ban|ufw|auditd|rsyslog|netdata|postfix|cron|dbus|networkd|resolved|bastion"
+CRITICAL_PROCESSES="sshd|systemd|kernel|init|fail2ban|ufw|auditd|rsyslog|postfix|cron|dbus|networkd|resolved|bastion|apt|dpkg|unattended"
 
 # Function to log with timestamp
 log_message() {
@@ -6198,6 +6206,14 @@ fi
 # Restart SSH with new configuration
 echo "===== 16. Restarting SSH service ====="
 systemctl restart sshd
+
+# Verify SSH is running only on target port and clean up port 22
+if ss -tnlp | grep -q ":$SSH_PORT.*sshd"; then
+  sed -i '/^Port 22$/d' /etc/ssh/sshd_config
+  systemctl reload ssh
+  ufw delete allow 22/tcp || true
+  echo "✅ SSH now running only on port $SSH_PORT"
+fi
 
 # Final system checks
 echo "===== 17. Final system validation ====="

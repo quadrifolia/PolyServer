@@ -5,6 +5,11 @@
 # Enhanced error handling with trap
 set -Eeuo pipefail
 
+# Root and OS verification
+if [ "$(id -u)" -ne 0 ]; then echo "Run as root"; exit 1; fi
+. /etc/os-release
+case "$ID:$VERSION_ID" in debian:12*|debian:13*) : ;; *) echo "This script targets Debian 12/13"; exit 1;; esac
+
 # Error trap function
 error_trap() {
     local exit_code=$?
@@ -349,11 +354,13 @@ wait_for_dpkg_lock() {
 
 # Enhanced package management with lock handling
 safe_apt_update() {
+    # Safe dpkg lock waiting function
+    wait_for_dpkg_lock() {
+      while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+         || fuser /var/cache/apt/archives/lock >/dev/null 2>&1 \
+         || pgrep -x unattended-upgrade >/dev/null 2>&1; do sleep 3; done
+    }
     wait_for_dpkg_lock
-    # Kill any running apt/dpkg processes
-    pkill -f apt-get 2>/dev/null || true
-    pkill -f dpkg 2>/dev/null || true
-    sleep 2
     # Configure dpkg properly before update
     dpkg --configure -a
     apt-get update
@@ -703,7 +710,6 @@ if [ "$DOCKER_MODE" = "false" ]; then
 # Comprehensive SSH Security Configuration for Debian 13
 
 # Network and Protocol
-Port 22
 Port $SSH_PORT
 Protocol 2
 AddressFamily any
@@ -918,10 +924,10 @@ fi
 
 if [ "$DOCKER_MODE" = "true" ]; then
     # Docker-compatible package list
-    apt-get install -y $CORE_PACKAGES $WEB_SERVER_PACKAGES $OPTIONAL_PACKAGES lm-sensors
+    apt-get install -y "$CORE_PACKAGES" "$WEB_SERVER_PACKAGES" "$OPTIONAL_PACKAGES" lm-sensors
 else
     # Full package list for production servers
-    apt-get install -y $CORE_PACKAGES $WEB_SERVER_PACKAGES $OPTIONAL_PACKAGES lm-sensors hddtemp unbound
+    apt-get install -y "$CORE_PACKAGES" "$WEB_SERVER_PACKAGES" "$OPTIONAL_PACKAGES" lm-sensors hddtemp unbound
 fi
 
 # Display installed optional security components
@@ -4453,6 +4459,8 @@ net.ipv4.conf.all.accept_source_route = 0
 net.ipv4.conf.default.accept_source_route = 0
 net.ipv4.conf.all.log_martians = 1
 net.ipv4.conf.default.log_martians = 1
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
 net.ipv4.icmp_echo_ignore_broadcasts = 1
 net.ipv4.icmp_ignore_bogus_error_responses = 1
 net.ipv4.tcp_syncookies = 1
@@ -4730,6 +4738,14 @@ systemctl list-timers maldet-scan.timer clamscan.timer rkhunter-scan.timer --no-
 # ========= Now restart SSH with new configuration =========
 echo "===== 12. Restarting SSH to apply security settings ====="
 docker_systemctl restart sshd
+
+# Verify SSH is running only on target port and clean up port 22
+if ss -tnlp | grep -q ":$SSH_PORT.*sshd"; then
+  sed -i '/^Port 22$/d' /etc/ssh/sshd_config
+  docker_systemctl reload ssh
+  ufw delete allow 22/tcp || true
+  echo "✅ SSH now running only on port $SSH_PORT"
+fi
 
 echo "===== 13. Optional DSGVO/GDPR Compliance Setup ====="
 echo "Setting up DSGVO/GDPR compliance framework..."
@@ -6486,7 +6502,7 @@ MARIADB_EOF
                     apt-get install -y redis-server
                     
                     # Configure Redis for security
-                    sed -i 's/^# requirepass foobared/requirepass {{REDIS_PASSWORD:-$(openssl rand -base64 32)}}/' /etc/redis/redis.conf
+                    sed -i "s/^# requirepass foobared/requirepass {{REDIS_PASSWORD:-\$(openssl rand -base64 32)}}/" /etc/redis/redis.conf
                     sed -i 's/^bind 127.0.0.1 ::1/bind 127.0.0.1/' /etc/redis/redis.conf
                     sed -i 's/^# maxmemory <bytes>/maxmemory 256mb/' /etc/redis/redis.conf
                     sed -i 's/^# maxmemory-policy noeviction/maxmemory-policy allkeys-lru/' /etc/redis/redis.conf
