@@ -290,6 +290,7 @@ SSH_CLIENT_ALIVE_COUNT_MAX="2"          # Max keep alive attempts
 
 # Optional Security Components (defaults to false for resource-conscious bastions)
 : "${INSTALL_CLAMAV:=false}"            # Install ClamAV antivirus (high resource usage)
+: "${INSTALL_MALDET:=false}"            # Install Linux Malware Detect (medium resource usage)
 : "${INSTALL_RKHUNTER:=false}"          # Install rootkit detection tools (low resource usage)
 : "${INSTALL_SURICATA:=false}"          # Install Suricata IDS (medium resource usage)
 
@@ -915,9 +916,6 @@ echo "===== 5. Optional Security Components for Bastion ====="
 echo "Choose security tools for this bastion host. Bastions have unique requirements:"
 echo ""
 
-# Optional security components configuration
-SECURITY_COMPONENTS=""
-
 # ClamAV Antivirus
 # Security components are now configured via environment variables
 echo "===== 5.0 Security Components Configuration ====="
@@ -931,8 +929,8 @@ if [ "$INSTALL_CLAMAV" = true ]; then
     fi
 fi
 
+echo "• INSTALL_MALDET=$INSTALL_MALDET (Malware detection - MEDIUM resource usage)"
 echo "• INSTALL_RKHUNTER=$INSTALL_RKHUNTER (Rootkit detection - LOW resource usage)"
-
 echo "• INSTALL_SURICATA=$INSTALL_SURICATA (Network IDS - MEDIUM resource usage)"
 echo ""
 
@@ -949,6 +947,7 @@ echo "✅ Bastion security package installation completed"
 
 INSTALLED_COMPONENTS=""
 [ "$INSTALL_CLAMAV" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS clamav"
+[ "$INSTALL_MALDET" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS maldet"
 [ "$INSTALL_RKHUNTER" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS rkhunter"
 [ "$INSTALL_SURICATA" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS suricata"
 echo "Installed optional components:${INSTALLED_COMPONENTS:-none}"
@@ -1181,9 +1180,57 @@ EOF
     echo "   • Update frequency: 2x daily (instead of 24x)"
     echo "   • Optimized scan limits and timeouts"
     echo "   • Enhanced OOM protection and process isolation"
+    echo ""
+    echo "📋 ClamAV Management Commands:"
+    echo "   • Start services: systemctl start clamav-daemon clamav-freshclam"
+    echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
+    echo "   • View logs: journalctl -u clamav-daemon -f"
+    echo "   • Manual scan: clamscan -r /path/to/scan"
+    echo ""
+    echo "⚠️  IMPORTANT: ClamAV services are enabled but not started automatically"
+    echo "   Start them manually after verifying system resources are adequate"
+    echo ""
+    echo "📋 ClamAV Resource Requirements:"
+    echo "   • Memory: Minimum 512MB available RAM"
+    echo "   • CPU: Will use up to 25% CPU during scans"
+    echo "   • Disk: ~200MB for virus definitions"
+    echo "   • Network: Periodic updates (2x daily)"
+    echo ""
+    echo "🚀 ClamAV Startup Commands:"
+    echo "   • Check system resources: free -h && nproc"
+    echo "   • Start freshclam updater: systemctl start clamav-freshclam"
+    echo "   • Wait for initial database: journalctl -u clamav-freshclam -f"
+    echo "   • Start daemon: systemctl start clamav-daemon"
+    echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
+    echo "   • Manual scan: clamscan -r /home /tmp"
+    echo ""
+    echo "⚡ Resource Monitoring:"
+    echo "   • CPU usage: htop (ClamAV limited to 25%)"
+    echo "   • Memory usage: free -h (daemon uses ~400MB)"
+    echo "   • Service status: systemctl status clamav-*"
+    echo ""
+    echo "🔧 ClamAV Management:"
+    echo "   • Update definitions: systemctl restart clamav-freshclam"
+    echo "   • View logs: journalctl -u clamav-daemon -f"
+    echo "   • Stop services: systemctl stop clamav-daemon clamav-freshclam"
+    echo "   • Disable if needed: systemctl disable clamav-daemon clamav-freshclam"
+    echo ""
+    echo "🔄 Enable ClamAV to Start Automatically After Reboot:"
+    echo "   • Start services now: systemctl start clamav-freshclam clamav-daemon"
+    echo "   • Enable auto-start: systemctl enable clamav-freshclam clamav-daemon"
+    echo "   • Verify enabled: systemctl is-enabled clamav-daemon clamav-freshclam"
+    echo "   • Check after reboot: systemctl status clamav-daemon clamav-freshclam"
+    echo ""
+    echo "💡 Recommended Startup Sequence:"
+    echo "   1. Check system resources: free -h"
+    echo "   2. Start freshclam first: systemctl start clamav-freshclam"
+    echo "   3. Wait for database update: journalctl -u clamav-freshclam -f"
+    echo "   4. Start daemon: systemctl start clamav-daemon"
+    echo "   5. Enable both services: systemctl enable clamav-freshclam clamav-daemon"
+    echo "   6. Verify status: systemctl status clamav-daemon clamav-freshclam"
 fi
 
-if [ "$INSTALL_CLAMAV" = true ]; then
+if [ "$INSTALL_MALDET" = true ]; then
     # Install Linux Malware Detect (maldet) for enhanced malware protection
     echo "===== 7.1 Installing Linux Malware Detect (maldet) ====="
 
@@ -1198,50 +1245,50 @@ if [ "$INSTALL_CLAMAV" = true ]; then
         # Extract and install with error handling
         echo "Extracting maldetect archive..."
         if tar -xzf maldetect-current.tar.gz 2>/dev/null; then
-        echo "✅ Archive extracted successfully"
-        
-        # Find the extracted directory (more robust method)
-        MALDET_DIR=$(find . -maxdepth 1 -type d -name "maldetect-*" | head -1 2>/dev/null)
-        if [ -z "$MALDET_DIR" ]; then
-            # Fallback: use tar output to get directory name
-            MALDET_DIR=$(tar -tzf maldetect-current.tar.gz 2>/dev/null | head -1 | cut -f1 -d"/")
-        fi
-        
-        if [ -n "$MALDET_DIR" ] && [ -d "$MALDET_DIR" ]; then
-            echo "✅ Found maldet directory: $MALDET_DIR"
-            cd "$MALDET_DIR"
+            echo "✅ Archive extracted successfully"
+
+            # Find the extracted directory (more robust method)
+            MALDET_DIR=$(find . -maxdepth 1 -type d -name "maldetect-*" | head -1 2>/dev/null)
+            if [ -z "$MALDET_DIR" ]; then
+                # Fallback: use tar output to get directory name
+                MALDET_DIR=$(tar -tzf maldetect-current.tar.gz 2>/dev/null | head -1 | cut -f1 -d"/")
+            fi
+
+            if [ -n "$MALDET_DIR" ] && [ -d "$MALDET_DIR" ]; then
+                echo "✅ Found maldet directory: $MALDET_DIR"
+                cd "$MALDET_DIR"
+            else
+                echo "❌ Could not find maldet installation directory"
+                cd /
+                rm -rf /tmp/maldet-install
+                echo "⚠️ Maldet installation failed - continuing without maldet"
+                return 0  # Don't exit the entire script, just return from this section
+            fi
         else
-            echo "❌ Could not find maldet installation directory"
+            echo "❌ Failed to extract maldet archive"
             cd /
             rm -rf /tmp/maldet-install
             echo "⚠️ Maldet installation failed - continuing without maldet"
             return 0  # Don't exit the entire script, just return from this section
         fi
-    else
-        echo "❌ Failed to extract maldet archive"
-        cd /
-        rm -rf /tmp/maldet-install
-        echo "⚠️ Maldet installation failed - continuing without maldet"
-        return 0  # Don't exit the entire script, just return from this section
-    fi
-    
-    echo "Installing Linux Malware Detect..."
-    if ./install.sh 2>/dev/null; then
-        echo "✅ Maldet installation completed successfully"
-    else
-        echo "❌ Maldet installation script failed"
-        cd /
-        rm -rf /tmp/maldet-install
-        echo "⚠️ Maldet installation failed - continuing without maldet"
-        return 0  # Don't exit the entire script, just return from this section
-    fi
-    
-    # Create symlink for easy access
-    ln -sf /usr/local/maldetect/maldet /usr/local/bin/maldet
-    
-    # Configure maldet with bastion-specific settings
-    echo "Configuring Linux Malware Detect for bastion environment..."
-    cat > /usr/local/maldetect/conf.maldet << 'EOF'
+
+        echo "Installing Linux Malware Detect..."
+        if ./install.sh 2>/dev/null; then
+            echo "✅ Maldet installation completed successfully"
+        else
+            echo "❌ Maldet installation script failed"
+            cd /
+            rm -rf /tmp/maldet-install
+            echo "⚠️ Maldet installation failed - continuing without maldet"
+            return 0  # Don't exit the entire script, just return from this section
+        fi
+
+        # Create symlink for easy access
+        ln -sf /usr/local/maldetect/maldet /usr/local/bin/maldet
+
+        # Configure maldet with bastion-specific settings
+        echo "Configuring Linux Malware Detect for bastion environment..."
+        cat > /usr/local/maldetect/conf.maldet << 'EOF'
 # Linux Malware Detect - Bastion Host Configuration
 email_alert="1"
 email_addr="root@localhost"
@@ -1274,17 +1321,17 @@ autoclean_days="30"
 clamdscan_threads="2"
 clamdscan_timeout="300"
 EOF
-    
-    # Set up daily scanning via cron
-    echo "Setting up daily malware scanning..."
-    cat > /etc/cron.d/maldet << 'EOF'
+
+        # Set up daily scanning via cron
+        echo "Setting up daily malware scanning..."
+        cat > /etc/cron.d/maldet << 'EOF'
 # Linux Malware Detect - Daily scan for bastion host
 # Run at 3:00 AM daily to scan critical directories
 0 3 * * * root /usr/local/maldetect/maldet -a /home,/etc,/usr/local,/opt 2>&1 | logger -t maldet
 EOF
-    
-    # Create logrotate configuration
-    cat > /etc/logrotate.d/maldet << 'EOF'
+
+        # Create logrotate configuration
+        cat > /etc/logrotate.d/maldet << 'EOF'
 /usr/local/maldetect/logs/* {
     weekly
     rotate 8
@@ -1295,79 +1342,30 @@ EOF
     create 644 root root
 }
 EOF
-    
-    # Update maldet signatures
-    echo "Updating malware signatures..."
-    /usr/local/maldetect/maldet --update-ver
-    /usr/local/maldetect/maldet --update
-    
-    echo "✅ Linux Malware Detect configured for bastion environment"
-    echo "   • Daily scans of critical directories (home, etc, usr/local, opt)"
-    echo "   • Email alerts enabled for detected threats"
-    echo "   • Integration with ClamAV for enhanced detection"
-    echo "   • Automatic quarantine of detected malware"
-    echo "   • Optimized resource usage for bastion hosts"
-    
-    # Cleanup installation files
-    cd /
-    rm -rf /tmp/maldet-install
-    
-else
-    echo "❌ Failed to download Linux Malware Detect"
-    echo "   Check internet connectivity and try again later"
-    cd /
-    rm -rf /tmp/maldet-install
-    fi
-    echo ""
-    echo "📋 ClamAV Management Commands:"
-    echo "   • Start services: systemctl start clamav-daemon clamav-freshclam"
-    echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
-    echo "   • View logs: journalctl -u clamav-daemon -f"
-    echo "   • Manual scan: clamscan -r /path/to/scan"
-    echo ""
-    echo "⚠️  IMPORTANT: ClamAV services are enabled but not started automatically"
-    echo "   Start them manually after verifying system resources are adequate"
-fi
 
-echo ""
-echo "📋 ClamAV Resource Requirements:"
-echo "   • Memory: Minimum 512MB available RAM"
-echo "   • CPU: Will use up to 25% CPU during scans"
-echo "   • Disk: ~200MB for virus definitions"
-echo "   • Network: Periodic updates (2x daily)"
-echo ""
-echo "🚀 ClamAV Startup Commands:"
-echo "   • Check system resources: free -h && nproc"
-echo "   • Start freshclam updater: systemctl start clamav-freshclam"
-echo "   • Wait for initial database: journalctl -u clamav-freshclam -f"
-echo "   • Start daemon: systemctl start clamav-daemon"
-echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
-echo "   • Manual scan: clamscan -r /home /tmp"
-echo ""
-echo "⚡ Resource Monitoring:"
-echo "   • CPU usage: htop (ClamAV limited to 25%)"
-echo "   • Memory usage: free -h (daemon uses ~400MB)"
-echo "   • Service status: systemctl status clamav-*"
-echo ""
-echo "🔧 ClamAV Management:"
-echo "   • Update definitions: systemctl restart clamav-freshclam"
-echo "   • View logs: journalctl -u clamav-daemon -f"
-echo "   • Stop services: systemctl stop clamav-daemon clamav-freshclam"
-echo "   • Disable if needed: systemctl disable clamav-daemon clamav-freshclam"
-echo ""
-echo "🔄 Enable ClamAV to Start Automatically After Reboot:"
-echo "   • Start services now: systemctl start clamav-freshclam clamav-daemon"
-echo "   • Enable auto-start: systemctl enable clamav-freshclam clamav-daemon"
-echo "   • Verify enabled: systemctl is-enabled clamav-daemon clamav-freshclam"
-echo "   • Check after reboot: systemctl status clamav-daemon clamav-freshclam"
-echo ""
-echo "💡 Recommended Startup Sequence:"
-echo "   1. Check system resources: free -h"
-echo "   2. Start freshclam first: systemctl start clamav-freshclam"
-echo "   3. Wait for database update: journalctl -u clamav-freshclam -f"
-echo "   4. Start daemon: systemctl start clamav-daemon"
-echo "   5. Enable both services: systemctl enable clamav-freshclam clamav-daemon"
-echo "   6. Verify status: systemctl status clamav-daemon clamav-freshclam"
+        # Update maldet signatures
+        echo "Updating malware signatures..."
+        /usr/local/maldetect/maldet --update-ver
+        /usr/local/maldetect/maldet --update
+
+        echo "✅ Linux Malware Detect configured for bastion environment"
+        echo "   • Daily scans of critical directories (home, etc, usr/local, opt)"
+        echo "   • Email alerts enabled for detected threats"
+        echo "   • Integration with ClamAV for enhanced detection"
+        echo "   • Automatic quarantine of detected malware"
+        echo "   • Optimized resource usage for bastion hosts"
+
+        # Cleanup installation files
+        cd /
+        rm -rf /tmp/maldet-install
+
+    else
+        echo "❌ Failed to download Linux Malware Detect"
+        echo "   Check internet connectivity and try again later"
+        cd /
+        rm -rf /tmp/maldet-install
+    fi
+fi
 
 echo "===== 6.0.2 Configuring Unbound DNS with IPv4-only for bastion hosts ====="
 # Configure Unbound DNS resolver with IPv4-only to prevent binding issues
