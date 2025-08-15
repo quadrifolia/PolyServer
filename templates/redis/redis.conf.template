@@ -1,0 +1,180 @@
+# Redis Configuration for PolyServer
+# Performance-optimized and security-hardened
+
+####################
+# Network and Security
+####################
+
+# Bind to localhost only for security
+bind 127.0.0.1 ::1
+port 6379
+timeout 0
+tcp-keepalive 300
+
+# Security settings
+protected-mode yes
+# requirepass {{REDIS_PASSWORD}}  # Uncomment and set a strong password
+
+####################
+# Memory Management
+####################
+
+# Maximum memory usage
+maxmemory {{REDIS_MAX_MEMORY}}mb
+
+# Memory policy when max memory is reached
+maxmemory-policy allkeys-lru
+
+# Sample size for LRU algorithm
+maxmemory-samples 5
+
+####################
+# Persistence Settings
+####################
+
+# RDB snapshots
+{{#REDIS_RDB_ENABLED}}
+save 900 1
+save 300 10
+save 60 10000
+stop-writes-on-bgsave-error yes
+rdbcompression yes
+rdbchecksum yes
+dbfilename dump.rdb
+dir /var/lib/redis
+{{/REDIS_RDB_ENABLED}}
+
+# AOF (Append Only File) persistence
+{{#REDIS_AOF_ENABLED}}
+appendonly yes
+appendfilename "appendonly.aof"
+appendfsync everysec
+no-appendfsync-on-rewrite no
+auto-aof-rewrite-percentage 100
+auto-aof-rewrite-min-size 64mb
+aof-load-truncated yes
+{{/REDIS_AOF_ENABLED}}
+
+####################
+# Logging
+####################
+
+# Log level
+loglevel notice
+
+# Log file
+logfile /var/log/redis/redis-server.log
+
+# System logger
+syslog-enabled yes
+syslog-ident redis
+
+####################
+# Performance Settings
+####################
+
+# Database count
+databases 16
+
+# Hash table optimization
+hash-max-ziplist-entries 512
+hash-max-ziplist-value 64
+
+# List optimization
+list-max-ziplist-size -2
+list-compress-depth 0
+
+# Set optimization
+set-max-intset-entries 512
+
+# Sorted set optimization
+zset-max-ziplist-entries 128
+zset-max-ziplist-value 64
+
+# HyperLogLog optimization
+hll-sparse-max-bytes 3000
+
+# Stream optimization
+stream-node-max-bytes 4096
+stream-node-max-entries 100
+
+####################
+# Client Management
+####################
+
+# Maximum number of clients
+maxclients {{REDIS_MAX_CLIENTS}}
+
+# Client output buffer limits
+client-output-buffer-limit normal 0 0 0
+client-output-buffer-limit replica 256mb 64mb 60
+client-output-buffer-limit pubsub 32mb 8mb 60
+
+####################
+# Advanced Configuration
+####################
+
+# TCP listen backlog
+tcp-backlog 511
+
+# Close connection after client idle time
+timeout 300
+
+# Enable/disable TCP keepalive
+tcp-keepalive 300
+
+# Disable dangerous commands for security
+# rename-command FLUSHDB ""
+# rename-command FLUSHALL ""
+# rename-command EVAL ""
+# rename-command DEBUG ""
+# rename-command SHUTDOWN SHUTDOWN_{{REDIS_SHUTDOWN_SECRET}}
+
+####################
+# Slow Log
+####################
+
+{{#REDIS_SLOW_LOG_ENABLED}}
+# Slow log settings
+slowlog-log-slower-than {{REDIS_SLOW_LOG_TIME}}
+slowlog-max-len {{REDIS_SLOW_LOG_MAX_LEN}}
+{{/REDIS_SLOW_LOG_ENABLED}}
+
+####################
+# Latency Monitor
+####################
+
+{{#REDIS_LATENCY_MONITOR_ENABLED}}
+# Latency monitoring
+latency-monitor-threshold {{REDIS_LATENCY_THRESHOLD}}
+{{/REDIS_LATENCY_MONITOR_ENABLED}}
+
+####################
+# Advanced Memory Settings
+####################
+
+# Memory usage optimization
+activerehashing yes
+rdbcompression yes
+rdbchecksum yes
+
+# Memory defragmentation (Redis 4.0+)
+{{#REDIS_ACTIVE_DEFRAG_ENABLED}}
+activedefrag yes
+active-defrag-ignore-bytes 100mb
+active-defrag-threshold-lower 10
+active-defrag-threshold-upper 100
+active-defrag-cycle-min 5
+active-defrag-cycle-max 75
+{{/REDIS_ACTIVE_DEFRAG_ENABLED}}
+
+####################
+# Cluster Settings (if clustering is enabled)
+####################
+
+{{#REDIS_CLUSTER_ENABLED}}
+cluster-enabled yes
+cluster-config-file nodes-6379.conf
+cluster-node-timeout 15000
+cluster-require-full-coverage yes
+{{/REDIS_CLUSTER_ENABLED}}

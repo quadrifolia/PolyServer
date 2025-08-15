@@ -1,18 +1,25 @@
 server:
-    # Bind to localhost only for security
+    # Bind to localhost (dual-stack IPv4/IPv6)
     interface: 127.0.0.1
+    interface: ::1
     access-control: 127.0.0.1 allow
+    access-control: ::1 allow
+    
+    # IPv6 support 
+    do-ip6: yes
+    prefer-ip6: no
     
     # Verbosity level (0-5, 0 means only errors)
-    verbosity: ${UNBOUND_VERBOSITY:-1}
+    verbosity: {{UNBOUND_VERBOSITY}}
     
     # Performance optimizations
     prefetch: yes
-    cache-min-ttl: ${UNBOUND_CACHE_MIN_TTL:-3600}     # Cache results for at least 1 hour
-    cache-max-ttl: ${UNBOUND_CACHE_MAX_TTL:-86400}    # Maximum cache time = 1 day
-    msg-cache-size: ${UNBOUND_MSG_CACHE_SIZE:-128m}   # Increase cache size for faster responses
-    rrset-cache-size: ${UNBOUND_RRSET_CACHE_SIZE:-256m} # Cache DNS record sets
-    neg-cache-size: ${UNBOUND_NEG_CACHE_SIZE:-64m}    # Cache negative responses
+    prefetch-key: yes
+    cache-min-ttl: {{UNBOUND_CACHE_MIN_TTL}}     # Cache results for at least 1 hour
+    cache-max-ttl: {{UNBOUND_CACHE_MAX_TTL}}    # Maximum cache time = 1 day
+    msg-cache-size: {{UNBOUND_MSG_CACHE_SIZE}}   # Increase cache size for faster responses
+    rrset-cache-size: {{UNBOUND_RRSET_CACHE_SIZE}} # Cache DNS record sets
+    neg-cache-size: {{UNBOUND_NEG_CACHE_SIZE}}    # Cache negative responses
     
     # Security settings
     hide-identity: yes
@@ -20,18 +27,26 @@ server:
     use-caps-for-id: yes
     qname-minimisation: yes
     
-    # Logging settings (can be disabled in production)
-    log-queries: ${UNBOUND_LOG_QUERIES:-no}
-    log-replies: ${UNBOUND_LOG_REPLIES:-no}
-    log-servfail: ${UNBOUND_LOG_SERVFAIL:-yes}
-    logfile: "${UNBOUND_LOGFILE:-/var/log/unbound.log}"
-    
-    # DNSSEC validation
+    # DNSSEC validation (CRITICAL for DNS integrity)
     auto-trust-anchor-file: "/var/lib/unbound/root.key"
     val-clean-additional: yes
+    val-permissive-mode: no
+    trust-anchor-signaling: yes
+    root-hints: "/usr/share/dns/root.hints"
+    
+    # Aggressive NSEC for better performance with DNSSEC
+    aggressive-nsec: yes
+    
+    # Logging settings (can be disabled in production)
+    log-queries: {{UNBOUND_LOG_QUERIES}}
+    log-replies: {{UNBOUND_LOG_REPLIES}}
+    log-servfail: {{UNBOUND_LOG_SERVFAIL}}
+    logfile: "{{UNBOUND_LOGFILE}}"
 
-# Forward queries to upstream DNS providers
+# Use recursive resolution with fallback forwarding for reliability
+# Fallback forwarding enabled by default for production stability
+
 forward-zone:
     name: "."
-    forward-addr: ${UNBOUND_DNS_PRIMARY:-8.8.8.8}     # Primary DNS (default: Google)
-    forward-addr: ${UNBOUND_DNS_SECONDARY:-1.1.1.1}   # Secondary DNS (default: Cloudflare)
+    forward-addr: {{UNBOUND_DNS_PRIMARY}}     # Primary DNS (default: Google)
+    forward-addr: {{UNBOUND_DNS_SECONDARY}}   # Secondary DNS (default: Cloudflare)

@@ -1,7 +1,28 @@
 #!/bin/bash
-# server-setup-bastion.sh - Secure Debian 12 bastion host setup
+# server-setup-bastion.sh - Secure Debian 13 bastion host setup
 # Specialized hardening for bastion hosts used for secure access to internal networks
-# Run as root after fresh Debian 12 (bookworm) instance creation
+# Run as root after fresh Debian 13 (trixie) instance creation
+
+# Enhanced error handling with trap
+set -Eeuo pipefail
+
+# Root and OS verification
+if [ "$(id -u)" -ne 0 ]; then echo "Run as root"; exit 1; fi
+. /etc/os-release
+case "$ID:$VERSION_ID" in debian:12*|debian:13*) : ;; *) echo "This script targets Debian 12/13"; exit 1;; esac
+
+# Error trap function
+error_trap() {
+    local exit_code=$?
+    local line_number=$1
+    echo "❌ ERROR: Bastion setup failed at line $line_number with exit code $exit_code" >&2
+    echo "❌ Command: ${BASH_COMMAND}" >&2
+    echo "Setup failed! Check logs for details." >&2
+    exit $exit_code
+}
+
+# Set trap for errors
+trap 'error_trap $LINENO' ERR
 
 # Root privilege check
 if [[ $EUID -ne 0 ]]; then
@@ -191,6 +212,19 @@ validate_critical_configs() {
         errors=$((errors + 1))
     else
         echo "✅ UFW configuration is valid"
+        # Check UFW status verbose for IPv6 and configuration details
+        ufw_status=$(ufw status verbose 2>/dev/null)
+        if echo "$ufw_status" | grep -q "IPV6: yes"; then
+            echo "✅ UFW IPv6 support enabled"
+        else
+            echo "⚠️ UFW IPv6 support disabled"
+        fi
+        if echo "$ufw_status" | grep -q "Status: active"; then
+            echo "✅ UFW firewall is active"
+        else
+            log_error "UFW firewall is inactive"
+            errors=$((errors + 1))
+        fi
     fi
     
     echo "Checking Fail2ban configuration..."
@@ -202,6 +236,39 @@ validate_critical_configs() {
         fi
     else
         echo "✅ Fail2ban configuration is valid"
+        # Check if fail2ban is using UFW backend as configured
+        if fail2ban-client status 2>/dev/null | grep -q "sshd"; then
+            echo "✅ Fail2ban SSH jail is active"
+        else
+            echo "⚠️ Fail2ban SSH jail not found"
+        fi
+    fi
+    
+    # AppArmor configuration validation
+    echo "Checking AppArmor status..."
+    if command -v aa-status >/dev/null 2>&1; then
+        if aa_status_output=$(aa-status 2>/dev/null); then
+            if echo "$aa_status_output" | grep -q "apparmor module is loaded"; then
+                echo "✅ AppArmor is enabled and loaded"
+                # Count enforce/complain profiles
+                enforce_count=$(echo "$aa_status_output" | grep -c "profiles are in enforce mode" || echo "0")
+                complain_count=$(echo "$aa_status_output" | grep -c "profiles are in complain mode" || echo "0")
+                if [ "$enforce_count" -gt 0 ] || [ "$complain_count" -gt 0 ]; then
+                    echo "✅ AppArmor profiles active (enforce: $enforce_count, complain: $complain_count)"
+                else
+                    echo "⚠️ AppArmor enabled but no active profiles found"
+                fi
+            else
+                log_error "AppArmor module not loaded"
+                errors=$((errors + 1))
+            fi
+        else
+            log_error "Failed to get AppArmor status"
+            errors=$((errors + 1))
+        fi
+    else
+        log_error "AppArmor not installed (aa-status command not found)"
+        errors=$((errors + 1))
     fi
     
     if [ $errors -eq 0 ]; then
@@ -219,12 +286,18 @@ validate_critical_configs() {
 
 USERNAME="bastion"                      # Bastion user to create
 HOSTNAME="bastion"                      # Bastion hostname  
-SSH_PORT="${SSH_PORT:-2222}"           # Custom SSH port (configurable via environment, default 2222)
+SSH_PORT="${SSH_PORT:-2222}"            # Custom SSH port (configurable via environment, default 2222)
 LOGWATCH_EMAIL="root"                   # Security notification email
 MAX_SSH_SESSIONS="5"                    # Maximum concurrent SSH sessions
 SSH_LOGIN_GRACE_TIME="30"               # SSH login grace time
 SSH_CLIENT_ALIVE_INTERVAL="300"         # Keep alive interval
 SSH_CLIENT_ALIVE_COUNT_MAX="2"          # Max keep alive attempts
+
+# Optional Security Components (defaults to false for resource-conscious bastions)
+: "${INSTALL_CLAMAV:=false}"            # Install ClamAV antivirus (high resource usage)
+: "${INSTALL_MALDET:=false}"            # Install Linux Malware Detect (medium resource usage)
+: "${INSTALL_RKHUNTER:=false}"          # Install rootkit detection tools (low resource usage)
+: "${INSTALL_SURICATA:=false}"          # Install Suricata IDS (medium resource usage)
 
 # Bastion-specific network configuration
 INTERNAL_NETWORK="10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
@@ -235,62 +308,69 @@ ALLOWED_INTERNAL_PORTS="22,80,443,3306,5432"
 # Example: SSH_PUBLIC_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG... user@domain.com"
 SSH_PUBLIC_KEY=""
 
-# Interactive configuration if key is not set
+# CRITICAL: Prevent lock-out by requiring SSH key
 if [ -z "$SSH_PUBLIC_KEY" ]; then
-    echo "===== BASTION HOST INTERACTIVE SETUP ====="
-    echo ""
-    echo "Bastion hosts require SSH key authentication for security."
-    echo "Please provide your SSH public key for the bastion user."
-    echo ""
-    echo "You can get your public key with:"
-    echo "  cat ~/.ssh/id_ed25519.pub    (for Ed25519 keys - RECOMMENDED)"
-    echo "  cat ~/.ssh/id_rsa.pub        (for RSA keys - minimum 2048 bits)"
-    echo ""
-    
-    while true; do
-        read -r -p "Enter your SSH public key: " SSH_PUBLIC_KEY
-        
-        if [ -z "$SSH_PUBLIC_KEY" ]; then
-            log_error "SSH public key is required for bastion host setup"
-            continue
-        fi
-        
-        if validate_ssh_key "$SSH_PUBLIC_KEY"; then
-            break
-        else
-            echo "Please enter a valid SSH public key (Ed25519 recommended, or RSA ≥2048 bits)"
-        fi
-    done
-    
-    echo ""
-    while true; do
-        read -r -p "Enter email address for security notifications (default: root): " EMAIL_INPUT
-        if [ -z "$EMAIL_INPUT" ]; then
-            LOGWATCH_EMAIL="root"
-            break
-        elif validate_email "$EMAIL_INPUT"; then
-            LOGWATCH_EMAIL="$EMAIL_INPUT"
-            break
-        else
-            echo "Please enter a valid email address"
-        fi
-    done
-    
-    echo ""
-    while true; do
-        read -r -p "Enter SSH port for bastion access (default: 2222): " SSH_PORT_INPUT
-        if [ -z "$SSH_PORT_INPUT" ]; then
-            SSH_PORT="2222"
-            break
-        elif [[ "$SSH_PORT_INPUT" =~ ^[0-9]+$ ]] && [ "$SSH_PORT_INPUT" -ge 1024 ] && [ "$SSH_PORT_INPUT" -le 65535 ]; then
-            SSH_PORT="$SSH_PORT_INPUT"
-            break
-        else
-            echo "Please enter a valid port number (1024-65535)"
-        fi
-    done
-    echo ""
+    echo "❌ ERROR: No SSH_PUBLIC_KEY configured" >&2
+    echo "" >&2
+    echo "SECURITY LOCKOUT PREVENTION:" >&2
+    echo "Bastion hosts disable password authentication completely." >&2
+    echo "Without an SSH key, you would be permanently locked out." >&2
+    echo "" >&2
+    echo "Please set SSH_PUBLIC_KEY in the script or provide it via environment variable." >&2
+    echo "" >&2
+    echo "To get your public key, run one of these commands on your local machine:" >&2
+    echo "  cat ~/.ssh/id_ed25519.pub    (for Ed25519 keys - RECOMMENDED)" >&2
+    echo "  cat ~/.ssh/id_rsa.pub        (for RSA keys - minimum 2048 bits)" >&2
+    echo "" >&2
+    echo "Then set it in the script:" >&2
+    echo "  SSH_PUBLIC_KEY=\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG... user@domain.com\"" >&2
+    echo "" >&2
+    echo "Or provide it via environment variable:" >&2
+    echo "  export SSH_PUBLIC_KEY=\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG... user@domain.com\"" >&2
+    echo "  ./server-setup-bastion.sh" >&2
+    echo "" >&2
+    log_error "Refusing to continue to prevent lock-out. SSH key is mandatory for bastion hosts."
+    exit 1
 fi
+
+# Validate the provided SSH key
+if ! validate_ssh_key "$SSH_PUBLIC_KEY"; then
+    echo "❌ ERROR: Invalid SSH key format" >&2
+    echo "Please provide a valid SSH public key (Ed25519 recommended, or RSA ≥2048 bits)" >&2
+    exit 1
+fi
+
+echo "✅ Valid SSH public key provided - proceeding with secure bastion setup"
+
+# Email configuration
+echo ""
+while true; do
+    read -r -p "Enter email address for security notifications (default: root): " EMAIL_INPUT
+    if [ -z "$EMAIL_INPUT" ]; then
+        LOGWATCH_EMAIL="root"
+        break
+    elif validate_email "$EMAIL_INPUT"; then
+        LOGWATCH_EMAIL="$EMAIL_INPUT"
+        break
+    else
+        echo "Please enter a valid email address"
+    fi
+done
+    
+echo ""
+while true; do
+    read -r -p "Enter SSH port for bastion access (default: 2222): " SSH_PORT_INPUT
+    if [ -z "$SSH_PORT_INPUT" ]; then
+        SSH_PORT="2222"
+        break
+    elif [[ "$SSH_PORT_INPUT" =~ ^[0-9]+$ ]] && [ "$SSH_PORT_INPUT" -ge 1024 ] && [ "$SSH_PORT_INPUT" -le 65535 ]; then
+        SSH_PORT="$SSH_PORT_INPUT"
+        break
+    else
+        echo "Please enter a valid port number (1024-65535)"
+    fi
+done
+echo ""
 
 # SMTP Configuration for reliable email delivery
 echo "===== SMTP EMAIL CONFIGURATION ====="
@@ -331,6 +411,7 @@ if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
             break
         fi
     done
+
     read -r -p "Use TLS/STARTTLS? (y/n, default: y): " SMTP_TLS
     SMTP_TLS=${SMTP_TLS:-y}
     
@@ -350,7 +431,7 @@ else
 fi
 
 echo "===== BASTION HOST HARDENING SETUP ====="
-echo "This script will configure a Debian 12 server as a secure bastion host"
+echo "This script will configure a Debian 13 server as a secure bastion host"
 echo "Bastion hosts require strict security configuration and monitoring"
 echo ""
 echo "✅ Running as root (required for system configuration)"
@@ -359,6 +440,8 @@ echo ""
 
 # ========= Basic server hardening =========
 echo "===== 1. Updating system packages ====="
+# Debian 13 (Trixie) includes APT 3.0 with improved UI, Solver3 dependency resolver,
+# and enhanced cryptographic support using OpenSSL/Sequoia instead of GnuTLS/GnuPG
 # Wait for any running package management processes to complete
 wait_for_dpkg_lock() {
     local timeout=300  # 5 minutes timeout
@@ -381,13 +464,15 @@ wait_for_dpkg_lock() {
     done
 }
 
+# Safe dpkg lock waiting function
+wait_for_dpkg_lock() {
+  while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+     || fuser /var/cache/apt/archives/lock >/dev/null 2>&1 \
+     || pgrep -x unattended-upgrade >/dev/null 2>&1; do sleep 3; done
+}
+
 echo "Checking for running package management processes..."
 wait_for_dpkg_lock
-
-# Kill any running apt/dpkg processes
-pkill -f apt-get 2>/dev/null || true
-pkill -f dpkg 2>/dev/null || true
-sleep 2
 
 # Configure dpkg properly before update
 dpkg --configure -a
@@ -465,33 +550,39 @@ if ! id "$USERNAME" &>/dev/null; then
     fi
 fi
 
-# Create/update comprehensive sudo access for bastion user (always run this)
-echo "Setting up sudo privileges for $USERNAME..."
+# Create restricted sudo access for bastion user (SECURITY HARDENED)
+echo "Setting up restricted sudo privileges for $USERNAME..."
 cat > /etc/sudoers.d/bastion-$USERNAME << EOF
-# Bastion user sudo privileges - comprehensive monitoring access
-# Basic system monitoring (most commands should work without sudo due to group membership)
-$USERNAME ALL=(ALL) NOPASSWD: /usr/bin/systemctl status *, /usr/bin/systemctl restart ssh*, /bin/systemctl status *, /bin/systemctl restart ssh*
-$USERNAME ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active *, /bin/systemctl is-active *
+# Bastion user sudo privileges - RESTRICTED to absolute minimum for security
+# Using Cmnd_Alias with exact paths to prevent privilege escalation
 
-# Network monitoring (netstat/ss for connection info)
-$USERNAME ALL=(ALL) NOPASSWD: /bin/netstat *, /usr/bin/ss *, /usr/bin/netstat *, /sbin/netstat *
+# Define command aliases with exact paths only
+Cmnd_Alias SSH_RESTART = /usr/bin/systemctl restart ssh, /bin/systemctl restart ssh, /usr/bin/systemctl restart sshd, /bin/systemctl restart sshd
+Cmnd_Alias SSH_STATUS = /usr/bin/systemctl status ssh, /bin/systemctl status ssh, /usr/bin/systemctl status sshd, /bin/systemctl status sshd
+Cmnd_Alias SSH_ACTIVE = /usr/bin/systemctl is-active ssh, /bin/systemctl is-active ssh, /usr/bin/systemctl is-active sshd, /bin/systemctl is-active sshd
 
-# UFW firewall access (requires root)
-$USERNAME ALL=(ALL) NOPASSWD: /usr/sbin/ufw status *, /usr/sbin/ufw --version, /sbin/ufw status *, /sbin/ufw --version, /usr/bin/ufw status *, /usr/bin/ufw --version
+# UFW status checking only (no modification allowed)
+Cmnd_Alias UFW_STATUS = /usr/sbin/ufw status, /sbin/ufw status, /usr/bin/ufw status, /usr/sbin/ufw --version, /sbin/ufw --version, /usr/bin/ufw --version
 
-# Fail2ban access (requires root)
-$USERNAME ALL=(ALL) NOPASSWD: /usr/bin/fail2ban-client status *, /usr/bin/fail2ban-client *
+# Fail2ban status checking only (no jail modification)
+Cmnd_Alias FAIL2BAN_STATUS = /usr/bin/fail2ban-client status
 
-# Allow tail for log monitoring
-$USERNAME ALL=(ALL) NOPASSWD: /usr/bin/tail *, /bin/tail *
+# Essential bastion monitoring scripts (custom commands only)
+Cmnd_Alias BASTION_COMMANDS = /usr/local/bin/bastionstat, /usr/local/bin/sshmon, /usr/local/bin/bastionmail
 
-# Allow essential monitoring commands that may need root - including when run via sudo
-$USERNAME ALL=(ALL) NOPASSWD: /usr/local/bin/bastionstat, /usr/local/bin/sshmon, /usr/local/bin/bastionmail
+# Specific log file access (no wildcards)
+Cmnd_Alias LOG_ACCESS = /usr/bin/tail /var/log/auth.log, /usr/bin/tail /var/log/syslog, /usr/bin/tail /var/log/fail2ban.log
 
-# Allow sudo execution of common monitoring tools needed by bastionstat
-$USERNAME ALL=(ALL) NOPASSWD: ALL
+# Grant minimal required privileges
+$USERNAME ALL=(ALL) NOPASSWD: SSH_RESTART, SSH_STATUS, SSH_ACTIVE
+$USERNAME ALL=(ALL) NOPASSWD: UFW_STATUS
+$USERNAME ALL=(ALL) NOPASSWD: FAIL2BAN_STATUS  
+$USERNAME ALL=(ALL) NOPASSWD: BASTION_COMMANDS
+$USERNAME ALL=(ALL) NOPASSWD: LOG_ACCESS
 
+# Security settings
 Defaults:$USERNAME !requiretty
+Defaults:$USERNAME secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 EOF
 chmod 440 /etc/sudoers.d/bastion-$USERNAME
 
@@ -503,13 +594,12 @@ create_rollback_point "pre-ssh"
 # Backup original SSH config
 cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
     
-    # Create highly secure SSH configuration for bastion host
-    cat > /etc/ssh/sshd_config << EOF
+# Create highly secure SSH configuration for bastion host
+cat > /etc/ssh/sshd_config << EOF
 # Bastion Host SSH Configuration - Maximum Security
 # This configuration prioritizes security over convenience
 
 # Network Configuration
-Port 22
 Port $SSH_PORT
 Protocol 2
 AddressFamily inet
@@ -529,6 +619,7 @@ MaxStartups 3:30:10
 
 # Key-based authentication only (NO password auth on bastions)
 PubkeyAuthentication yes
+AuthenticationMethods publickey
 PasswordAuthentication no
 PermitEmptyPasswords no
 ChallengeResponseAuthentication no
@@ -537,10 +628,10 @@ UsePAM no
 AuthorizedKeysFile .ssh/authorized_keys
 
 # Forwarding and Tunneling - Essential for bastion functionality
-AllowTcpForwarding yes
+AllowTcpForwarding local
 AllowStreamLocalForwarding yes
-AllowAgentForwarding yes
-PermitTunnel yes
+AllowAgentForwarding no
+PermitTunnel no
 GatewayPorts no
 
 # X11 and other features - Disabled for security
@@ -552,7 +643,7 @@ PrintLastLog yes
 AcceptEnv LANG LC_*
 
 # Subsystems
-Subsystem sftp /usr/lib/openssh/sftp-server
+Subsystem sftp internal-sftp -f AUTH -l INFO
 
 # Security hardening
 IgnoreRhosts yes
@@ -563,14 +654,13 @@ ClientAliveInterval $SSH_CLIENT_ALIVE_INTERVAL
 ClientAliveCountMax $SSH_CLIENT_ALIVE_COUNT_MAX
 TCPKeepAlive yes
 
-# Modern cryptographic algorithms only
-KexAlgorithms curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512
-Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
-MACs hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512
+# Modern cryptographic algorithms with post-quantum hybrid support
+KexAlgorithms sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org
+Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
+MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
 
-# Ensure no weak algorithms
+# Ensure no weak key types
 PubkeyAcceptedKeyTypes rsa-sha2-512,rsa-sha2-256,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,ssh-ed25519
-KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group14-sha256
 
 # User access control
 AllowUsers $USERNAME
@@ -584,8 +674,8 @@ SyslogFacility AUTH
 Banner /etc/ssh/banner
 EOF
     
-    # Create SSH banner for bastion host
-    cat > /etc/ssh/banner << EOF
+# Create SSH banner for bastion host
+cat > /etc/ssh/banner << EOF
 ***************************************************************************
                           BASTION HOST ACCESS
 ***************************************************************************
@@ -625,7 +715,16 @@ fi
 echo "Configuring UFW firewall rules..."
 ufw --force reset
 
-# Set restrictive default policies
+# Configure IPv6 support and nftables backend (Debian 13 default)  
+sed -i 's/IPV6=no/IPV6=yes/' /etc/default/ufw
+
+# Ensure UFW uses nftables backend (Debian 13 default)
+# This ensures consistency with fail2ban UFW actions
+if ! grep -q "^BACKEND=nftables" /etc/default/ufw; then
+    echo "BACKEND=nftables" >> /etc/default/ufw
+fi
+
+# Set restrictive default policies (IPv4 and IPv6)
 ufw default deny incoming
 ufw default deny outgoing
 ufw default deny forward
@@ -684,14 +783,14 @@ if [ "$SSH_PORT" != "22" ]; then
     ufw allow in 22/tcp comment "TEMP: Default SSH port (remove after testing new port)"
 fi
 
-# Allow outgoing connections to internal networks on common ports
+# Allow outgoing connections to internal networks on common ports (restricted by destination)
+IFS=',' read -ra NETS <<< "$INTERNAL_NETWORK"
 IFS=',' read -ra PORTS <<< "$ALLOWED_INTERNAL_PORTS"
-for port in "${PORTS[@]}"; do
-    ufw allow out "$port"/tcp comment "Internal network access TCP"
-    # Also allow UDP for DNS and other services that may need it
-    if [ "$port" = "53" ]; then
-        ufw allow out "$port"/udp comment "DNS resolution UDP"
-    fi
+for n in "${NETS[@]}"; do
+  for p in "${PORTS[@]}"; do
+    ufw allow out to "$n" port "$p" proto tcp comment "internal $p"
+    [ "$p" = "53" ] && ufw allow out to "$n" port 53 proto udp comment "internal DNS"
+  done
 done
 
 # Allow outgoing SSH on custom port (for SSH tunneling and forwarding)
@@ -707,22 +806,23 @@ fi
 ufw allow out 80/tcp comment "HTTP updates"
 ufw allow out 443/tcp comment "HTTPS updates"
 
+# Allow NTP time synchronization (critical for logs and TLS)
+ufw allow out 123/udp comment "NTP time sync"
+
+# Enable NTP synchronization
+systemctl enable --now systemd-timesyncd 2>/dev/null || true
+
 # Allow SMTP port if external SMTP is configured
 if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
     ufw allow out "$SMTP_PORT"/tcp comment "SMTP email delivery"
     echo "✅ Added UFW rule for SMTP port $SMTP_PORT"
 fi
 
-# Allow outgoing NTP for time synchronization
-ufw allow out 123/udp comment "NTP time sync"
+# NTP rule already configured above
 
 # Use connection tracking instead of broad port ranges (SECURITY FIX)
 # UFW automatically handles established connections when using stateful rules
-# Only explicitly allow necessary outbound connections
-ufw allow out 53/udp comment "DNS resolution"
-ufw allow out 53/tcp comment "DNS resolution over TCP"
-ufw allow out 80/tcp comment "HTTP for updates"
-ufw allow out 443/tcp comment "HTTPS for updates"
+# DNS and HTTP/HTTPS rules already configured above
 ufw allow out 22/tcp comment "SSH for bastion connections"
 ufw allow out $SSH_PORT/tcp comment "SSH on custom port"
 
@@ -791,36 +891,79 @@ else
 fi
 echo ""
 
+echo "===== 5.1. Configuring NTP time synchronization ====="
+# Ensure NTP synchronization is enabled (critical for bastion logging)
+timedatectl set-ntp true
+
+# Verify NTP is working
+if timedatectl status | grep -q "NTP service: active"; then
+    echo "✅ NTP synchronization enabled and active"
+else
+    echo "⚠️ NTP synchronization may not be working properly"
+fi
+
+# Show current time sync status
+timedatectl status
+echo ""
+
 echo "===== 6. Installing security packages for bastion monitoring ====="
 # Pre-configure postfix for local mail delivery (non-interactive)
 echo "postfix postfix/main_mailer_type string 'Local only'" | debconf-set-selections
 echo "postfix postfix/mailname string $(hostname -f)" | debconf-set-selections
 
 # Update package lists before installing
-apt-get update
+wait_for_dpkg_lock; apt-get update
 
-# Create ClamAV user before package installation to prevent warnings
-if ! id "clamav" &>/dev/null; then
-    echo "Creating clamav user before package installation..."
-    useradd --system --home-dir /var/lib/clamav --shell /bin/false clamav
-    echo "✅ ClamAV user created"
+echo "===== 5. Optional Security Components for Bastion ====="
+echo "Choose security tools for this bastion host. Bastions have unique requirements:"
+echo ""
+
+# ClamAV Antivirus
+# Security components are now configured via environment variables
+echo "===== 5.0 Security Components Configuration ====="
+echo "• INSTALL_CLAMAV=$INSTALL_CLAMAV (File scanning - HIGH resource usage)"
+if [ "$INSTALL_CLAMAV" = true ]; then
+    # Create ClamAV user before package installation
+    if ! id "clamav" &>/dev/null; then
+        echo "Creating clamav user before package installation..."
+        useradd --system --home-dir /var/lib/clamav --shell /bin/false clamav
+        echo "✅ ClamAV user created"
+    fi
 fi
 
-# Full package list for production bastion hosts
-apt-get install -y fail2ban unattended-upgrades apt-listchanges \
-    logwatch clamav clamav-daemon lm-sensors \
-    rkhunter chkrootkit unbound \
-    suricata tcpdump netcat-openbsd mailutils postfix
+echo "• INSTALL_MALDET=$INSTALL_MALDET (Malware detection - MEDIUM resource usage)"
+echo "• INSTALL_RKHUNTER=$INSTALL_RKHUNTER (Rootkit detection - LOW resource usage)"
+echo "• INSTALL_SURICATA=$INSTALL_SURICATA (Network IDS - MEDIUM resource usage)"
+echo ""
 
-echo "===== 6.0.1 Configuring ClamAV with resource optimization for bastion hosts ====="
-# Optimize ClamAV for bastion host environment with limited resources
-# This prevents ClamAV from consuming excessive CPU/memory that could impact critical services
+echo "===== 5.1 Installing core bastion packages ====="
+# Core packages (always installed for bastion functionality)
+wait_for_dpkg_lock; apt-get install -y fail2ban unattended-upgrades apt-listchanges \
+    logwatch lm-sensors unbound apparmor apparmor-utils \
+    tcpdump netcat-openbsd mailutils postfix \
+    $( [ "$INSTALL_CLAMAV" = true ] && echo "clamav clamav-daemon" ) \
+    $( [ "$INSTALL_RKHUNTER" = true ] && echo "rkhunter chkrootkit" ) \
+    $( [ "$INSTALL_SURICATA" = true ] && echo "suricata" )
 
-# Stop services during configuration
-systemctl stop clamav-daemon clamav-freshclam 2>/dev/null || true
+echo "✅ Bastion security package installation completed"
 
-# Configure ClamAV daemon with resource-conscious settings
-cat > /etc/clamav/clamd.conf << EOF
+INSTALLED_COMPONENTS=""
+[ "$INSTALL_CLAMAV" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS clamav"
+[ "$INSTALL_MALDET" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS maldet"
+[ "$INSTALL_RKHUNTER" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS rkhunter"
+[ "$INSTALL_SURICATA" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS suricata"
+echo "Installed optional components:${INSTALLED_COMPONENTS:-none}"
+
+if [ "$INSTALL_CLAMAV" = true ]; then
+    echo "===== 6.0.1 Configuring ClamAV with resource optimization for bastion hosts ====="
+    # Optimize ClamAV for bastion host environment with limited resources
+    # This prevents ClamAV from consuming excessive CPU/memory that could impact critical services
+
+    # Stop services during configuration
+    systemctl stop clamav-daemon clamav-freshclam 2>/dev/null || true
+
+    # Configure ClamAV daemon with resource-conscious settings
+    cat > /etc/clamav/clamd.conf << EOF
 # ClamAV Daemon Configuration - Optimized for Bastion Hosts
 User clamav
 LocalSocket /run/clamav/clamd.ctl
@@ -900,8 +1043,8 @@ ScanPartialMessages false
 OLE2BlockMacros false
 EOF
 
-# Configure freshclam with reduced frequency to prevent resource spikes
-cat > /etc/clamav/freshclam.conf << EOF
+    # Configure freshclam with reduced frequency to prevent resource spikes
+    cat > /etc/clamav/freshclam.conf << EOF
 # ClamAV Freshclam Configuration - Optimized for Bastion Hosts
 DatabaseOwner clamav
 
@@ -934,12 +1077,12 @@ TestDatabases yes
 Bytecode true
 EOF
 
-# Create systemd resource limits for ClamAV services
-echo "Setting up systemd resource limits for ClamAV services..."
+    # Create systemd resource limits for ClamAV services
+    echo "Setting up systemd resource limits for ClamAV services..."
 
-# ClamAV daemon resource limits
-mkdir -p /etc/systemd/system/clamav-daemon.service.d
-cat > /etc/systemd/system/clamav-daemon.service.d/resource-limits.conf << EOF
+    # ClamAV daemon resource limits
+    mkdir -p /etc/systemd/system/clamav-daemon.service.d
+    cat > /etc/systemd/system/clamav-daemon.service.d/resource-limits.conf << EOF
 [Service]
 # Proper memory limits for ClamAV daemon (minimum 1GB required)
 CPUQuota=25%
@@ -972,9 +1115,9 @@ ReadWritePaths=/var/lib/clamav /var/log/clamav /run/clamav
 TasksMax=50
 EOF
 
-# Freshclam resource limits
-mkdir -p /etc/systemd/system/clamav-freshclam.service.d
-cat > /etc/systemd/system/clamav-freshclam.service.d/resource-limits.conf << EOF
+    # Freshclam resource limits
+    mkdir -p /etc/systemd/system/clamav-freshclam.service.d
+    cat > /etc/systemd/system/clamav-freshclam.service.d/resource-limits.conf << EOF
 [Service]
 # Proper memory limits for virus definition updates (minimum 768MB required)
 CPUQuota=15%
@@ -1006,13 +1149,13 @@ ReadWritePaths=/var/lib/clamav /var/log/clamav
 TasksMax=20
 EOF
 
-# Create log directory with proper permissions
-mkdir -p /var/log/clamav
-chown clamav:clamav /var/log/clamav
-chmod 755 /var/log/clamav
+    # Create log directory with proper permissions
+    mkdir -p /var/log/clamav
+    chown clamav:clamav /var/log/clamav
+    chmod 755 /var/log/clamav
 
-# Set up logrotate for ClamAV logs
-cat > /etc/logrotate.d/clamav << EOF
+    # Set up logrotate for ClamAV logs
+    cat > /etc/logrotate.d/clamav << EOF
 /var/log/clamav/*.log {
     weekly
     rotate 12
@@ -1027,77 +1170,127 @@ cat > /etc/logrotate.d/clamav << EOF
 }
 EOF
 
-# Reload systemd and start services with new configurations
-systemctl daemon-reload
+    # Reload systemd and start services with new configurations
+    systemctl daemon-reload
 
-# Enable services but don't start immediately - let the user decide
-systemctl enable clamav-daemon clamav-freshclam
+    # Enable services but don't start immediately - let the user decide
+    systemctl enable clamav-daemon clamav-freshclam
 
-echo "✅ ClamAV configured with resource allocation for bastion environment"
-echo "   • CPU limited to 25% (daemon) / 15% (updater)"
-echo "   • Memory INCREASED to 1536MB (daemon) / 1024MB (updater)"
-echo "   • Update frequency: 2x daily (instead of 24x)"
-echo "   • Optimized scan limits and timeouts"
-echo "   • Enhanced OOM protection and process isolation"
+    echo "✅ ClamAV configured with resource allocation for bastion environment"
+    echo "   • CPU limited to 25% (daemon) / 15% (updater)"
+    echo "   • Memory INCREASED to 1536MB (daemon) / 1024MB (updater)"
+    echo "   • Update frequency: 2x daily (instead of 24x)"
+    echo "   • Optimized scan limits and timeouts"
+    echo "   • Enhanced OOM protection and process isolation"
+    echo ""
+    echo "📋 ClamAV Management Commands:"
+    echo "   • Start services: systemctl start clamav-daemon clamav-freshclam"
+    echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
+    echo "   • View logs: journalctl -u clamav-daemon -f"
+    echo "   • Manual scan: clamscan -r /path/to/scan"
+    echo ""
+    echo "⚠️  IMPORTANT: ClamAV services are enabled but not started automatically"
+    echo "   Start them manually after verifying system resources are adequate"
+    echo ""
+    echo "📋 ClamAV Resource Requirements:"
+    echo "   • Memory: Minimum 512MB available RAM"
+    echo "   • CPU: Will use up to 25% CPU during scans"
+    echo "   • Disk: ~200MB for virus definitions"
+    echo "   • Network: Periodic updates (2x daily)"
+    echo ""
+    echo "🚀 ClamAV Startup Commands:"
+    echo "   • Check system resources: free -h && nproc"
+    echo "   • Start freshclam updater: systemctl start clamav-freshclam"
+    echo "   • Wait for initial database: journalctl -u clamav-freshclam -f"
+    echo "   • Start daemon: systemctl start clamav-daemon"
+    echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
+    echo "   • Manual scan: clamscan -r /home /tmp"
+    echo ""
+    echo "⚡ Resource Monitoring:"
+    echo "   • CPU usage: htop (ClamAV limited to 25%)"
+    echo "   • Memory usage: free -h (daemon uses ~400MB)"
+    echo "   • Service status: systemctl status clamav-*"
+    echo ""
+    echo "🔧 ClamAV Management:"
+    echo "   • Update definitions: systemctl restart clamav-freshclam"
+    echo "   • View logs: journalctl -u clamav-daemon -f"
+    echo "   • Stop services: systemctl stop clamav-daemon clamav-freshclam"
+    echo "   • Disable if needed: systemctl disable clamav-daemon clamav-freshclam"
+    echo ""
+    echo "🔄 Enable ClamAV to Start Automatically After Reboot:"
+    echo "   • Start services now: systemctl start clamav-freshclam clamav-daemon"
+    echo "   • Enable auto-start: systemctl enable clamav-freshclam clamav-daemon"
+    echo "   • Verify enabled: systemctl is-enabled clamav-daemon clamav-freshclam"
+    echo "   • Check after reboot: systemctl status clamav-daemon clamav-freshclam"
+    echo ""
+    echo "💡 Recommended Startup Sequence:"
+    echo "   1. Check system resources: free -h"
+    echo "   2. Start freshclam first: systemctl start clamav-freshclam"
+    echo "   3. Wait for database update: journalctl -u clamav-freshclam -f"
+    echo "   4. Start daemon: systemctl start clamav-daemon"
+    echo "   5. Enable both services: systemctl enable clamav-freshclam clamav-daemon"
+    echo "   6. Verify status: systemctl status clamav-daemon clamav-freshclam"
+fi
 
-# Install Linux Malware Detect (maldet) for enhanced malware protection
-echo "===== 7.1 Installing Linux Malware Detect (maldet) ====="
+if [ "$INSTALL_MALDET" = true ]; then
+    # Install Linux Malware Detect (maldet) for enhanced malware protection
+    echo "===== 7.1 Installing Linux Malware Detect (maldet) ====="
 
-# Create temporary directory for installation
-mkdir -p /tmp/maldet-install
-cd /tmp/maldet-install
+    # Create temporary directory for installation
+    mkdir -p /tmp/maldet-install
+    cd /tmp/maldet-install
 
-echo "Downloading Linux Malware Detect..."
-if wget -q http://www.rfxn.com/downloads/maldetect-current.tar.gz; then
-    echo "✅ Downloaded maldetect successfully"
-    
-    # Extract and install with error handling
-    echo "Extracting maldetect archive..."
-    if tar -xzf maldetect-current.tar.gz 2>/dev/null; then
-        echo "✅ Archive extracted successfully"
+    echo "Downloading Linux Malware Detect..."
+    if wget -q https://www.rfxn.com/downloads/maldetect-current.tar.gz; then
+        echo "✅ Downloaded maldetect successfully"
         
-        # Find the extracted directory (more robust method)
-        MALDET_DIR=$(find . -maxdepth 1 -type d -name "maldetect-*" | head -1 2>/dev/null)
-        if [ -z "$MALDET_DIR" ]; then
-            # Fallback: use tar output to get directory name
-            MALDET_DIR=$(tar -tzf maldetect-current.tar.gz 2>/dev/null | head -1 | cut -f1 -d"/")
-        fi
-        
-        if [ -n "$MALDET_DIR" ] && [ -d "$MALDET_DIR" ]; then
-            echo "✅ Found maldet directory: $MALDET_DIR"
-            cd "$MALDET_DIR"
+        # Extract and install with error handling
+        echo "Extracting maldetect archive..."
+        if tar -xzf maldetect-current.tar.gz 2>/dev/null; then
+            echo "✅ Archive extracted successfully"
+
+            # Find the extracted directory (more robust method)
+            MALDET_DIR=$(find . -maxdepth 1 -type d -name "maldetect-*" | head -1 2>/dev/null)
+            if [ -z "$MALDET_DIR" ]; then
+                # Fallback: use tar output to get directory name
+                MALDET_DIR=$(tar -tzf maldetect-current.tar.gz 2>/dev/null | head -1 | cut -f1 -d"/")
+            fi
+
+            if [ -n "$MALDET_DIR" ] && [ -d "$MALDET_DIR" ]; then
+                echo "✅ Found maldet directory: $MALDET_DIR"
+                cd "$MALDET_DIR"
+            else
+                echo "❌ Could not find maldet installation directory"
+                cd /
+                rm -rf /tmp/maldet-install
+                echo "⚠️ Maldet installation failed - continuing without maldet"
+                return 0  # Don't exit the entire script, just return from this section
+            fi
         else
-            echo "❌ Could not find maldet installation directory"
+            echo "❌ Failed to extract maldet archive"
             cd /
             rm -rf /tmp/maldet-install
             echo "⚠️ Maldet installation failed - continuing without maldet"
             return 0  # Don't exit the entire script, just return from this section
         fi
-    else
-        echo "❌ Failed to extract maldet archive"
-        cd /
-        rm -rf /tmp/maldet-install
-        echo "⚠️ Maldet installation failed - continuing without maldet"
-        return 0  # Don't exit the entire script, just return from this section
-    fi
-    
-    echo "Installing Linux Malware Detect..."
-    if ./install.sh 2>/dev/null; then
-        echo "✅ Maldet installation completed successfully"
-    else
-        echo "❌ Maldet installation script failed"
-        cd /
-        rm -rf /tmp/maldet-install
-        echo "⚠️ Maldet installation failed - continuing without maldet"
-        return 0  # Don't exit the entire script, just return from this section
-    fi
-    
-    # Create symlink for easy access
-    ln -sf /usr/local/maldetect/maldet /usr/local/bin/maldet
-    
-    # Configure maldet with bastion-specific settings
-    echo "Configuring Linux Malware Detect for bastion environment..."
-    cat > /usr/local/maldetect/conf.maldet << 'EOF'
+
+        echo "Installing Linux Malware Detect..."
+        if ./install.sh 2>/dev/null; then
+            echo "✅ Maldet installation completed successfully"
+        else
+            echo "❌ Maldet installation script failed"
+            cd /
+            rm -rf /tmp/maldet-install
+            echo "⚠️ Maldet installation failed - continuing without maldet"
+            return 0  # Don't exit the entire script, just return from this section
+        fi
+
+        # Create symlink for easy access
+        ln -sf /usr/local/maldetect/maldet /usr/local/bin/maldet
+
+        # Configure maldet with bastion-specific settings
+        echo "Configuring Linux Malware Detect for bastion environment..."
+        cat > /usr/local/maldetect/conf.maldet << 'EOF'
 # Linux Malware Detect - Bastion Host Configuration
 email_alert="1"
 email_addr="root@localhost"
@@ -1130,17 +1323,17 @@ autoclean_days="30"
 clamdscan_threads="2"
 clamdscan_timeout="300"
 EOF
-    
-    # Set up daily scanning via cron
-    echo "Setting up daily malware scanning..."
-    cat > /etc/cron.d/maldet << 'EOF'
+
+        # Set up daily scanning via cron
+        echo "Setting up daily malware scanning..."
+        cat > /etc/cron.d/maldet << 'EOF'
 # Linux Malware Detect - Daily scan for bastion host
 # Run at 3:00 AM daily to scan critical directories
 0 3 * * * root /usr/local/maldetect/maldet -a /home,/etc,/usr/local,/opt 2>&1 | logger -t maldet
 EOF
-    
-    # Create logrotate configuration
-    cat > /etc/logrotate.d/maldet << 'EOF'
+
+        # Create logrotate configuration
+        cat > /etc/logrotate.d/maldet << 'EOF'
 /usr/local/maldetect/logs/* {
     weekly
     rotate 8
@@ -1151,77 +1344,30 @@ EOF
     create 644 root root
 }
 EOF
-    
-    # Update maldet signatures
-    echo "Updating malware signatures..."
-    /usr/local/maldetect/maldet --update-ver
-    /usr/local/maldetect/maldet --update
-    
-    echo "✅ Linux Malware Detect configured for bastion environment"
-    echo "   • Daily scans of critical directories (home, etc, usr/local, opt)"
-    echo "   • Email alerts enabled for detected threats"
-    echo "   • Integration with ClamAV for enhanced detection"
-    echo "   • Automatic quarantine of detected malware"
-    echo "   • Optimized resource usage for bastion hosts"
-    
-    # Cleanup installation files
-    cd /
-    rm -rf /tmp/maldet-install
-    
-else
-    echo "❌ Failed to download Linux Malware Detect"
-    echo "   Check internet connectivity and try again later"
-    cd /
-    rm -rf /tmp/maldet-install
+
+        # Update maldet signatures
+        echo "Updating malware signatures..."
+        /usr/local/maldetect/maldet --update-ver
+        /usr/local/maldetect/maldet --update
+
+        echo "✅ Linux Malware Detect configured for bastion environment"
+        echo "   • Daily scans of critical directories (home, etc, usr/local, opt)"
+        echo "   • Email alerts enabled for detected threats"
+        echo "   • Integration with ClamAV for enhanced detection"
+        echo "   • Automatic quarantine of detected malware"
+        echo "   • Optimized resource usage for bastion hosts"
+
+        # Cleanup installation files
+        cd /
+        rm -rf /tmp/maldet-install
+
+    else
+        echo "❌ Failed to download Linux Malware Detect"
+        echo "   Check internet connectivity and try again later"
+        cd /
+        rm -rf /tmp/maldet-install
+    fi
 fi
-echo ""
-echo "📋 ClamAV Management Commands:"
-echo "   • Start services: systemctl start clamav-daemon clamav-freshclam"
-echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
-echo "   • View logs: journalctl -u clamav-daemon -f"
-echo "   • Manual scan: clamscan -r /path/to/scan"
-echo ""
-echo "⚠️  IMPORTANT: ClamAV services are enabled but not started automatically"
-echo "   Start them manually after verifying system resources are adequate"
-echo ""
-echo "📋 ClamAV Resource Requirements:"
-echo "   • Memory: Minimum 512MB available RAM"
-echo "   • CPU: Will use up to 25% CPU during scans"
-echo "   • Disk: ~200MB for virus definitions"
-echo "   • Network: Periodic updates (2x daily)"
-echo ""
-echo "🚀 ClamAV Startup Commands:"
-echo "   • Check system resources: free -h && nproc"
-echo "   • Start freshclam updater: systemctl start clamav-freshclam"
-echo "   • Wait for initial database: journalctl -u clamav-freshclam -f"
-echo "   • Start daemon: systemctl start clamav-daemon"
-echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
-echo "   • Manual scan: clamscan -r /home /tmp"
-echo ""
-echo "⚡ Resource Monitoring:"
-echo "   • CPU usage: htop (ClamAV limited to 25%)"
-echo "   • Memory usage: free -h (daemon uses ~400MB)"
-echo "   • Service status: systemctl status clamav-*"
-echo ""
-echo "🔧 ClamAV Management:"
-echo "   • Update definitions: systemctl restart clamav-freshclam"
-echo "   • View logs: journalctl -u clamav-daemon -f"
-echo "   • Stop services: systemctl stop clamav-daemon clamav-freshclam"
-echo "   • Disable if needed: systemctl disable clamav-daemon clamav-freshclam"
-echo ""
-echo "🔄 Enable ClamAV to Start Automatically After Reboot:"
-echo "   • Start services now: systemctl start clamav-freshclam clamav-daemon"
-echo "   • Enable auto-start: systemctl enable clamav-freshclam clamav-daemon"
-echo "   • Verify enabled: systemctl is-enabled clamav-daemon clamav-freshclam"
-echo "   • Check after reboot: systemctl status clamav-daemon clamav-freshclam"
-echo ""
-echo "💡 Recommended Startup Sequence:"
-echo "   1. Check system resources: free -h"
-echo "   2. Start freshclam first: systemctl start clamav-freshclam"
-echo "   3. Wait for database update: journalctl -u clamav-freshclam -f"
-echo "   4. Start daemon: systemctl start clamav-daemon"
-echo "   5. Enable both services: systemctl enable clamav-freshclam clamav-daemon"
-echo "   6. Verify status: systemctl status clamav-daemon clamav-freshclam"
 
 echo "===== 6.0.2 Configuring Unbound DNS with IPv4-only for bastion hosts ====="
 # Configure Unbound DNS resolver with IPv4-only to prevent binding issues
@@ -1278,7 +1424,7 @@ server:
     
     # DNSSEC - disable for simplified bastion configuration
     # trust-anchor-file: "/var/lib/unbound/root.key"
-    # auto-trust-anchor-file: "/var/lib/unbound/root.key"
+    auto-trust-anchor-file: "/var/lib/unbound/root.key"
     
     # Private address handling
     private-address: 192.168.0.0/16
@@ -1301,8 +1447,8 @@ include-toplevel: "/etc/unbound/unbound.conf.d/*.conf"
 EOF
 
 # Disable unbound-resolvconf service (causes issues in bastion environment)
-systemctl disable unbound-resolvconf 2>/dev/null || true
-systemctl mask unbound-resolvconf 2>/dev/null || true
+#systemctl disable unbound-resolvconf 2>/dev/null || true
+#systemctl mask unbound-resolvconf 2>/dev/null || true
 
 # Create systemd override for Unbound to ensure IPv4-only operation
 mkdir -p /etc/systemd/system/unbound.service.d
@@ -1491,7 +1637,7 @@ if [ "$CPU_VENDOR" = "AuthenticAMD" ]; then
     if ! apt-cache search amd64-microcode | grep -q amd64-microcode; then
         echo "Adding non-free-firmware repository for AMD microcode..."
         
-        # Check if we're using the new sources.list format (Debian 12+)
+        # Check if we're using the new sources.list format (Debian 12+, still applicable in Debian 13)
         if [ -f /etc/apt/sources.list.d/debian.sources ]; then
             # Update existing debian.sources file to include non-free-firmware
             if ! grep -q "non-free-firmware" /etc/apt/sources.list.d/debian.sources; then
@@ -1547,6 +1693,7 @@ update-initramfs -u -k all
 echo "Checking for kernel updates..."
 CURRENT_KERNEL=$(uname -r)
 echo "Current kernel: $CURRENT_KERNEL"
+echo "Note: Debian 13 (Trixie) ships with Linux kernel 6.12 LTS (supported until Dec 2026)"
 
 # Check for available kernel updates
 if apt list --upgradable 2>/dev/null | grep -q linux-image; then
@@ -1565,7 +1712,7 @@ if apt-cache search linux-image | grep -q backports; then
     echo ""
     echo "💡 Backports kernel available for better hardware support:"
     apt-cache search linux-image | grep backports | head -3
-    echo "   Consider: apt install -t bookworm-backports linux-image-amd64"
+    echo "   Consider: apt install -t trixie-backports linux-image-amd64"
 fi
 
 # Show current CPU vulnerabilities status
@@ -2190,11 +2337,11 @@ syntax on
 EOF
     chown $USERNAME:$USERNAME /home/$USERNAME/.vimrc
 
-# Create global executable commands for bastion functions
-echo "===== 6.2.2 Creating global bastion commands ====="
+    # Create global executable commands for bastion functions
+    echo "===== 6.2.2 Creating global bastion commands ====="
 
-# Create bastionstat command
-cat > /usr/local/bin/bastionstat << EOF
+    # Create bastionstat command
+    cat > /usr/local/bin/bastionstat << EOF
 #!/bin/bash
 # Bastion Host Status Command
 # This command can be run by the bastion user without entering a password
@@ -2334,10 +2481,10 @@ fi
 systemctl is-active --quiet postfix && echo "✅ Mail system (Postfix): Active" || echo "❌ Mail system (Postfix): Inactive"
 EOF
 
-chmod +x /usr/local/bin/bastionstat
+    chmod +x /usr/local/bin/bastionstat
 
-# Create sshmon command
-cat > /usr/local/bin/sshmon << EOF
+    # Create sshmon command
+    cat > /usr/local/bin/sshmon << EOF
 #!/bin/bash
 # SSH Activity Monitor for Bastion Host
 # IMPORTANT: Run as root (sudo sshmon) for access to auth.log
@@ -2350,10 +2497,10 @@ echo ""
 sudo tail -f /var/log/auth.log | grep --line-buffered "sshd"
 EOF
 
-chmod +x /usr/local/bin/sshmon
+    chmod +x /usr/local/bin/sshmon
 
-# Create mail reading command for bastion
-cat > /usr/local/bin/bastionmail << EOF
+    # Create mail reading command for bastion
+    cat > /usr/local/bin/bastionmail << EOF
 #!/bin/bash
 # Read local mail on bastion host
 echo "=== Bastion Host Local Mail ==="
@@ -2373,12 +2520,12 @@ else
 fi
 EOF
 
-chmod +x /usr/local/bin/bastionmail
+    chmod +x /usr/local/bin/bastionmail
 
-echo "✅ Global bastion commands created:"
-echo "   • sudo bastionstat - Show bastion host status (requires root)"
-echo "   • sudo sshmon - Monitor SSH activity in real-time (requires root)"
-echo "   • bastionmail - Read local mail"
+    echo "✅ Global bastion commands created:"
+    echo "   • sudo bastionstat - Show bastion host status (requires root)"
+    echo "   • sudo sshmon - Monitor SSH activity in real-time (requires root)"
+    echo "   • bastionmail - Read local mail"
 fi
 
 # Configure automatic security updates
@@ -2411,14 +2558,15 @@ EOF
 
 echo "===== 7. Configuring fail2ban for bastion protection ====="
 create_rollback_point "pre-fail2ban"
+
 # Enhanced fail2ban configuration for bastion hosts
-    cat > /etc/fail2ban/jail.local << EOF
+cat > /etc/fail2ban/jail.local << EOF
 [DEFAULT]
 # Default ban time and find time (more aggressive for bastions)
 bantime = 3600
 findtime = 600
 maxretry = 3
-backend = auto
+backend = systemd
 usedns = warn
 destemail = $LOGWATCH_EMAIL
 sendername = Fail2Ban-Bastion-$HOSTNAME
@@ -2427,8 +2575,13 @@ protocol = tcp
 chain = INPUT
 port = 0:65535
 fail2ban_agent = Fail2Ban/%(fail2ban_version)s
-# Explicitly disable IPv6 for bastion hosts (IPv4 only)
-allowipv6 = false
+# Enable IPv6 support for modern infrastructure
+allowipv6 = yes
+
+# Use UFW/nftables for Debian 13 firewall management
+banaction = ufw
+banaction_allports = ufw
+action = %(banaction)s[blocktype=reject]
 
 [sshd]
 enabled = true
@@ -2451,7 +2604,7 @@ bantime = 3600
 enabled = true
 filter = recidive
 logpath = /var/log/fail2ban.log
-action = iptables-multiport[name=recidive, port="all"]
+action = %(banaction)s[name=recidive, port="all"]
 bantime = 86400
 findtime = 86400
 maxretry = 5
@@ -2460,14 +2613,14 @@ maxretry = 5
 enabled = true
 filter = systemd
 logpath = /var/log/syslog
-action = iptables-multiport[name=systemd, port="all"]
+action = %(banaction)s[name=systemd, port="all"]
 bantime = 3600
 findtime = 600
 maxretry = 5
 EOF
 
-    # Create custom filter for SSH brute force detection
-    cat > /etc/fail2ban/filter.d/sshd-ddos.conf << EOF
+# Create custom filter for SSH brute force detection
+cat > /etc/fail2ban/filter.d/sshd-ddos.conf << EOF
 # Fail2Ban filter for SSH brute force attacks
 [Definition]
 failregex = sshd\[<pid>\]: Did not receive identification string from <HOST>
@@ -2477,8 +2630,8 @@ failregex = sshd\[<pid>\]: Did not receive identification string from <HOST>
 ignoreregex =
 EOF
 
-    # Create systemd filter for service monitoring
-    cat > /etc/fail2ban/filter.d/systemd.conf << EOF
+# Create systemd filter for service monitoring
+cat > /etc/fail2ban/filter.d/systemd.conf << EOF
 # Fail2ban filter for systemd service failures
 # Monitors for repeated service failures that could indicate attacks
 
@@ -2890,7 +3043,7 @@ fi
 
 # Always create fallback rules to ensure we have something
 echo "Creating minimal audit rules as safety fallback..."
-    cat > /etc/audit/rules.d/bastion-audit.rules << EOF
+cat > /etc/audit/rules.d/bastion-audit.rules << EOF
 ## Minimal Bastion Audit Rules - Fallback Configuration
 -D
 -b 8192
@@ -2970,7 +3123,8 @@ if [ -z "$BASTION_IP" ]; then
     BASTION_IP=$(hostname -I | awk '{print $1}')
 fi
 
-echo "Configuring Suricata for interface: $INTERFACE, IP: $BASTION_IP"
+if [ "$INSTALL_SURICATA" = true ]; then
+    echo "Configuring Suricata for interface: $INTERFACE, IP: $BASTION_IP"
     
     # Configure Suricata for bastion host monitoring with HOME_NET
     cat > /etc/suricata/suricata.yaml << EOF
@@ -3144,10 +3298,10 @@ EOF
 }
 EOF
 
-# Configure Suricata systemd resource limits for bastion host
-echo "===== 9.4.1 Configuring Suricata Resource Management ====="
-mkdir -p /etc/systemd/system/suricata.service.d
-cat > /etc/systemd/system/suricata.service.d/resource-limits.conf << EOF
+    # Configure Suricata systemd resource limits for bastion host
+    echo "===== 9.4.1 Configuring Suricata Resource Management ====="
+    mkdir -p /etc/systemd/system/suricata.service.d
+    cat > /etc/systemd/system/suricata.service.d/resource-limits.conf << EOF
 [Service]
 # Resource limits for bastion host (more conservative than production)
 CPUQuota=30%
@@ -3172,127 +3326,128 @@ TimeoutStartSec=120
 TimeoutStopSec=30
 EOF
 
-systemctl daemon-reload
+    systemctl daemon-reload
 
-# Ensure required directories and files exist before testing
-echo "Preparing Suricata configuration..."
-mkdir -p /etc/suricata/rules /var/log/suricata /var/lib/suricata/rules
+    # Ensure required directories and files exist before testing
+    echo "Preparing Suricata configuration..."
+    mkdir -p /etc/suricata/rules /var/log/suricata /var/lib/suricata/rules
 
-# Create minimal default rules file if it doesn't exist
-if [ ! -f /etc/suricata/rules/suricata.rules ]; then
-    echo "Creating initial Suricata rules file..."
-    cat > /etc/suricata/rules/suricata.rules << EOF
+    # Create minimal default rules file if it doesn't exist
+    if [ ! -f /etc/suricata/rules/suricata.rules ]; then
+        echo "Creating initial Suricata rules file..."
+        cat > /etc/suricata/rules/suricata.rules << EOF
 # Default Suricata rules for bastion host
 # This file is required by Suricata configuration
 EOF
-fi
+    fi
 
-# Test Suricata configuration
-echo "Testing Suricata configuration..."
-if suricata -T -c /etc/suricata/suricata.yaml >/tmp/suricata-test.log 2>&1; then
-    echo "✅ Suricata configuration is valid"
-    
-    # Create log directory with proper permissions
-    mkdir -p /var/log/suricata /var/lib/suricata
-    
-    # Ensure suricata user exists
-    if ! id suricata >/dev/null 2>&1; then
-        echo "Creating suricata user..."
-        useradd --system --home-dir /var/lib/suricata --shell /bin/false suricata
-    fi
-    
-    # Set proper ownership and permissions
-    chown -R suricata:suricata /var/log/suricata /var/lib/suricata 2>/dev/null || chown -R root:root /var/log/suricata /var/lib/suricata
-    chmod 755 /var/log/suricata /var/lib/suricata
-    
-    # Reload systemd configuration
-    systemctl daemon-reload
-    
-    # Enable Suricata for automatic startup
-    systemctl enable suricata
-    
-    # Start Suricata with error handling
-    echo "Starting Suricata IDS service..."
-    if start_service_with_retry suricata; then
-        echo "✅ Suricata IDS started successfully"
-        
-        # Wait for service to initialize
-        sleep 5
-        
-        # Verify Suricata is running
-        if systemctl is-active --quiet suricata; then
-            echo "✅ Suricata IDS is running and monitoring network traffic"
-            
-            # Show Suricata status
-            systemctl --no-pager status suricata | head -10
-        else
-            echo "⚠️ Suricata started but may not be fully operational"
-            echo "Checking Suricata logs:"
-            journalctl -u suricata --no-pager -l --since="2 minutes ago" | tail -10
+    # Test Suricata configuration
+    echo "Testing Suricata configuration..."
+    if suricata -T -c /etc/suricata/suricata.yaml >/tmp/suricata-test.log 2>&1; then
+        echo "✅ Suricata configuration is valid"
+
+        # Create log directory with proper permissions
+        mkdir -p /var/log/suricata /var/lib/suricata
+
+        # Ensure suricata user exists
+        if ! id suricata >/dev/null 2>&1; then
+            echo "Creating suricata user..."
+            useradd --system --home-dir /var/lib/suricata --shell /bin/false suricata
         fi
-    else
-        echo "❌ Failed to start Suricata IDS"
-        echo "Checking systemctl status:"
-        systemctl --no-pager status suricata
-        echo ""
-        echo "Recent logs:"
-        journalctl -u suricata --no-pager -l --since="2 minutes ago"
-        echo ""
-        echo "⚠️ Suricata IDS disabled due to startup failure"
-        systemctl disable suricata 2>/dev/null || true
-        echo "   Network monitoring will be limited to other security tools"
-    fi
-else
-    echo "❌ Suricata configuration test failed"
-    echo "Configuration errors:"
-    cat /tmp/suricata-test.log
-    
-    echo "Attempting to fix common Suricata issues..."
-    
-    # Directories and rules file already created above
-    echo "Suricata directories and basic rules file already exist"
-    
-    # Check interface exists
-    if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
-        echo "⚠️ Network interface $INTERFACE not found, using fallback configuration"
-        # Get first available interface
-        FALLBACK_INTERFACE=$(ip -o link show | grep -v lo | head -1 | awk -F': ' '{print $2}')
-        echo "Using fallback interface: $FALLBACK_INTERFACE"
-        
-        # Update Suricata config with fallback interface
-        sed -i "s/interface: $INTERFACE/interface: $FALLBACK_INTERFACE/" /etc/suricata/suricata.yaml
-    fi
-    
-    # Retry configuration test
-    echo "Retesting Suricata configuration with fixes..."
-    if suricata -T -c /etc/suricata/suricata.yaml >/tmp/suricata-retest.log 2>&1; then
-        echo "✅ Suricata configuration"
-        
+
+        # Set proper ownership and permissions
+        chown -R suricata:suricata /var/log/suricata /var/lib/suricata 2>/dev/null || chown -R root:root /var/log/suricata /var/lib/suricata
+        chmod 755 /var/log/suricata /var/lib/suricata
+
+        # Reload systemd configuration
         systemctl daemon-reload
+
+        # Enable Suricata for automatic startup
         systemctl enable suricata
-        
+
+        # Start Suricata with error handling
+        echo "Starting Suricata IDS service..."
         if start_service_with_retry suricata; then
-            echo "✅ Suricata IDS started successfully after fixes"
+            echo "✅ Suricata IDS started successfully"
+
+            # Wait for service to initialize
+            sleep 5
+
+            # Verify Suricata is running
+            if systemctl is-active --quiet suricata; then
+                echo "✅ Suricata IDS is running and monitoring network traffic"
+
+                # Show Suricata status
+                systemctl --no-pager status suricata | head -10
+            else
+                echo "⚠️ Suricata started but may not be fully operational"
+                echo "Checking Suricata logs:"
+                journalctl -u suricata --no-pager -l --since="2 minutes ago" | tail -10
+            fi
         else
-            echo "❌ Suricata still fails to start - disabling"
+            echo "❌ Failed to start Suricata IDS"
+            echo "Checking systemctl status:"
+            systemctl --no-pager status suricata
+            echo ""
+            echo "Recent logs:"
+            journalctl -u suricata --no-pager -l --since="2 minutes ago"
+            echo ""
+            echo "⚠️ Suricata IDS disabled due to startup failure"
             systemctl disable suricata 2>/dev/null || true
-            echo "⚠️ Suricata IDS disabled - network monitoring limited"
+            echo "   Network monitoring will be limited to other security tools"
         fi
     else
-        echo "❌ Suricata configuration still invalid"
-        echo "Final error details:"
-        cat /tmp/suricata-retest.log
-        
-        # Disable Suricata if it still invalid
-        systemctl disable suricata 2>/dev/null || true
-        echo "⚠️ Suricata IDS disabled due to configuration errors"
-        echo "   Other security tools (fail2ban, auditd) will provide protection"
-        echo "   Manual Suricata configuration may be required"
-    fi
-fi
+        echo "❌ Suricata configuration test failed"
+        echo "Configuration errors:"
+        cat /tmp/suricata-test.log
 
-# Cleanup test logs
-rm -f /tmp/suricata-test.log /tmp/suricata-retest.log
+        echo "Attempting to fix common Suricata issues..."
+
+        # Directories and rules file already created above
+        echo "Suricata directories and basic rules file already exist"
+
+        # Check interface exists
+        if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
+            echo "⚠️ Network interface $INTERFACE not found, using fallback configuration"
+            # Get first available interface
+            FALLBACK_INTERFACE=$(ip -o link show | grep -v lo | head -1 | awk -F': ' '{print $2}')
+            echo "Using fallback interface: $FALLBACK_INTERFACE"
+
+            # Update Suricata config with fallback interface
+            sed -i "s/interface: $INTERFACE/interface: $FALLBACK_INTERFACE/" /etc/suricata/suricata.yaml
+        fi
+
+        # Retry configuration test
+        echo "Retesting Suricata configuration with fixes..."
+        if suricata -T -c /etc/suricata/suricata.yaml >/tmp/suricata-retest.log 2>&1; then
+            echo "✅ Suricata configuration"
+
+            systemctl daemon-reload
+            systemctl enable suricata
+
+            if start_service_with_retry suricata; then
+                echo "✅ Suricata IDS started successfully after fixes"
+            else
+                echo "❌ Suricata still fails to start - disabling"
+                systemctl disable suricata 2>/dev/null || true
+                echo "⚠️ Suricata IDS disabled - network monitoring limited"
+            fi
+        else
+            echo "❌ Suricata configuration still invalid"
+            echo "Final error details:"
+            cat /tmp/suricata-retest.log
+
+            # Disable Suricata if it still invalid
+            systemctl disable suricata 2>/dev/null || true
+            echo "⚠️ Suricata IDS disabled due to configuration errors"
+            echo "   Other security tools (fail2ban, auditd) will provide protection"
+            echo "   Manual Suricata configuration may be required"
+        fi
+    fi
+
+    # Cleanup test logs
+    rm -f /tmp/suricata-test.log /tmp/suricata-retest.log
+fi
 
 echo "===== 10. Setting up comprehensive logging and monitoring ====="
 
@@ -3341,10 +3496,12 @@ EOF
 # Restart rsyslog to apply new configuration
 systemctl restart rsyslog
 
-# Configure chkrootkit
-echo "===== 10.1 Configuring chkrootkit ====="
-# Create chkrootkit scan script with proper log handling
-cat > /etc/cron.daily/chkrootkit-scan << EOF
+if [ "$INSTALL_RKHUNTER" = true ]; then
+    # Configure chkrootkit
+    echo "===== 10.1 Configuring chkrootkit ====="
+
+    # Create chkrootkit scan script with proper log handling
+    cat > /etc/cron.daily/chkrootkit-scan << EOF
 #!/bin/bash
 # Run a daily chkrootkit scan
 
@@ -3410,23 +3567,26 @@ if grep -q "INFECTED" "\$TODAY_LOG"; then
 fi
 EOF
 
-chmod 755 /etc/cron.daily/chkrootkit-scan
+    chmod 755 /etc/cron.daily/chkrootkit-scan
 
-# Run initial chkrootkit scan to create baseline
-echo "Running initial chkrootkit scan to create baseline..."
-mkdir -p /var/log/chkrootkit
-/etc/cron.daily/chkrootkit-scan
+    # Run initial chkrootkit scan to create baseline
+    echo "Running initial chkrootkit scan to create baseline..."
+    mkdir -p /var/log/chkrootkit
+    /etc/cron.daily/chkrootkit-scan
 
-echo ""
-echo "📝 IMPORTANT: chkrootkit baseline setup"
-echo "The initial chkrootkit baseline was created, but you should update it after"
-echo "all services are running and the system is in its final state."
-echo ""
-echo "After 24-48 hours of operation, run this command to update the baseline:"
-echo "  sudo cp -a -f /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected"
-echo ""
-echo "This will eliminate false positives from legitimate security tools like Suricata."
-echo ""
+    echo ""
+    echo "📝 IMPORTANT: chkrootkit baseline setup"
+    echo "The initial chkrootkit baseline was created, but you should update it after"
+    echo "all services are running and the system is in its final state."
+    echo ""
+    echo "After 24-48 hours of operation, run this command to update the baseline:"
+    echo "  sudo cp -a -f /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected"
+    echo ""
+    echo "This will eliminate false positives from legitimate security tools like Suricata."
+    echo ""
+else
+    echo "⏭️ Rootkit detection tools not selected - skipping chkrootkit configuration"
+fi
 
 # Configure Logcheck (make it less noisy - logwatch provides better daily reports)
 echo "===== 10.2 Configuring Logcheck (minimal noise) ====="
@@ -4489,13 +4649,18 @@ net.ipv4.conf.all.accept_source_route = 0
 net.ipv4.conf.default.accept_source_route = 0
 net.ipv4.conf.all.log_martians = 1
 net.ipv4.conf.default.log_martians = 1
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
 net.ipv4.icmp_echo_ignore_broadcasts = 1
 net.ipv4.icmp_ignore_bogus_error_responses = 1
 net.ipv4.tcp_syncookies = 1
 
-# IPv6 security (disable if not needed)
-net.ipv6.conf.all.disable_ipv6 = 1
-net.ipv6.conf.default.disable_ipv6 = 1
+# IPv6 security configuration (keep enabled for modern infrastructure)
+net.ipv6.conf.all.accept_ra = 0
+net.ipv6.conf.default.accept_ra = 0
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv6.conf.default.accept_redirects = 0
+net.ipv6.conf.all.forwarding = 0
 
 # Process security
 kernel.dmesg_restrict = 1
@@ -4506,6 +4671,17 @@ kernel.yama.ptrace_scope = 1
 fs.suid_dumpable = 0
 fs.protected_hardlinks = 1
 fs.protected_symlinks = 1
+
+# Debian 13 Trixie security enhancements
+# Control Flow Integrity (CFI) hardening - available on supported hardware
+# Note: These features are automatically enabled by the kernel on supported CPUs
+# Intel CET (Control-flow Enforcement Technology) - amd64
+# ARM PAC (Pointer Authentication) and BTI (Branch Target Identification) - arm64
+# No explicit kernel parameters needed as they're enabled at compile time
+
+# Additional memory protection
+vm.mmap_rnd_bits = 32
+vm.mmap_rnd_compat_bits = 16
 EOF
 
 # Apply kernel parameters
@@ -5289,57 +5465,26 @@ chmod +x /usr/local/bin/setup-log-tmpfs
 echo "✅ Emergency tmpfs script created (/usr/local/bin/setup-log-tmpfs)"
 echo "💡 Run setup-log-tmpfs only in critical disk space emergencies"
 
-echo "===== 14.7 Advanced Security Refinements ====="
-echo "Removing AppArmor entirely for bastion host compatibility..."
+echo "===== 14.7 AppArmor Security Hardening ====="
+echo "Configuring AppArmor for enhanced bastion security..."
 
-# Stop AppArmor service
-systemctl stop apparmor 2>/dev/null || true
+# Ensure AppArmor is enabled and running
+systemctl enable apparmor 2>/dev/null || true
+systemctl start apparmor 2>/dev/null || true
 
-# Disable AppArmor service
-systemctl disable apparmor 2>/dev/null || true
-
-# Remove AppArmor profiles to prevent interference
-if [ -d /etc/apparmor.d ]; then
-    echo "Backing up AppArmor profiles before removal..."
-    tar -czf /var/backups/apparmor-profiles-backup-"$(date +%Y%m%d)".tar.gz /etc/apparmor.d/ 2>/dev/null || true
-    
-    # Clear all profiles
-    echo "Removing AppArmor profiles..."
-    rm -rf /etc/apparmor.d/* 2>/dev/null || true
-fi
-
-# Remove AppArmor packages completely
-echo "Removing AppArmor packages..."
-wait_for_dpkg_lock
-apt-get purge -y apparmor apparmor-utils apparmor-profiles apparmor-profiles-extra 2>/dev/null || true
-apt-get autoremove -y 2>/dev/null || true
-
-# Unload all AppArmor profiles
-if command -v aa-teardown >/dev/null 2>&1; then
-    echo "Unloading all AppArmor profiles..."
-    aa-teardown 2>/dev/null || true
-fi
-
-# Alternative method to unload profiles
-if [ -f /sys/kernel/security/apparmor/profiles ]; then
-    echo "Force unloading AppArmor profiles..."
-    while read -r profile; do
-        profile_name=$(echo "$profile" | awk '{print $1}')
-        if [ -n "$profile_name" ] && [ "$profile_name" != "unconfined" ]; then
-            echo -n "$profile_name" > /sys/kernel/security/apparmor/.remove 2>/dev/null || true
-        fi
-    done < /sys/kernel/security/apparmor/profiles
-fi
-
-# Verify AppArmor is disabled
+# Verify AppArmor is working
 if command -v aa-status >/dev/null 2>&1; then
-    echo "AppArmor status after removal:"
-    aa-status 2>/dev/null || echo "AppArmor profiles successfully removed"
+    if aa-status >/dev/null 2>&1; then
+        echo "✅ AppArmor is enabled and active"
+        aa-status | head -10
+    else
+        echo "⚠️ AppArmor module not loaded - checking kernel support"
+        # Try to load the module
+        modprobe apparmor 2>/dev/null || echo "AppArmor kernel module not available"
+    fi
 else
-    echo "AppArmor commands not available - profiles removed"
+    echo "⚠️ AppArmor utilities not found - keeping basic installation"
 fi
-
-echo "✅ AppArmor disabled and profiles removed for bastion host compatibility"
 
 # Unattended Reboot Warning System
 echo "Configuring unattended reboot warning system..."
@@ -5390,21 +5535,22 @@ EOF
     echo "✅ Unattended reboot warning system configured"
 fi
 
-# Suricata Rules Maintenance
-echo "Setting up Suricata rules maintenance..."
-if command -v suricata-update >/dev/null 2>&1; then
-    # Configure suricata-update with timeout
-    echo "Configuring Suricata rules update (this may take a moment)..."
-    timeout 60 suricata-update update-sources || echo "⚠️ Suricata update-sources timed out"
-    timeout 30 suricata-update enable-source et/open || echo "⚠️ ET Open source enable failed"
-    timeout 30 suricata-update enable-source oisf/trafficid || echo "⚠️ OISF TrafficID source enable failed"
-    
-    # Create weekly rules update job
-    if [ "$EUID" -ne 0 ]; then
-        echo "⚠️ Not running as root - cannot create Suricata cron job"
-        echo "   Job would be created at: /etc/cron.weekly/suricata-update"
-    else
-        cat > /etc/cron.weekly/suricata-update << EOF
+if [ "$INSTALL_SURICATA" = true ]; then
+    # Suricata Rules Maintenance
+    echo "Setting up Suricata rules maintenance..."
+    if command -v suricata-update >/dev/null 2>&1; then
+        # Configure suricata-update with timeout
+        echo "Configuring Suricata rules update (this may take a moment)..."
+        timeout 60 suricata-update update-sources || echo "⚠️ Suricata update-sources timed out"
+        timeout 30 suricata-update enable-source et/open || echo "⚠️ ET Open source enable failed"
+        timeout 30 suricata-update enable-source oisf/trafficid || echo "⚠️ OISF TrafficID source enable failed"
+
+        # Create weekly rules update job
+        if [ "$EUID" -ne 0 ]; then
+            echo "⚠️ Not running as root - cannot create Suricata cron job"
+            echo "   Job would be created at: /etc/cron.weekly/suricata-update"
+        else
+            cat > /etc/cron.weekly/suricata-update << EOF
 #!/bin/bash
 # Weekly Suricata rules update for bastion host
 
@@ -5426,12 +5572,13 @@ else
     logger -p daemon.error "Suricata rules update failed - configuration test error"
 fi
 EOF
-        
-        chmod +x /etc/cron.weekly/suricata-update
-        echo "✅ Suricata rules auto-update configured"
+
+            chmod +x /etc/cron.weekly/suricata-update
+            echo "✅ Suricata rules auto-update configured"
+        fi
+    else
+        echo "⚠️ suricata-update not available - install with: apt install suricata-update"
     fi
-else
-    echo "⚠️ suricata-update not available - install with: apt install suricata-update"
 fi
 
 # Smart Systemd Service Hardening for Critical Services
@@ -5491,7 +5638,6 @@ ProtectSystem=strict
 ReadWritePaths=/var/log /var/run /run
 EOF
 
-
     # Unbound DNS watchdog - essential for bastion name resolution
     mkdir -p /etc/systemd/system/unbound.service.d
     cat > /etc/systemd/system/unbound.service.d/watchdog.conf << EOF
@@ -5538,7 +5684,7 @@ HIGH_MEMORY_THRESHOLD=85
 CRITICAL_MEMORY_THRESHOLD=95
 
 # Whitelist of critical processes that should never be killed (ENHANCED FOR SAFETY)
-CRITICAL_PROCESSES="sshd|systemd|kernel|init|fail2ban|ufw|auditd|rsyslog|netdata|postfix|cron|dbus|networkd|resolved|bastion"
+CRITICAL_PROCESSES="sshd|systemd|kernel|init|fail2ban|ufw|auditd|rsyslog|postfix|cron|dbus|networkd|resolved|bastion|apt|dpkg|unattended"
 
 # Function to log with timestamp
 log_message() {
@@ -6060,6 +6206,14 @@ fi
 # Restart SSH with new configuration
 echo "===== 16. Restarting SSH service ====="
 systemctl restart sshd
+
+# Verify SSH is running only on target port and clean up port 22
+if ss -tnlp | grep -q ":$SSH_PORT.*sshd"; then
+  sed -i '/^Port 22$/d' /etc/ssh/sshd_config
+  systemctl reload ssh
+  ufw delete allow 22/tcp || true
+  echo "✅ SSH now running only on port $SSH_PORT"
+fi
 
 # Final system checks
 echo "===== 17. Final system validation ====="

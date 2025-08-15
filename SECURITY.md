@@ -1,22 +1,77 @@
-# Security Considerations for Application Deployment
+# PolyServer Security Framework
 
-This document outlines essential security considerations for your Application deployment, which has access to company data and requires appropriate security measures.
+This document outlines the comprehensive security measures implemented by PolyServer for hardened Debian 13 server deployments.
 
-> **Important**: See [DSGVO.md](./DSGVO.md) for GDPR compliance documentation.
+> **Important**: See [DSGVO.md](./DSGVO.md) for GDPR compliance documentation and [GDPR-COMPLIANCE-ROADMAP.md](./GDPR-COMPLIANCE-ROADMAP.md) for implementation guidance.
 
-## Key Security Measures Implemented
+## Comprehensive Security Implementation
 
-This deployment implements multiple layers of security:
+PolyServer implements defense-in-depth security with 25+ integrated security tools and frameworks:
 
-| Security Layer | Implementation |
-|----------------|----------------|
-| Access Control | SSH key-only authentication, strong passwords |
-| Network Security | Firewall (UFW), rate limiting, ModSecurity WAF |
-| TLS Encryption | Auto-renewed certificates with HSTS enforcement |
-| Container Security | Limited privileges, resource constraints, AppArmor profiles |
-| Data Protection | Backups encrypted at rest, secure database connections |
-| Monitoring | Netdata metrics, advanced logging, intrusion detection |
-| GDPR Compliance | Data breach procedures, subject request handling |
+| Security Domain | Implementation | Tools Used |
+|----------------|----------------|------------|
+| **SSH Hardening** | Post-quantum cryptography, restricted access | OpenSSH with hybrid key exchange, fail2ban |
+| **Network Security** | Dual-stack firewall, intrusion detection | UFW/nftables, Suricata IDS, ModSecurity WAF |
+| **Access Control** | Restrictive sudo, MAC, SSH key-only auth | AppArmor, sudoers with Cmnd_Alias, SSH keys |
+| **DNS Security** | DNSSEC validation, secure caching | Unbound with dual-stack IPv4/IPv6 support |
+| **Malware Protection** | Optional multi-layer malware detection | ClamAV, Linux Malware Detect, RKHunter, chkrootkit (configurable) |
+| **Container Security** | Vulnerability scanning, secure runtime | Trivy scanner, Docker security optimizations |
+| **Audit & Monitoring** | Comprehensive system auditing | auditd, Netdata, file integrity monitoring |
+| **Update Management** | Automated security updates | Unattended upgrades with restart management |
+| **Incident Response** | Automated response, forensics tools | Breach response scripts, forensics collection |
+| **GDPR Compliance** | Complete compliance toolkit | Data subject request handling, breach procedures |
+
+## Security Architecture
+
+### 🔐 **SSH and Access Control**
+
+#### Post-Quantum Cryptographic Security
+- **Hybrid key exchange**: `sntrup761x25519-sha512@openssh.com` - quantum-resistant + classical security
+- **Strong ciphers**: `chacha20-poly1305@openssh.com`, `aes256-gcm@openssh.com`
+- **Modern MAC algorithms**: `umac-128-etm@openssh.com`, `hmac-sha2-256-etm@openssh.com`
+- **Ed25519 host keys**: High-security elliptic curve cryptography
+
+#### Access Restrictions
+- **SSH key-only authentication** (password auth disabled for production)
+- **Custom SSH port** (default: 2222) to reduce automated attacks
+- **Connection limits**: MaxAuthTries=3, MaxSessions=10
+- **Timeout protection**: ClientAliveInterval=300, ClientAliveCountMax=2
+- **Network restrictions**: AllowUsers from specific subnets only
+
+#### Sudo Security Hardening
+- **Restrictive sudoers**: Cmnd_Alias with exact paths only (no wildcards)
+- **Bastion user restrictions**: Limited to SSH restart, status checking, specific log access
+- **Secure PATH enforcement**: Prevents PATH manipulation attacks
+- **No blanket privileges**: Removed dangerous `ALL` NOPASSWD configurations
+
+### 🛡️ **Network Security**
+
+#### Multi-Layer Firewall Protection
+- **UFW with nftables backend**: Modern packet filtering with IPv6 support
+- **fail2ban integration**: Automatic IP blocking for SSH brute force attempts
+- **Rate limiting**: Connection throttling to prevent DoS attacks
+- **Port security**: Only essential ports open (SSH, HTTP, HTTPS)
+
+#### Web Application Security
+- **ModSecurity WAF**: OWASP Core Rule Set for web application protection
+- **Security headers**: HSTS, CSP, X-Frame-Options, X-Content-Type-Options
+- **SSL/TLS hardening**: Modern cipher suites, perfect forward secrecy
+- **Rate limiting**: Request throttling to prevent abuse
+
+#### Network Intrusion Detection
+- **Suricata IDS**: Real-time network traffic analysis and threat detection
+- **Custom rule sets**: Tailored rules for server-specific threat patterns
+- **Alert integration**: Automatic notification system for security events
+- **Traffic logging**: Comprehensive network activity monitoring
+
+### 🔍 **DNS and Network Integrity**
+
+#### Secure DNS Resolution
+- **Unbound DNS resolver**: Local caching with DNSSEC validation
+- **Dual-stack support**: IPv4 and IPv6 with security parity
+- **DNSSEC validation**: Cryptographic verification of DNS responses
+- **Fallback DNS**: Google (8.8.8.8) and Cloudflare (1.1.1.1) for reliability
+- **DNS over TLS**: Encrypted DNS queries for privacy protection
 
 ## Security Recommendations
 

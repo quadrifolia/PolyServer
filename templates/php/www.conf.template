@@ -1,0 +1,77 @@
+# PHP-FPM Pool Configuration for PolyServer
+# Optimized for performance and security based on system resources
+
+[www]
+user = www-data
+group = www-data
+
+# Socket configuration (secure Unix domain socket)
+listen = /run/php/php8.4-fpm.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+
+# Pool management - resource-optimized
+pm = dynamic
+pm.max_children = {{PHP_MAX_CHILDREN}}
+pm.start_servers = {{PHP_START_SERVERS}}
+pm.min_spare_servers = {{PHP_MIN_SPARE_SERVERS}}
+pm.max_spare_servers = {{PHP_MAX_SPARE_SERVERS}}
+pm.max_requests = {{PHP_MAX_REQUESTS}}
+
+# Process management timeouts
+pm.process_idle_timeout = 10s
+
+# Status monitoring
+pm.status_path = /fpm-status
+pm.status_listen = 127.0.0.1:9001
+
+# Ping monitoring  
+ping.path = /fpm-ping
+ping.response = pong
+
+# Security settings
+security.limit_extensions = .php
+
+# PHP settings
+php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,curl_exec,curl_multi_exec,parse_ini_file,show_source
+php_admin_flag[allow_url_fopen] = off
+php_admin_flag[allow_url_include] = off
+php_admin_flag[log_errors] = on
+php_admin_flag[display_errors] = off
+php_admin_flag[display_startup_errors] = off
+php_admin_value[log_errors_max_len] = 1024
+php_admin_value[memory_limit] = {{PHP_MEMORY_LIMIT}}M
+php_admin_value[max_execution_time] = {{PHP_MAX_EXECUTION_TIME}}
+php_admin_value[max_input_time] = {{PHP_MAX_INPUT_TIME}}
+php_admin_value[post_max_size] = {{PHP_POST_MAX_SIZE}}M
+php_admin_value[upload_max_filesize] = {{PHP_UPLOAD_MAX_FILESIZE}}M
+php_admin_value[max_file_uploads] = 20
+
+# Session security
+php_admin_value[session.cookie_httponly] = 1
+php_admin_value[session.cookie_secure] = 1
+php_admin_value[session.use_strict_mode] = 1
+php_admin_value[session.cookie_samesite] = "Strict"
+
+# Error and access logging
+access.log = /var/log/php/access.log
+access.format = "%R - %u %t \"%m %r%Q%q\" %s %f %{mili}d %{kilo}M %C%%"
+
+# Optional: Slow query logging (if enabled)
+{{#PHP_SLOW_LOG_ENABLED}}
+slowlog = /var/log/php/slow.log
+request_slowlog_timeout = {{PHP_SLOW_LOG_TIMEOUT}}s
+{{/PHP_SLOW_LOG_ENABLED}}
+
+# Optional: Request termination timeout (if enabled)
+{{#PHP_REQUEST_TERMINATE_TIMEOUT}}
+request_terminate_timeout = {{PHP_REQUEST_TERMINATE_TIMEOUT}}s
+{{/PHP_REQUEST_TERMINATE_TIMEOUT}}
+
+# Environment variables
+env[HOSTNAME] = $HOSTNAME
+env[PATH] = /usr/local/bin:/usr/bin:/bin
+env[TMP] = /tmp
+env[TMPDIR] = /tmp
+env[TEMP] = /tmp

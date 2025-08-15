@@ -107,8 +107,8 @@ PolyServer is a foundational security-hardened Debian server setup repository de
 
 After deploying the base server, additional deployment scripts and workflows should be created for specific applications:
 
-- **React/Next.js + PM2**: Frontend application deployment
-- **PHP Backend**: PHP-FPM and backend service configuration
+- **React/Next.js + PM2**: Frontend application deployment with Node.js 22.x LTS  
+- **PHP Backend**: PHP-FPM 8.4 and backend service configuration
 - **Other Applications**: Custom application-specific configurations
 
 ## Security & Compliance Features
@@ -137,6 +137,115 @@ After deploying the base server, additional deployment scripts and workflows sho
 - **Log Management**: Logwatch and logcheck for system monitoring
 - **Resource Monitoring**: Comprehensive system resource tracking
 
+## Advanced Security Features (Optional)
+
+The main server setup now includes optional advanced security features inspired by the bastion host configuration:
+
+### Resource Guardian System
+- **Purpose**: Proactive resource monitoring and management to prevent system overload
+- **Configuration**: Conservative production-safe thresholds
+  - CPU monitoring: 85% threshold for 10+ minutes (with 2-minute warning)
+  - Memory monitoring: 90% warning, 95% critical with emergency cleanup
+  - Load average alerts: 2x CPU count threshold
+- **Safety Features**: 
+  - Email alerts for all actions
+  - Grace periods before termination
+  - Protection of critical system processes
+- **Usage**: Optional during setup, runs every 5 minutes via systemd timer
+
+### Advanced Monitoring Commands
+- **serverstatus**: Comprehensive server health and status report
+  - System information, resource usage, service status
+  - Recent security events and resource alerts
+  - Can be run by any user without special privileges
+  
+- **logmon [type]**: Real-time log monitoring with filtering
+  - Types: auth, security, system, nginx, all
+  - Requires sudo for log file access
+  - Intelligent filtering for relevant security events
+
+- **servermail**: Local system mail reader
+  - Reads system notifications and security alerts
+  - Works with local mail delivery setup
+  - Alternative to external email configuration
+
+### Enhanced Systemd Resource Management
+- **Priority-based service scheduling**:
+  - SSH: Highest priority (OOM -300, Nice -8) with security hardening
+  - fail2ban: High priority (OOM -100, Nice -5) for security protection
+  - Suricata: Medium priority (OOM +100, Nice +5) for network monitoring  
+  - Nginx: Standard priority (OOM +50, Nice 0) with security hardening
+- **Security hardening**: PrivateTmp, ProtectSystem for critical services
+- **Enhanced restart policies**: Intelligent failure handling and recovery
+
+## Optional Application Components
+
+The main server setup now includes a comprehensive optional component installation system for modern web development stacks:
+
+### Web Development Stack
+- **Docker**: Latest version with security-optimized configuration
+  - Secure daemon.json with restricted networking and resource limits
+  - Systemd security hardening (NoNewPrivileges, ProtectKernelModules)
+  - Custom network ranges and security options
+  
+- **Nginx Unit**: Modern application server supporting multiple languages
+  - Built-in PHP, Python, Go, JavaScript support
+  - Systemd security hardening and resource management
+  - API-driven configuration via Unix socket
+
+- **PHP 8.4**: Latest PHP with php-fpm and security optimizations (from official Debian 13 repositories)
+  - Comprehensive extension set (MySQL, PostgreSQL, Redis, etc.)
+  - Security-hardened configuration (disabled dangerous functions)
+  - Production-ready OPcache settings
+  - Optional development tools (Composer, Xdebug)
+
+### Database Systems
+- **MariaDB**: MySQL-compatible database with security defaults
+  - Automatic secure installation
+  - Localhost-only binding and secure file privileges
+  - Optimized resource limits
+  
+- **PostgreSQL**: Advanced relational database with security configuration
+  - Secure authentication (md5 instead of peer)
+  - Localhost-only listening
+  - Production-ready default settings
+  
+- **Redis**: In-memory data structure store
+  - Password protection and localhost-only binding
+  - Memory limits and LRU eviction policy
+  - Secure default configuration
+
+### Node.js Development Environment
+- **Node.js LTS**: Latest long-term support version
+  - NPM included with security defaults
+  - **PM2**: Production process manager with startup configuration
+  
+- **Development Tools** (optional):
+  - Yarn package manager
+  - TypeScript with type definitions
+  - Essential development tools (ESLint, Prettier, Nodemon)
+
+### Development Tools
+- **Git**: Version control with optimized global configuration
+  - Security-focused defaults (main branch, safe CRLF handling)
+  - Useful aliases and colored output
+  - Production-ready configuration
+
+### Configuration Requirements
+All components require minimal user input and use secure defaults:
+- **Database passwords**: Auto-generated secure passwords (32-character base64)
+- **Redis authentication**: Auto-generated password protection
+- **Security settings**: All services configured with security-first approach
+- **Resource limits**: Production-appropriate resource allocation
+- **Systemd hardening**: Security features enabled for all services
+
+### User Experience
+- **Interactive installation**: Clear prompts with explanations
+- **Grouped selections**: Related components grouped logically
+- **Dependency management**: Automatic handling of component dependencies
+- **Validation**: All installations tested and verified
+- **Documentation**: Each component provides usage information post-install
+
 ## Best Practices
 
 - This repository provides the **foundation layer** only
@@ -144,3 +253,4 @@ After deploying the base server, additional deployment scripts and workflows sho
 - All security configurations are application-agnostic
 - DSGVO compliance tools work for any application type
 - Templates can be customized while maintaining security standards
+- **New**: Advanced features are optional and production-safe by design
