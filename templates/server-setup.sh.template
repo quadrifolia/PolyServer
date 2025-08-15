@@ -61,6 +61,11 @@ LOGWATCH_EMAIL="{{LOGWATCH_EMAIL}}"       # Logwatch notification email
 NETDATA_ENABLED="{{NETDATA_ENABLED}}"     # Enable Netdata monitoring
 DEPLOYMENT_MODE="{{DEPLOYMENT_MODE}}"     # Deployment mode (docker/standalone)
 
+# Optional Security Components (resource-conscious defaults)
+: "${INSTALL_CLAMAV:=false}"              # Install ClamAV antivirus (high resource usage)
+: "${INSTALL_RKHUNTER:=false}"            # Install rootkit detection tools (low resource usage)  
+: "${INSTALL_SURICATA:=false}"            # Install Suricata IDS (medium resource usage)
+
 # SMTP Configuration from defaults.env
 SMTP_ENABLED="{{SMTP_ENABLED}}"
 SMTP_SERVER="{{SMTP_SERVER}}"
@@ -868,58 +873,25 @@ else
     # Environment file already has nginx as default, no change needed
 fi
 
-echo "===== 6.1. Optional Security Components ====="
-echo "Choose additional security tools to install. Each tool provides specific protection but uses system resources."
-echo ""
-
-# Optional security components configuration
-SECURITY_COMPONENTS=""
-
-# ClamAV Antivirus
-echo "📡 ClamAV Antivirus Scanner:"
-echo "   • Provides: Real-time malware detection, scheduled system scans, email protection"
-echo "   • Resource usage: HIGH (500MB+ RAM, significant CPU during scans)" 
-echo "   • Best for: Production servers, mail servers, file servers"
-echo "   • Skip if: Small VPS (<2GB RAM), containers, minimal footprint deployments"
-echo ""
-read -p "Install ClamAV antivirus scanner? (Y/n): " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-    SECURITY_COMPONENTS="$SECURITY_COMPONENTS clamav"
-fi
-
-# Rootkit Detection
-echo "🔍 Rootkit Detection Tools (rkhunter + chkrootkit):"
-echo "   • Provides: Daily rootkit scans, system integrity verification, backdoor detection"
-echo "   • Resource usage: LOW (minimal RAM, CPU during daily scans only)"
-echo "   • Best for: All servers - essential for compromise detection"
-echo "   • Skip if: Highly constrained container environments only"
-echo ""
-read -p "Install rootkit detection tools? (Y/n): " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-    SECURITY_COMPONENTS="$SECURITY_COMPONENTS rootkit-detection"
-fi
-
-# Suricata IDS (only for bare metal)
+echo "===== 6.1 Security Components Configuration ====="
+echo "Security components are configured via environment variables:"
+echo "• INSTALL_CLAMAV=$INSTALL_CLAMAV (File scanning - HIGH resource usage)"
+echo "• INSTALL_RKHUNTER=$INSTALL_RKHUNTER (Rootkit detection - LOW resource usage)"
 if [ "$DOCKER_MODE" = "false" ]; then
-    echo "🛡️ Suricata Network Intrusion Detection:"
-    echo "   • Provides: Real-time network threat detection, traffic analysis, attack prevention"
-    echo "   • Resource usage: MEDIUM (200MB+ RAM, moderate CPU for packet inspection)"
-    echo "   • Best for: Internet-facing servers, high-value targets"
-    echo "   • Skip if: Internal servers, limited bandwidth, minimal attack surface"
-    echo ""
-    read -p "Install Suricata intrusion detection system? (Y/n): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-        SECURITY_COMPONENTS="$SECURITY_COMPONENTS suricata"
-    fi
+    echo "• INSTALL_SURICATA=$INSTALL_SURICATA (Network IDS - MEDIUM resource usage)"
 fi
+echo ""
 
 echo "===== 6.2 Installing core packages and web server ====="
 
 # Core security packages (always installed)
 CORE_PACKAGES="fail2ban unattended-upgrades apt-listchanges gnupg-agent logwatch apparmor apparmor-utils git awscli"
+
+# Add optional security packages based on environment variables
+OPTIONAL_PACKAGES=""
+[ "$INSTALL_CLAMAV" = true ] && OPTIONAL_PACKAGES="$OPTIONAL_PACKAGES clamav clamav-daemon"
+[ "$INSTALL_RKHUNTER" = true ] && OPTIONAL_PACKAGES="$OPTIONAL_PACKAGES rkhunter chkrootkit"
+[ "$INSTALL_SURICATA" = true ] && OPTIONAL_PACKAGES="$OPTIONAL_PACKAGES suricata"
 
 # Web server specific packages
 if [ "$WEB_SERVER_TYPE" = "unit" ]; then
@@ -944,11 +916,19 @@ fi
 
 if [ "$DOCKER_MODE" = "true" ]; then
     # Docker-compatible package list
-    apt-get install -y $CORE_PACKAGES $WEB_SERVER_PACKAGES lm-sensors
+    apt-get install -y $CORE_PACKAGES $WEB_SERVER_PACKAGES $OPTIONAL_PACKAGES lm-sensors
 else
     # Full package list for production servers
-    apt-get install -y $CORE_PACKAGES $WEB_SERVER_PACKAGES lm-sensors hddtemp unbound
+    apt-get install -y $CORE_PACKAGES $WEB_SERVER_PACKAGES $OPTIONAL_PACKAGES lm-sensors hddtemp unbound
 fi
+
+# Display installed optional security components
+echo "✅ Security package installation completed"
+INSTALLED_COMPONENTS=""
+[ "$INSTALL_CLAMAV" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS clamav"
+[ "$INSTALL_RKHUNTER" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS rkhunter"
+[ "$INSTALL_SURICATA" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS suricata"
+echo "Installed optional security components:${INSTALLED_COMPONENTS:-none}"
 
 # Web server specific post-installation configuration
 if [ "$WEB_SERVER_TYPE" = "unit" ]; then
@@ -976,24 +956,7 @@ else
     fi
 fi
 
-echo "===== 6.2 Installing selected security components ====="
-if [[ $SECURITY_COMPONENTS == *"clamav"* ]]; then
-    echo "Installing ClamAV antivirus scanner..."
-    apt-get install -y clamav clamav-daemon
-fi
-
-if [[ $SECURITY_COMPONENTS == *"rootkit-detection"* ]]; then
-    echo "Installing rootkit detection tools..."
-    apt-get install -y rkhunter chkrootkit  
-fi
-
-if [[ $SECURITY_COMPONENTS == *"suricata"* ]]; then
-    echo "Installing Suricata intrusion detection system..."
-    apt-get install -y suricata
-fi
-
-echo "✅ Security package installation completed"
-echo "Installed components: $SECURITY_COMPONENTS"
+# Security packages are now installed with the main package installation above
 
 echo "===== 6.0.1 Installing CPU microcode updates ====="
 
@@ -1856,9 +1819,13 @@ if [ "$DOCKER_MODE" = "false" ]; then
 # Enable IPv6 support for modern infrastructure
 allowipv6 = yes
 
-# Use UFW for consistent firewall management (works with both iptables and nftables)
+# Use systemd backend for Debian 13 reliability
+backend = systemd
+
+# Use UFW/nftables for Debian 13 firewall management
 banaction = ufw
-action = ufw[blocktype=reject]
+banaction_allports = ufw
+action = %(banaction)s[blocktype=reject]
 
 [sshd]
 enabled = true
@@ -1915,7 +1882,7 @@ fi
 
 echo "===== 8. Configuring selected security components ====="
 
-if [[ $SECURITY_COMPONENTS == *"clamav"* ]]; then
+if [ "$INSTALL_CLAMAV" = true ]; then
     echo "===== 8.1 Configuring ClamAV with resource optimization ====="
     # Optimize ClamAV for production server environment with resource awareness
     # This prevents ClamAV from consuming excessive CPU/memory that could impact applications
@@ -2174,7 +2141,7 @@ else
     echo "⏭️ ClamAV antivirus not selected - skipping configuration"
 fi
 
-if [[ $SECURITY_COMPONENTS == *"clamav"* ]]; then
+if [ "$INSTALL_CLAMAV" = true ]; then
     # Install Linux Malware Detect (maldet) - complement to ClamAV
     echo "===== 8.2 Installing Linux Malware Detect (maldet) ====="
 # Create temporary directory for installation

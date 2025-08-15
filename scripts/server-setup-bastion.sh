@@ -288,6 +288,11 @@ SSH_LOGIN_GRACE_TIME="30"               # SSH login grace time
 SSH_CLIENT_ALIVE_INTERVAL="300"         # Keep alive interval
 SSH_CLIENT_ALIVE_COUNT_MAX="2"          # Max keep alive attempts
 
+# Optional Security Components (defaults to false for resource-conscious bastions)
+: "${INSTALL_CLAMAV:=false}"            # Install ClamAV antivirus (high resource usage)
+: "${INSTALL_RKHUNTER:=false}"          # Install rootkit detection tools (low resource usage)
+: "${INSTALL_SURICATA:=false}"          # Install Suricata IDS (medium resource usage)
+
 # Bastion-specific network configuration
 INTERNAL_NETWORK="10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 ALLOWED_INTERNAL_PORTS="22,80,443,3306,5432"
@@ -617,7 +622,7 @@ AuthorizedKeysFile .ssh/authorized_keys
 # Forwarding and Tunneling - Essential for bastion functionality
 AllowTcpForwarding yes
 AllowStreamLocalForwarding yes
-AllowAgentForwarding yes
+AllowAgentForwarding no
 PermitTunnel yes
 GatewayPorts no
 
@@ -630,7 +635,7 @@ PrintLastLog yes
 AcceptEnv LANG LC_*
 
 # Subsystems
-# Subsystem sftp /usr/lib/openssh/sftp-server  # Disabled - bastions use SSH tunneling, not file transfers
+Subsystem sftp internal-sftp -f AUTH -l INFO
 
 # Security hardening
 IgnoreRhosts yes
@@ -770,14 +775,14 @@ if [ "$SSH_PORT" != "22" ]; then
     ufw allow in 22/tcp comment "TEMP: Default SSH port (remove after testing new port)"
 fi
 
-# Allow outgoing connections to internal networks on common ports
+# Allow outgoing connections to internal networks on common ports (restricted by destination)
+IFS=',' read -ra NETS <<< "$INTERNAL_NETWORK"
 IFS=',' read -ra PORTS <<< "$ALLOWED_INTERNAL_PORTS"
-for port in "${PORTS[@]}"; do
-    ufw allow out "$port"/tcp comment "Internal network access TCP"
-    # Also allow UDP for DNS and other services that may need it
-    if [ "$port" = "53" ]; then
-        ufw allow out "$port"/udp comment "DNS resolution UDP"
-    fi
+for n in "${NETS[@]}"; do
+  for p in "${PORTS[@]}"; do
+    ufw allow out to "$n" port "$p" proto tcp comment "internal $p"
+    [ "$p" = "53" ] && ufw allow out to "$n" port 53 proto udp comment "internal DNS"
+  done
 done
 
 # Allow outgoing SSH on custom port (for SSH tunneling and forwarding)
@@ -792,6 +797,12 @@ fi
 # Allow outgoing HTTP/HTTPS for updates and monitoring
 ufw allow out 80/tcp comment "HTTP updates"
 ufw allow out 443/tcp comment "HTTPS updates"
+
+# Allow NTP time synchronization (critical for logs and TLS)
+ufw allow out 123/udp comment "NTP time sync"
+
+# Enable NTP synchronization
+systemctl enable --now systemd-timesyncd 2>/dev/null || true
 
 # Allow SMTP port if external SMTP is configured
 if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
@@ -908,16 +919,10 @@ echo ""
 SECURITY_COMPONENTS=""
 
 # ClamAV Antivirus
-echo "📡 ClamAV Antivirus Scanner:"
-echo "   • Provides: File scanning for uploads/downloads through bastion"
-echo "   • Resource usage: HIGH (500MB+ RAM, CPU spikes during scans)"
-echo "   • Best for: Bastions handling file transfers, mail relaying, web access"
-echo "   • Skip if: Network-only bastion, small VPS (<2GB RAM), pure SSH gateway"
-echo ""
-read -p "Install ClamAV antivirus scanner? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    SECURITY_COMPONENTS="$SECURITY_COMPONENTS clamav"
+# Security components are now configured via environment variables
+echo "===== 5.0 Security Components Configuration ====="
+echo "• INSTALL_CLAMAV=$INSTALL_CLAMAV (File scanning - HIGH resource usage)"
+if [ "$INSTALL_CLAMAV" = true ]; then
     # Create ClamAV user before package installation
     if ! id "clamav" &>/dev/null; then
         echo "Creating clamav user before package installation..."
@@ -926,58 +931,28 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     fi
 fi
 
-# Rootkit Detection  
-echo "🔍 Rootkit Detection Tools (rkhunter + chkrootkit):"
-echo "   • Provides: Daily compromise detection, system integrity verification"
-echo "   • Resource usage: LOW (minimal RAM, brief CPU usage during daily scans)"
-echo "   • Best for: ALL bastions - critical for detecting compromise"
-echo "   • Skip if: Only highly constrained environments"
-echo ""
-read -p "Install rootkit detection tools? (Y/n): " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-    SECURITY_COMPONENTS="$SECURITY_COMPONENTS rootkit-detection"
-fi
+echo "• INSTALL_RKHUNTER=$INSTALL_RKHUNTER (Rootkit detection - LOW resource usage)"
 
-# Suricata IDS
-echo "🛡️ Suricata Network Intrusion Detection:"
-echo "   • Provides: Network traffic analysis, intrusion detection, threat monitoring"
-echo "   • Resource usage: MEDIUM (200MB+ RAM, CPU for packet inspection)"
-echo "   • Best for: Internet-facing bastions, high-security environments"  
-echo "   • Skip if: Internal bastions, limited bandwidth, minimal threat model"
+echo "• INSTALL_SURICATA=$INSTALL_SURICATA (Network IDS - MEDIUM resource usage)"
 echo ""
-read -p "Install Suricata intrusion detection? (Y/n): " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-    SECURITY_COMPONENTS="$SECURITY_COMPONENTS suricata"
-fi
 
 echo "===== 5.1 Installing core bastion packages ====="
 # Core packages (always installed for bastion functionality)
 apt-get install -y fail2ban unattended-upgrades apt-listchanges \
-    logwatch lm-sensors unbound \
-    tcpdump netcat-openbsd mailutils postfix
-
-echo "===== 5.2 Installing selected security components ====="
-if [[ $SECURITY_COMPONENTS == *"clamav"* ]]; then
-    echo "Installing ClamAV antivirus scanner..."
-    apt-get install -y clamav clamav-daemon
-fi
-
-if [[ $SECURITY_COMPONENTS == *"rootkit-detection"* ]]; then
-    echo "Installing rootkit detection tools..."
-    apt-get install -y rkhunter chkrootkit
-fi
-
-if [[ $SECURITY_COMPONENTS == *"suricata"* ]]; then
-    echo "Installing Suricata intrusion detection..."
-    apt-get install -y suricata
-fi
+    logwatch lm-sensors unbound apparmor apparmor-utils \
+    tcpdump netcat-openbsd mailutils postfix \
+    $( [ "$INSTALL_CLAMAV" = true ] && echo "clamav clamav-daemon" ) \
+    $( [ "$INSTALL_RKHUNTER" = true ] && echo "rkhunter chkrootkit" ) \
+    $( [ "$INSTALL_SURICATA" = true ] && echo "suricata" )
 
 echo "✅ Bastion security package installation completed"
-echo "Selected components: ${SECURITY_COMPONENTS:-none}"
+INSTALLED_COMPONENTS=""
+[ "$INSTALL_CLAMAV" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS clamav"
+[ "$INSTALL_RKHUNTER" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS rkhunter"
+[ "$INSTALL_SURICATA" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS suricata"
+echo "Installed optional components:${INSTALLED_COMPONENTS:-none}"
 
-if [[ $SECURITY_COMPONENTS == *"clamav"* ]]; then
+if [ "$INSTALL_CLAMAV" = true ]; then
     echo "===== 6.0.1 Configuring ClamAV with resource optimization for bastion hosts ====="
 # Optimize ClamAV for bastion host environment with limited resources
 # This prevents ClamAV from consuming excessive CPU/memory that could impact critical services
@@ -1205,7 +1180,9 @@ echo "   • Memory INCREASED to 1536MB (daemon) / 1024MB (updater)"
 echo "   • Update frequency: 2x daily (instead of 24x)"
 echo "   • Optimized scan limits and timeouts"
 echo "   • Enhanced OOM protection and process isolation"
+fi
 
+if [ "$INSTALL_CLAMAV" = true ]; then
 # Install Linux Malware Detect (maldet) for enhanced malware protection
 echo "===== 7.1 Installing Linux Malware Detect (maldet) ====="
 
@@ -1349,6 +1326,7 @@ echo "   • Manual scan: clamscan -r /path/to/scan"
 echo ""
 echo "⚠️  IMPORTANT: ClamAV services are enabled but not started automatically"
 echo "   Start them manually after verifying system resources are adequate"
+fi
 echo ""
 echo "📋 ClamAV Resource Requirements:"
 echo "   • Memory: Minimum 512MB available RAM"
@@ -2588,7 +2566,7 @@ create_rollback_point "pre-fail2ban"
 bantime = 3600
 findtime = 600
 maxretry = 3
-backend = auto
+backend = systemd
 usedns = warn
 destemail = $LOGWATCH_EMAIL
 sendername = Fail2Ban-Bastion-$HOSTNAME
@@ -2600,9 +2578,10 @@ fail2ban_agent = Fail2Ban/%(fail2ban_version)s
 # Enable IPv6 support for modern infrastructure
 allowipv6 = yes
 
-# Use UFW for consistent firewall management (works with both iptables and nftables)
+# Use UFW/nftables for Debian 13 firewall management
 banaction = ufw
-action = ufw[blocktype=reject]
+banaction_allports = ufw
+action = %(banaction)s[blocktype=reject]
 
 [sshd]
 enabled = true
@@ -3144,6 +3123,7 @@ if [ -z "$BASTION_IP" ]; then
     BASTION_IP=$(hostname -I | awk '{print $1}')
 fi
 
+if [ "$INSTALL_SURICATA" = true ]; then
 echo "Configuring Suricata for interface: $INTERFACE, IP: $BASTION_IP"
     
     # Configure Suricata for bastion host monitoring with HOME_NET
@@ -3515,7 +3495,7 @@ EOF
 # Restart rsyslog to apply new configuration
 systemctl restart rsyslog
 
-if [[ $SECURITY_COMPONENTS == *"rootkit-detection"* ]]; then
+if [ "$INSTALL_RKHUNTER" = true ]; then
     # Configure chkrootkit
     echo "===== 10.1 Configuring chkrootkit ====="
 # Create chkrootkit scan script with proper log handling
@@ -5481,57 +5461,28 @@ chmod +x /usr/local/bin/setup-log-tmpfs
 echo "✅ Emergency tmpfs script created (/usr/local/bin/setup-log-tmpfs)"
 echo "💡 Run setup-log-tmpfs only in critical disk space emergencies"
 
-echo "===== 14.7 Advanced Security Refinements ====="
-echo "Removing AppArmor entirely for bastion host compatibility..."
+echo "===== 14.7 AppArmor Security Hardening ====="
+echo "Configuring AppArmor for enhanced bastion security..."
 
-# Stop AppArmor service
-systemctl stop apparmor 2>/dev/null || true
+# Ensure AppArmor is enabled and running
+systemctl enable apparmor 2>/dev/null || true
+systemctl start apparmor 2>/dev/null || true
 
-# Disable AppArmor service
-systemctl disable apparmor 2>/dev/null || true
-
-# Remove AppArmor profiles to prevent interference
-if [ -d /etc/apparmor.d ]; then
-    echo "Backing up AppArmor profiles before removal..."
-    tar -czf /var/backups/apparmor-profiles-backup-"$(date +%Y%m%d)".tar.gz /etc/apparmor.d/ 2>/dev/null || true
-    
-    # Clear all profiles
-    echo "Removing AppArmor profiles..."
-    rm -rf /etc/apparmor.d/* 2>/dev/null || true
-fi
-
-# Remove AppArmor packages completely
-echo "Removing AppArmor packages..."
-wait_for_dpkg_lock
-apt-get purge -y apparmor apparmor-utils apparmor-profiles apparmor-profiles-extra 2>/dev/null || true
-apt-get autoremove -y 2>/dev/null || true
-
-# Unload all AppArmor profiles
-if command -v aa-teardown >/dev/null 2>&1; then
-    echo "Unloading all AppArmor profiles..."
-    aa-teardown 2>/dev/null || true
-fi
-
-# Alternative method to unload profiles
-if [ -f /sys/kernel/security/apparmor/profiles ]; then
-    echo "Force unloading AppArmor profiles..."
-    while read -r profile; do
-        profile_name=$(echo "$profile" | awk '{print $1}')
-        if [ -n "$profile_name" ] && [ "$profile_name" != "unconfined" ]; then
-            echo -n "$profile_name" > /sys/kernel/security/apparmor/.remove 2>/dev/null || true
-        fi
-    done < /sys/kernel/security/apparmor/profiles
-fi
-
-# Verify AppArmor is disabled
+# Verify AppArmor is working
 if command -v aa-status >/dev/null 2>&1; then
-    echo "AppArmor status after removal:"
-    aa-status 2>/dev/null || echo "AppArmor profiles successfully removed"
+    if aa-status >/dev/null 2>&1; then
+        echo "✅ AppArmor is enabled and active"
+        aa-status | head -10
+    else
+        echo "⚠️ AppArmor module not loaded - checking kernel support"
+        # Try to load the module
+        modprobe apparmor 2>/dev/null || echo "AppArmor kernel module not available"
+    fi
 else
-    echo "AppArmor commands not available - profiles removed"
+    echo "⚠️ AppArmor utilities not found - keeping basic installation"
 fi
 
-echo "✅ AppArmor disabled and profiles removed for bastion host compatibility"
+echo "✅ AppArmor retained for defense-in-depth security"
 
 # Unattended Reboot Warning System
 echo "Configuring unattended reboot warning system..."
@@ -5582,6 +5533,7 @@ EOF
     echo "✅ Unattended reboot warning system configured"
 fi
 
+if [ "$INSTALL_SURICATA" = true ]; then
 # Suricata Rules Maintenance
 echo "Setting up Suricata rules maintenance..."
 if command -v suricata-update >/dev/null 2>&1; then
@@ -5624,6 +5576,7 @@ EOF
     fi
 else
     echo "⚠️ suricata-update not available - install with: apt install suricata-update"
+fi
 fi
 
 # Smart Systemd Service Hardening for Critical Services
