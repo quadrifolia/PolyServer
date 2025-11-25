@@ -446,29 +446,26 @@ echo "===== 1. Updating system packages ====="
 wait_for_dpkg_lock() {
     local timeout=300  # 5 minutes timeout
     local count=0
-    
-    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
+
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+       || fuser /var/cache/apt/archives/lock >/dev/null 2>&1 \
+       || pgrep -x unattended-upgrade >/dev/null 2>&1 \
+       || pgrep -x apt-get >/dev/null 2>&1 \
+       || pgrep -x dpkg >/dev/null 2>&1; do
         if [ $count -ge $timeout ]; then
             echo "⚠️ Timeout waiting for package management lock - continuing anyway"
             break
         fi
-        
+
         if [ $((count % 10)) -eq 0 ]; then
             echo "Waiting for package management to complete... ($count/$timeout seconds)"
             # Show what process is holding the lock
             pgrep -af "(apt|dpkg|unattended)" || true
         fi
-        
+
         sleep 1
         count=$((count + 1))
     done
-}
-
-# Safe dpkg lock waiting function
-wait_for_dpkg_lock() {
-  while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
-     || fuser /var/cache/apt/archives/lock >/dev/null 2>&1 \
-     || pgrep -x unattended-upgrade >/dev/null 2>&1; do sleep 3; done
 }
 
 echo "Checking for running package management processes..."
@@ -5341,6 +5338,10 @@ if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; the
     echo "Downloading Netdata installer..."
     if curl -o /tmp/netdata-kickstart.sh https://get.netdata.cloud/kickstart.sh; then
         echo "Running Netdata installation..."
+        # Wait for any dpkg locks to be released before installation
+        echo "Waiting for package management to be available..."
+        wait_for_dpkg_lock
+
         if [ -n "$NETDATA_CLAIM_TOKEN" ]; then
             echo "Installing with Netdata Cloud integration..."
             sh /tmp/netdata-kickstart.sh --stable-channel --disable-telemetry --claim-token "$NETDATA_CLAIM_TOKEN"
@@ -5353,9 +5354,10 @@ if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; the
         rm -f /tmp/netdata-kickstart.sh
     else
         echo "⚠️ Failed to download Netdata installer, trying fallback method..."
-        
+
         # Fallback: install via package manager
         if command -v apt-get >/dev/null 2>&1; then
+            wait_for_dpkg_lock
             apt-get update
             apt-get install -y netdata
         else
@@ -5950,6 +5952,7 @@ chmod +x /usr/local/bin/resource-guardian
 # Install required dependency
 if ! command -v bc >/dev/null 2>&1; then
     echo "Installing bc calculator for Resource Guardian..."
+    wait_for_dpkg_lock
     apt-get update && apt-get install -y bc
 fi
 
