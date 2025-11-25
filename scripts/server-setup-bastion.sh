@@ -2310,7 +2310,9 @@ if id "$USERNAME" &>/dev/null; then
         chmod +x /tmp/omz-install.sh
 
         # Run with explicit environment variables that will be preserved
-        sudo -u "$USERNAME" env HOME="$USER_HOME" USER="$USERNAME" sh /tmp/omz-install.sh --unattended
+        # IMPORTANT: cd to user's home first, because the installer uses "cd -" to return to $PWD
+        # and the bastion user might not have access to the current directory
+        (cd "$USER_HOME" && sudo -u "$USERNAME" env HOME="$USER_HOME" USER="$USERNAME" sh /tmp/omz-install.sh --unattended)
 
         # Clean up installer
         rm -f /tmp/omz-install.sh
