@@ -1778,11 +1778,10 @@ if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
     
     # Configure postfix for external SMTP relay
     postconf -e "relayhost = [$SMTP_SERVER]:$SMTP_PORT"
-    postconf -e "smtp_use_tls = yes"
+    postconf -e "smtp_tls_security_level = encrypt"
     postconf -e "smtp_sasl_auth_enable = yes"
     postconf -e "smtp_sasl_security_options = noanonymous"
     postconf -e "smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd"
-    postconf -e "smtp_tls_security_level = encrypt"
     postconf -e "smtp_tls_note_starttls_offer = yes"
     postconf -e "smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt"
     
