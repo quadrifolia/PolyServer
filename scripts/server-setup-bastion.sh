@@ -534,18 +534,28 @@ if ! id "$USERNAME" &>/dev/null; then
     
     # Add bastion user to adm group for log access
     usermod -aG adm "$USERNAME"
-    
+
+    # Get the actual home directory created by useradd
+    USER_HOME=$(getent passwd "$USERNAME" | cut -d: -f6)
+
+    if [ -z "$USER_HOME" ]; then
+        echo "❌ Could not determine home directory for newly created user $USERNAME"
+        exit 1
+    fi
+
+    echo "Using home directory: $USER_HOME"
+
     # Create SSH directory for the new user
-    mkdir -p /home/$USERNAME/.ssh
-    chmod 700 /home/$USERNAME/.ssh
-    chown $USERNAME:$USERNAME /home/$USERNAME/.ssh
-    
+    mkdir -p "$USER_HOME/.ssh"
+    chmod 700 "$USER_HOME/.ssh"
+    chown "$USERNAME:$USERNAME" "$USER_HOME/.ssh"
+
     # Set up SSH key if provided
     if [ -n "$SSH_PUBLIC_KEY" ]; then
         echo "Setting up SSH public key for $USERNAME"
-        echo "$SSH_PUBLIC_KEY" > /home/$USERNAME/.ssh/authorized_keys
-        chmod 600 /home/$USERNAME/.ssh/authorized_keys
-        chown $USERNAME:$USERNAME /home/$USERNAME/.ssh/authorized_keys
+        echo "$SSH_PUBLIC_KEY" > "$USER_HOME/.ssh/authorized_keys"
+        chmod 600 "$USER_HOME/.ssh/authorized_keys"
+        chown "$USERNAME:$USERNAME" "$USER_HOME/.ssh/authorized_keys"
         echo "SSH key configured successfully"
     fi
 fi
@@ -2276,18 +2286,31 @@ fi
 # Install Oh My Zsh for bastion user with security-focused plugins
 if id "$USERNAME" &>/dev/null; then
     echo "Installing Oh My Zsh for $USERNAME with security plugins..."
-    # Remove existing Oh My Zsh installation if present to allow reinstall
-    if [ -d "/home/$USERNAME/.oh-my-zsh" ]; then
-        echo "Removing existing Oh My Zsh installation..."
-        sudo -u $USERNAME rm -rf /home/$USERNAME/.oh-my-zsh /home/$USERNAME/.zshrc
-    fi
-    sudo -u $USERNAME sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
-    
-    # Configure with security and network monitoring plugins
-    sudo -u $USERNAME sed -i 's/plugins=(git)/plugins=(git sudo systemd colored-man-pages history-substring-search docker ssh-agent)/' /home/$USERNAME/.zshrc
-    
-    # Add bastion-specific aliases
-    cat >> /home/$USERNAME/.zshrc << EOF
+
+    # Get the actual home directory for the user
+    USER_HOME=$(getent passwd "$USERNAME" | cut -d: -f6)
+
+    if [ -z "$USER_HOME" ] || [ ! -d "$USER_HOME" ]; then
+        echo "⚠️  Could not determine home directory for $USERNAME, skipping Oh My Zsh installation"
+    else
+        echo "Using home directory: $USER_HOME"
+
+        # Remove existing Oh My Zsh installation if present to allow reinstall
+        if [ -d "$USER_HOME/.oh-my-zsh" ]; then
+            echo "Removing existing Oh My Zsh installation..."
+            sudo -u "$USERNAME" rm -rf "$USER_HOME/.oh-my-zsh" "$USER_HOME/.zshrc"
+        fi
+
+        # Install Oh My Zsh with proper HOME environment variable set
+        echo "Downloading and installing Oh My Zsh..."
+        sudo -u "$USERNAME" HOME="$USER_HOME" sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+
+        # Configure with security and network monitoring plugins
+        if [ -f "$USER_HOME/.zshrc" ]; then
+            sudo -u "$USERNAME" sed -i 's/plugins=(git)/plugins=(git sudo systemd colored-man-pages history-substring-search docker ssh-agent)/' "$USER_HOME/.zshrc"
+
+            # Add bastion-specific aliases
+            cat >> "$USER_HOME/.zshrc" << EOF
 
 # Bastion host specific aliases and functions
 alias auth-log='sudo tail -f /var/log/auth.log'
@@ -2320,8 +2343,8 @@ sshmon() {
 }
 EOF
 
-    # Configure vim settings for better bastion administration
-    cat >> /home/$USERNAME/.vimrc << EOF
+            # Configure vim settings for better bastion administration
+            cat >> "$USER_HOME/.vimrc" << EOF
 " Bastion host vim configuration
 " Disable visual mode for security (prevents accidental mouse selections)
 set mouse=
@@ -2335,7 +2358,12 @@ set hlsearch
 set incsearch
 syntax on
 EOF
-    chown $USERNAME:$USERNAME /home/$USERNAME/.vimrc
+            chown "$USERNAME:$USERNAME" "$USER_HOME/.vimrc"
+            echo "✅ Oh My Zsh installed and configured for $USERNAME"
+        else
+            echo "⚠️  Oh My Zsh installation may have failed - .zshrc not found"
+        fi
+    fi
 
     # Create global executable commands for bastion functions
     echo "===== 6.2.2 Creating global bastion commands ====="
@@ -2577,6 +2605,7 @@ port = 0:65535
 fail2ban_agent = Fail2Ban/%(fail2ban_version)s
 # Enable IPv6 support for modern infrastructure
 allowipv6 = yes
+ignoreip = 127.0.0.1/8 ::1 $CLIENT_IP
 
 # Use UFW/nftables for Debian 13 firewall management
 banaction = ufw
@@ -2609,40 +2638,19 @@ bantime = 86400
 findtime = 86400
 maxretry = 5
 
-[systemd]
-enabled = true
-filter = systemd
-logpath = /var/log/syslog
-action = %(banaction)s[name=systemd, port="all"]
-bantime = 3600
-findtime = 600
-maxretry = 5
 EOF
 
 # Create custom filter for SSH brute force detection
 cat > /etc/fail2ban/filter.d/sshd-ddos.conf << EOF
-# Fail2Ban filter for SSH brute force attacks
+# Fail2Ban filter for SSH pre-auth connection floods and non-identifying clients
 [Definition]
-failregex = sshd\[<pid>\]: Did not receive identification string from <HOST>
-            sshd\[<pid>\]: Connection closed by <HOST> port \d+ \[preauth\]
-            sshd\[<pid>\]: Disconnected from <HOST> port \d+ \[preauth\]
-            sshd\[<pid>\]: Connection reset by <HOST> port \d+ \[preauth\]
+failregex = ^%(__prefix_line)sDid not receive identification string from <HOST>\s*$
+            ^%(__prefix_line)sConnection closed by <HOST> port \d+ \[preauth\]$
+            ^%(__prefix_line)sDisconnected from <HOST> port \d+ \[preauth\]$
+            ^%(__prefix_line)sConnection reset by <HOST> port \d+ \[preauth\]$
 ignoreregex =
 EOF
 
-# Create systemd filter for service monitoring
-cat > /etc/fail2ban/filter.d/systemd.conf << EOF
-# Fail2ban filter for systemd service failures
-# Monitors for repeated service failures that could indicate attacks
-
-[Definition]
-failregex = ^.* <HOST>.*systemd.*: Failed to start .*
-            ^.* <HOST>.*systemd.*: Unit .* failed\.
-            ^.* <HOST>.*systemd.*: .* failed with result 'exit-code'\.
-            ^.* <HOST>.*systemd.*: Service .* has failed .*
-
-ignoreregex =
-EOF
 
 # Install and configure rsyslog first (needed for fail2ban)
 echo "Setting up logging system for fail2ban..."
@@ -4612,12 +4620,17 @@ else
 fi
 
 # Also create documentation in bastion user's home directory
-if [ -d "/home/$USERNAME/" ] && [ "$EUID" -eq 0 ]; then
-    if cp "$DOC_PATH" /home/$USERNAME/ 2>/dev/null; then
-        chown $USERNAME:$USERNAME /home/$USERNAME/BASTION-README.md 2>/dev/null || true
-        echo "Documentation created in $DOC_PATH and /home/$USERNAME/BASTION-README.md"
+if [ "$EUID" -eq 0 ] && id "$USERNAME" &>/dev/null; then
+    USER_HOME=$(getent passwd "$USERNAME" | cut -d: -f6)
+    if [ -n "$USER_HOME" ] && [ -d "$USER_HOME" ]; then
+        if cp "$DOC_PATH" "$USER_HOME/" 2>/dev/null; then
+            chown "$USERNAME:$USERNAME" "$USER_HOME/BASTION-README.md" 2>/dev/null || true
+            echo "Documentation created in $DOC_PATH and $USER_HOME/BASTION-README.md"
+        else
+            echo "Documentation created in $DOC_PATH (could not copy to user home directory)"
+        fi
     else
-        echo "Documentation created in $DOC_PATH (could not copy to user home directory)"
+        echo "Documentation created in $DOC_PATH"
     fi
 else
     echo "Documentation created in $DOC_PATH"
@@ -6023,71 +6036,79 @@ if [ -n "$SSH_PUBLIC_KEY" ] && [ -n "$USERNAME" ]; then
     # Verify user exists
     if id "$USERNAME" &>/dev/null; then
         echo "✅ User $USERNAME exists"
-        
-        # Check home directory permissions
-        if [ -d "/home/$USERNAME" ]; then
-            HOME_PERMS=$(stat -c "%a" "/home/$USERNAME")
+
+        # Get the actual home directory for the user
+        USER_HOME=$(getent passwd "$USERNAME" | cut -d: -f6)
+
+        if [ -z "$USER_HOME" ]; then
+            echo "❌ Could not determine home directory for $USERNAME"
+        else
+            echo "Using home directory: $USER_HOME"
+
+            # Check home directory permissions
+            if [ -d "$USER_HOME" ]; then
+            HOME_PERMS=$(stat -c "%a" "$USER_HOME")
             echo "Home directory permissions: $HOME_PERMS"
             if [ "$HOME_PERMS" != "755" ]; then
                 echo "⚠️ Fixing home directory permissions..."
-                chmod 755 "/home/$USERNAME"
+                chmod 755 "$USER_HOME"
                 echo "✅ Home directory permissions corrected"
             fi
         fi
         
         # Check .ssh directory
-        if [ -d "/home/$USERNAME/.ssh" ]; then
-            SSH_DIR_PERMS=$(stat -c "%a" "/home/$USERNAME/.ssh")
-            SSH_DIR_OWNER=$(stat -c "%U:%G" "/home/$USERNAME/.ssh")
+        if [ -d "$USER_HOME/.ssh" ]; then
+            SSH_DIR_PERMS=$(stat -c "%a" "$USER_HOME/.ssh")
+            SSH_DIR_OWNER=$(stat -c "%U:%G" "$USER_HOME/.ssh")
             echo "SSH directory permissions: $SSH_DIR_PERMS, owner: $SSH_DIR_OWNER"
             
             if [ "$SSH_DIR_PERMS" != "700" ] || [ "$SSH_DIR_OWNER" != "$USERNAME:$USERNAME" ]; then
                 echo "⚠️ Fixing SSH directory permissions and ownership..."
-                chmod 700 "/home/$USERNAME/.ssh"
-                chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh"
+                chmod 700 "$USER_HOME/.ssh"
+                chown "$USERNAME:$USERNAME" "$USER_HOME/.ssh"
                 echo "✅ SSH directory permissions and ownership corrected"
             fi
         else
             echo "⚠️ SSH directory missing - recreating..."
-            mkdir -p "/home/$USERNAME/.ssh"
-            chmod 700 "/home/$USERNAME/.ssh"
-            chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh"
+            mkdir -p "$USER_HOME/.ssh"
+            chmod 700 "$USER_HOME/.ssh"
+            chown "$USERNAME:$USERNAME" "$USER_HOME/.ssh"
             echo "✅ SSH directory created"
         fi
         
         # Check authorized_keys file
-        if [ -f "/home/$USERNAME/.ssh/authorized_keys" ]; then
-            KEYS_PERMS=$(stat -c "%a" "/home/$USERNAME/.ssh/authorized_keys")
-            KEYS_OWNER=$(stat -c "%U:%G" "/home/$USERNAME/.ssh/authorized_keys")
-            KEYS_SIZE=$(stat -c "%s" "/home/$USERNAME/.ssh/authorized_keys")
+        if [ -f "$USER_HOME/.ssh/authorized_keys" ]; then
+            KEYS_PERMS=$(stat -c "%a" "$USER_HOME/.ssh/authorized_keys")
+            KEYS_OWNER=$(stat -c "%U:%G" "$USER_HOME/.ssh/authorized_keys")
+            KEYS_SIZE=$(stat -c "%s" "$USER_HOME/.ssh/authorized_keys")
             echo "authorized_keys permissions: $KEYS_PERMS, owner: $KEYS_OWNER, size: $KEYS_SIZE bytes"
             
             if [ "$KEYS_PERMS" != "600" ] || [ "$KEYS_OWNER" != "$USERNAME:$USERNAME" ]; then
                 echo "⚠️ Fixing authorized_keys permissions and ownership..."
-                chmod 600 "/home/$USERNAME/.ssh/authorized_keys"
-                chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh/authorized_keys"
+                chmod 600 "$USER_HOME/.ssh/authorized_keys"
+                chown "$USERNAME:$USERNAME" "$USER_HOME/.ssh/authorized_keys"
                 echo "✅ authorized_keys permissions and ownership corrected"
             fi
             
             if [ "$KEYS_SIZE" -eq 0 ]; then
                 echo "⚠️ authorized_keys file is empty - recreating with provided key..."
-                echo "$SSH_PUBLIC_KEY" > "/home/$USERNAME/.ssh/authorized_keys"
-                chmod 600 "/home/$USERNAME/.ssh/authorized_keys"
-                chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh/authorized_keys"
+                echo "$SSH_PUBLIC_KEY" > "$USER_HOME/.ssh/authorized_keys"
+                chmod 600 "$USER_HOME/.ssh/authorized_keys"
+                chown "$USERNAME:$USERNAME" "$USER_HOME/.ssh/authorized_keys"
                 echo "✅ authorized_keys file recreated with SSH key"
             else
-                echo "✅ authorized_keys file contains $(wc -l < "/home/$USERNAME/.ssh/authorized_keys") key(s)"
+                echo "✅ authorized_keys file contains $(wc -l < "$USER_HOME/.ssh/authorized_keys") key(s)"
                 # Show key fingerprint for verification
                 if command -v ssh-keygen >/dev/null 2>&1; then
                     echo "Key fingerprints:"
-                    ssh-keygen -lf "/home/$USERNAME/.ssh/authorized_keys" 2>/dev/null || echo "   (unable to parse key fingerprint)"
+                    ssh-keygen -lf "$USER_HOME/.ssh/authorized_keys" 2>/dev/null || echo "   (unable to parse key fingerprint)"
                 fi
             fi
         else
             echo "⚠️ authorized_keys file missing - creating with provided key..."
-            echo "$SSH_PUBLIC_KEY" > "/home/$USERNAME/.ssh/authorized_keys"
-            chmod 600 "/home/$USERNAME/.ssh/authorized_keys"
-            chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh/authorized_keys"
+            echo "$SSH_PUBLIC_KEY" > "$USER_HOME/.ssh/authorized_keys"
+            chmod 600 "$USER_HOME/.ssh/authorized_keys"
+            chown "$USERNAME:$USERNAME" "$USER_HOME/.ssh/authorized_keys"
             echo "✅ authorized_keys file created with SSH key"
         fi
         
@@ -6096,7 +6117,7 @@ if [ -n "$SSH_PUBLIC_KEY" ] && [ -n "$USERNAME" ]; then
         
         # Check for filesystem issues
         echo "Checking filesystem mount options..."
-        MOUNT_INFO=$(df "/home/$USERNAME" | tail -1)
+        MOUNT_INFO=$(df "$USER_HOME" | tail -1)
         echo "Mount info: $MOUNT_INFO"
         
         MOUNT_POINT=$(echo "$MOUNT_INFO" | awk '{print $6}')
@@ -6106,26 +6127,26 @@ if [ -n "$SSH_PUBLIC_KEY" ] && [ -n "$USERNAME" ]; then
         
         # Check for extended attributes and immutable flags
         echo "Checking file attributes..."
-        if lsattr "/home/$USERNAME/.ssh/authorized_keys" 2>/dev/null | grep -q '^....i'; then
+        if lsattr "$USER_HOME/.ssh/authorized_keys" 2>/dev/null | grep -q '^....i'; then
             echo "⚠️ WARNING: authorized_keys has immutable flag - removing..."
-            chattr -i "/home/$USERNAME/.ssh/authorized_keys" 2>/dev/null || true
+            chattr -i "$USER_HOME/.ssh/authorized_keys" 2>/dev/null || true
         fi
         
         # Check full path permissions with namei
         echo "Full path permission analysis:"
-        namei -l "/home/$USERNAME/.ssh/authorized_keys" 2>/dev/null || echo "namei not available"
+        namei -l "$USER_HOME/.ssh/authorized_keys" 2>/dev/null || echo "namei not available"
         
         # Check if SSH can actually read the file
         echo "Testing file readability..."
-        if sudo -u "$USERNAME" test -r "/home/$USERNAME/.ssh/authorized_keys"; then
+        if sudo -u "$USERNAME" test -r "$USER_HOME/.ssh/authorized_keys"; then
             echo "✅ File readable by user $USERNAME"
         else
             echo "❌ File NOT readable by user $USERNAME"
             echo "Attempting to fix permissions..."
-            chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh/authorized_keys"
-            chmod 600 "/home/$USERNAME/.ssh/authorized_keys"
+            chown "$USERNAME:$USERNAME" "$USER_HOME/.ssh/authorized_keys"
+            chmod 600 "$USER_HOME/.ssh/authorized_keys"
             
-            if sudo -u "$USERNAME" test -r "/home/$USERNAME/.ssh/authorized_keys"; then
+            if sudo -u "$USERNAME" test -r "$USER_HOME/.ssh/authorized_keys"; then
                 echo "✅ File now readable after permission fix"
             else
                 echo "❌ File STILL not readable - deeper issue exists"
@@ -6179,10 +6200,12 @@ if [ -n "$SSH_PUBLIC_KEY" ] && [ -n "$USERNAME" ]; then
                 echo "   🔧 Test port $SSH_PORT, then disable port 22 when confirmed working"
             fi
         fi
-        
-        
+
+
         echo "✅ SSH authentication validation completed"
-        
+
+        fi # Close USER_HOME check
+
     else
         echo "❌ User $USERNAME does not exist"
     fi
