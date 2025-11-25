@@ -607,7 +607,7 @@ This shows which security services are running and which are inactive (not insta
 **Bastion User Account:**
 - **Password Authentication**: Intentionally DISABLED (no password login possible)
 - **SSH Key Authentication**: REQUIRED (your public key must be configured)
-- **Sudo Access**: Available via passwordless sudo when authenticated with SSH key
+- **Sudo Access**: **Restricted** to specific whitelisted commands only (security hardening)
 - **Login Method**: SSH key authentication only
 
 **Root Account:**
@@ -616,15 +616,73 @@ This shows which security services are running and which are inactive (not insta
 - **Console Access**: Available for emergency recovery via hosting provider console
 - **Use Case**: Emergency access when SSH keys are lost or bastion user is locked out
 
+**Sudo Command Restrictions (Important!):**
+
+The bastion host uses **restrictive sudoers** configuration that only allows passwordless sudo for specific whitelisted commands. This prevents unauthorized privilege escalation.
+
+**Allowed Commands (No Password Required):**
+```bash
+# System monitoring commands
+sudo bastionstat          # Show comprehensive bastion status
+sudo sshmon               # Monitor SSH connections
+sudo bastionmail          # Read system mail
+
+# Service status checks (read-only)
+sudo systemctl status sshd
+sudo systemctl is-active ssh
+sudo ufw status
+sudo fail2ban-client status
+
+# Log file access (read-only)
+sudo tail /var/log/auth.log
+sudo tail /var/log/syslog
+sudo tail /var/log/fail2ban.log
+```
+
+**Restricted Commands (Require Root):**
+```bash
+# These will NOT work with sudo - use 'su -' to become root
+sudo ./my-script.sh               # ❌ Scripts in home directory
+sudo systemctl restart sshd       # ❌ Service control
+sudo apt update                   # ❌ Package management
+sudo nano /etc/ssh/sshd_config   # ❌ Configuration editing
+```
+
+**How to Run Administrative Commands:**
+
+```bash
+# Method 1: Use 'su -' to become root (recommended for admin tasks)
+bastion@bastion:~$ su -
+Password: [enter root password]
+root@bastion:~# systemctl restart sshd
+root@bastion:~# apt update
+root@bastion:~# exit
+
+# Method 2: Run allowed commands with sudo (monitoring only)
+bastion@bastion:~$ sudo bastionstat
+bastion@bastion:~$ sudo systemctl status sshd
+```
+
 **After Installation:**
 
 ```bash
 # Correct login method (SSH with key)
 ssh -p 2222 bastion@your-bastion-ip
 
-# Sudo works without password (when using SSH key authentication)
+# Allowed sudo commands work without password
+bastion@bastion:~$ sudo bastionstat
 bastion@bastion:~$ sudo systemctl status sshd
 # Works immediately - no password prompt
+
+# Administrative commands require root access
+bastion@bastion:~$ sudo systemctl restart sshd
+# ❌ This will ask for password (which doesn't exist)
+
+# Solution: Use 'su -' for admin tasks
+bastion@bastion:~$ su -
+Password: [root password]
+root@bastion:~# systemctl restart sshd
+# ✅ Works
 
 # Password login attempts will FAIL (by design)
 ssh -p 2222 -o PubkeyAuthentication=no bastion@your-bastion-ip
@@ -637,8 +695,11 @@ ssh -p 2222 -o PubkeyAuthentication=no bastion@your-bastion-ip
 **Why This Design:**
 - **Eliminates password brute-force attacks**: No password = no brute-forcing
 - **Enforces strong authentication**: SSH keys are cryptographically stronger than passwords
-- **Audit trail**: All access tied to specific SSH keys
-- **Compliance**: Meets security requirements for privileged access management
+- **Restricts privilege escalation**: Whitelisted sudo commands prevent unauthorized root access
+- **Principle of least privilege**: Bastion user can monitor but not modify system
+- **Audit trail**: All access tied to specific SSH keys, root access via su is logged
+- **Compliance**: Meets security requirements for privileged access management (separation of duties)
+- **Defense in depth**: Even if bastion account is compromised, attacker cannot run arbitrary root commands
 - **Emergency recovery**: Root password via console provides last-resort access
 
 **Common Issues:**
@@ -646,7 +707,16 @@ ssh -p 2222 -o PubkeyAuthentication=no bastion@your-bastion-ip
 ```bash
 # Issue: "sudo password doesn't work"
 # Solution: This is expected - bastion user has no password
-# Use SSH key authentication and sudo will work without password
+# Only whitelisted commands work with sudo - use 'su -' for admin tasks
+
+# Issue: "sudo ./script.sh asks for password"
+# Solution: Scripts in home directory are not whitelisted for sudo
+# Either: 1) Use 'su -' to run as root, OR
+#         2) Install script to /usr/local/bin/ and add to sudoers
+
+# Issue: "sudo systemctl restart fails"
+# Solution: Only 'status' and 'is-active' are allowed, not 'restart'
+# Use 'su -' for service management commands
 
 # Issue: "I need to set a password for bastion user"
 # Solution: Don't - this defeats the security model
