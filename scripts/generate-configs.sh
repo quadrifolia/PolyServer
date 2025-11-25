@@ -43,34 +43,58 @@ if [ -z "$DEPLOYMENT_MODE" ]; then
 fi
 echo "Deployment mode: $DEPLOYMENT_MODE"
 
-# Function to replace variables in a template
+# Helper to test truthy values (true/yes/1/on)
+_is_truthy() {
+  local v="${1:-}"
+  v=$(echo "$v" | tr '[:upper:]' '[:lower:]')
+  case "$v" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Function to replace variables and handle simple Mustache-like sections in a template
 render_template() {
   local template="$1"
   local output="$2"
-  
+
   echo "Generating: $output from $template"
-  
-  # Create a temporary file with variables exported
-  local tmpfile=$(mktemp)
-  
-  # Read the template and replace all {{VARIABLE}} occurrences
+
+  # Read the template content
+  local content
   content=$(cat "$template")
-  
-  # Get all variables from the env file
+
+  # Handle conditional sections {{#VAR}} ... {{/VAR}} based on env values
+  # Collect unique section variables
+  local section_vars
+  section_vars=$(echo "$content" | grep -oE '{{#[A-Za-z0-9_]+}}' | sed 's/{{#//;s/}}//g' | sort -u || true)
+  for var in $section_vars; do
+    # Read value from environment (ENV_FILE has been sourced above)
+    local val
+    val="$(eval echo "\${$var:-}")"
+    if _is_truthy "$val"; then
+      # Keep contents, strip the section markers
+      content=$(echo "$content" | sed -e "s|{{#$var}}||g" -e "s|{{/$var}}||g")
+    else
+      # Remove the entire section (non-greedy across newlines)
+      content=$(perl -0777 -pe "s/{{#$var}}.*?{{\/$var}}//gs" <<< "$content")
+    fi
+  done
+
+  # Replace all {{VARIABLE}} occurrences with values from ENV_FILE
   while IFS='=' read -r key value; do
     # Skip comments and empty lines
     [[ $key =~ ^# ]] || [[ -z $key ]] && continue
-    
+
     # Remove quotes if present
     value=$(echo "$value" | sed -e 's/^"//' -e 's/"$//')
-    
+
     # Replace placeholders
     content=$(echo "$content" | sed "s|{{$key}}|$value|g")
   done < "$ENV_FILE"
-  
+
   # Write to output file
   echo "$content" > "$output"
-  rm "$tmpfile"
 }
 
 # Generate application-specific configurations as needed
@@ -188,6 +212,30 @@ if [ "${AUDIT_ENABLED:-false}" = "true" ]; then
   # Generate audit rules file
   if [ -f "${TEMPLATE_DIR}/audit/audit.rules.template" ]; then
     render_template "${TEMPLATE_DIR}/audit/audit.rules.template" "${OUTPUT_DIR}/audit/rules.d/audit.rules"
+  fi
+fi
+
+# Generate PHP configurations if templates exist
+if [ -d "${TEMPLATE_DIR}/php" ]; then
+  echo "Generating PHP configurations..."
+  
+  # Create PHP configuration directory
+  mkdir -p "${OUTPUT_DIR}/php/fpm/pool.d"
+  mkdir -p "${OUTPUT_DIR}/php/mods-available"
+  
+  # Generate PHP-FPM pool configuration
+  if [ -f "${TEMPLATE_DIR}/php/security-pool.conf.template" ]; then
+    render_template "${TEMPLATE_DIR}/php/security-pool.conf.template" "${OUTPUT_DIR}/php/fpm/pool.d/security.conf"
+  fi
+  
+  # Generate PHP security configuration
+  if [ -f "${TEMPLATE_DIR}/php/99-security.ini.template" ]; then
+    render_template "${TEMPLATE_DIR}/php/99-security.ini.template" "${OUTPUT_DIR}/php/mods-available/99-security.ini"
+  fi
+  
+  # Generate Xdebug configuration
+  if [ -f "${TEMPLATE_DIR}/php/xdebug.ini.template" ]; then
+    render_template "${TEMPLATE_DIR}/php/xdebug.ini.template" "${OUTPUT_DIR}/php/mods-available/xdebug.ini"
   fi
 fi
 

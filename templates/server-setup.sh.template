@@ -64,7 +64,7 @@ LOGWATCH_EMAIL="{{LOGWATCH_EMAIL}}"       # Logwatch notification email
 
 # Optional features configuration
 NETDATA_ENABLED="{{NETDATA_ENABLED}}"     # Enable Netdata monitoring
-DEPLOYMENT_MODE="{{DEPLOYMENT_MODE}}"     # Deployment mode (docker/standalone)
+DEPLOYMENT_MODE="{{DEPLOYMENT_MODE}}"     # Deployment mode (docker/baremetal)
 
 # Optional Security Components (resource-conscious defaults)
 : "${INSTALL_CLAMAV:=false}"              # Install ClamAV antivirus (high resource usage)
@@ -82,6 +82,7 @@ SMTP_FROM_EMAIL="{{SMTP_FROM_EMAIL}}"
 SMTP_USE_TLS="{{SMTP_USE_TLS}}"
 
 # Check if running in Docker testing mode
+TESTING_MODE="${TESTING_MODE:-false}"
 if [ "$TESTING_MODE" = "true" ]; then
     echo "🐳 Running in Docker testing mode - skipping some services that don't work in containers"
     DOCKER_MODE=true
@@ -89,54 +90,6 @@ else
     DOCKER_MODE=false
 fi
 
-# ========= Parameter Validation =========
-log_message "🔍 Validating input parameters..."
-
-# Validate SSH port
-if ! validate_port "$SSH_PORT"; then
-    log_error "Invalid SSH port configuration"
-    exit 1
-fi
-
-# Validate SSH public key (if not in testing mode)
-if [ "$TESTING_MODE" != "true" ] && [ -n "$SSH_PUBLIC_KEY" ]; then
-    if ! validate_ssh_key "$SSH_PUBLIC_KEY"; then
-        log_error "Invalid SSH public key configuration"
-        exit 1
-    fi
-elif [ "$TESTING_MODE" != "true" ]; then
-    log_error "SSH public key is required for security"
-    exit 1
-fi
-
-# Validate email addresses
-if [ -n "$LOGWATCH_EMAIL" ] && [ "$LOGWATCH_EMAIL" != "{{LOGWATCH_EMAIL}}" ]; then
-    if ! validate_email "$LOGWATCH_EMAIL"; then
-        log_error "Invalid logwatch email configuration"
-        exit 1
-    fi
-fi
-
-if [ "$SMTP_ENABLED" = "true" ] && [ -n "$SMTP_FROM_EMAIL" ] && [ "$SMTP_FROM_EMAIL" != "{{SMTP_FROM_EMAIL}}" ]; then
-    if ! validate_email "$SMTP_FROM_EMAIL"; then
-        log_error "Invalid SMTP from email configuration"
-        exit 1
-    fi
-fi
-
-# Validate hostname
-if [ -z "$HOSTNAME" ] || [ "$HOSTNAME" = "{{HOSTNAME}}" ]; then
-    log_error "Hostname must be configured"
-    exit 1
-fi
-
-# Validate username
-if [ -z "$USERNAME" ] || [ "$USERNAME" = "{{DEPLOY_USER}}" ]; then
-    log_error "Deploy user must be configured"
-    exit 1
-fi
-
-log_message "✅ Parameter validation completed successfully"
 
 # ========= System Resource Detection =========
 detect_system_resources() {
@@ -168,7 +121,11 @@ detect_system_resources() {
     
     # Verify detection results
     if [ -n "$CPU_CORES" ] && [ "$CPU_CORES" -gt 0 ] && [ -n "$TOTAL_RAM_MB" ] && [ "$TOTAL_RAM_MB" -gt 0 ]; then
-        log_message "✅ Auto-detected: ${CPU_CORES} CPU cores, ${TOTAL_RAM_MB}MB RAM (${TOTAL_RAM_GB}GB)"
+        if [ -n "$AVAILABLE_RAM_MB" ]; then
+            log_message "✅ Auto-detected: ${CPU_CORES} CPU cores, ${TOTAL_RAM_MB}MB total RAM (${AVAILABLE_RAM_MB}MB available)"
+        else
+            log_message "✅ Auto-detected: ${CPU_CORES} CPU cores, ${TOTAL_RAM_MB}MB RAM (${TOTAL_RAM_GB}GB)"
+        fi
         RESOURCE_DETECTION_SUCCESS=true
     else
         log_message "⚠️ Auto-detection failed or returned invalid values"
@@ -203,7 +160,9 @@ detect_system_resources() {
             fi
         done
         
-        log_message "✅ User-specified: ${CPU_CORES} CPU cores, ${TOTAL_RAM_GB}GB RAM"
+        # Estimate available RAM as 85% of total for manual input
+        AVAILABLE_RAM_MB=$((TOTAL_RAM_MB * 85 / 100))
+        log_message "✅ User-specified: ${CPU_CORES} CPU cores, ${TOTAL_RAM_GB}GB RAM (~${AVAILABLE_RAM_MB}MB estimated available)"
     fi
     
     # Calculate optimization parameters
@@ -312,6 +271,40 @@ calculate_optimization_parameters() {
     log_message "   ⚡ Node.js PM2: $PM2_INSTANCES cluster instances"
     log_message "   🗄️ Database: max_connections=$DB_MAX_CONNECTIONS, innodb_buffer_pool=${INNODB_BUFFER_POOL_MB}MB"
     log_message "   📝 Redis: maxmemory=${REDIS_MAXMEMORY}MB"
+}
+
+# Update PHP-FPM configuration with calculated values
+update_php_fpm_config() {
+    log_message "Updating PHP-FPM configuration with calculated values..."
+    
+    # Check if PHP config files exist from deployment
+    PHP_POOL_CONFIG="/etc/php/8.4/fpm/pool.d/security.conf"
+    PHP_INI_CONFIG="/etc/php/8.4/mods-available/99-security.ini"
+    
+    # Update PHP-FPM pool configuration if it exists
+    if [ -f "$PHP_POOL_CONFIG" ]; then
+        sed -i "s/^pm.max_children = .*/pm.max_children = $PHP_MAX_CHILDREN/" "$PHP_POOL_CONFIG"
+        sed -i "s/^pm.start_servers = .*/pm.start_servers = $PHP_START_SERVERS/" "$PHP_POOL_CONFIG"
+        sed -i "s/^pm.min_spare_servers = .*/pm.min_spare_servers = $PHP_MIN_SPARE_SERVERS/" "$PHP_POOL_CONFIG"
+        sed -i "s/^pm.max_spare_servers = .*/pm.max_spare_servers = $PHP_MAX_SPARE_SERVERS/" "$PHP_POOL_CONFIG"
+        
+        # Update memory limit and execution time in pool config
+        sed -i "s/php_admin_value\[memory_limit\] = .*/php_admin_value[memory_limit] = $PHP_MEMORY_LIMIT/" "$PHP_POOL_CONFIG"
+        sed -i "s/php_admin_value\[max_execution_time\] = .*/php_admin_value[max_execution_time] = $PHP_MAX_EXECUTION_TIME/" "$PHP_POOL_CONFIG"
+        sed -i "s/php_admin_value\[max_input_time\] = .*/php_admin_value[max_input_time] = $PHP_MAX_EXECUTION_TIME/" "$PHP_POOL_CONFIG"
+        
+        log_message "✅ Updated PHP-FPM pool configuration: $PHP_POOL_CONFIG"
+    else
+        log_message "⚠️  PHP-FPM pool config not found at: $PHP_POOL_CONFIG"
+    fi
+    
+    # Update PHP ini configuration if it exists
+    if [ -f "$PHP_INI_CONFIG" ]; then
+        # Note: PHP ini settings are also set in pool config, so we mainly ensure consistency
+        log_message "✅ PHP ini configuration exists: $PHP_INI_CONFIG"
+    else
+        log_message "⚠️  PHP ini config not found at: $PHP_INI_CONFIG"
+    fi
 }
 
 # Helper function for systemctl commands in Docker mode
@@ -468,6 +461,55 @@ validate_port() {
     fi
 }
 
+# ========= Parameter Validation =========
+log_message "🔍 Validating input parameters..."
+
+# Validate SSH port
+if ! validate_port "$SSH_PORT"; then
+    log_error "Invalid SSH port configuration"
+    exit 1
+fi
+
+# Validate SSH public key (if not in testing mode)
+if [ "$TESTING_MODE" != "true" ] && [ -n "$SSH_PUBLIC_KEY" ]; then
+    if ! validate_ssh_key "$SSH_PUBLIC_KEY"; then
+        log_error "Invalid SSH public key configuration"
+        exit 1
+    fi
+elif [ "$TESTING_MODE" != "true" ]; then
+    log_error "SSH public key is required for security"
+    exit 1
+fi
+
+# Validate email addresses
+if [ -n "$LOGWATCH_EMAIL" ] && [ "$LOGWATCH_EMAIL" != "{{LOGWATCH_EMAIL}}" ]; then
+    if ! validate_email "$LOGWATCH_EMAIL"; then
+        log_error "Invalid logwatch email configuration"
+        exit 1
+    fi
+fi
+
+if [ "$SMTP_ENABLED" = "true" ] && [ -n "$SMTP_FROM_EMAIL" ] && [ "$SMTP_FROM_EMAIL" != "{{SMTP_FROM_EMAIL}}" ]; then
+    if ! validate_email "$SMTP_FROM_EMAIL"; then
+        log_error "Invalid SMTP from email configuration"
+        exit 1
+    fi
+fi
+
+# Validate hostname
+if [ -z "$HOSTNAME" ] || [ "$HOSTNAME" = "{{HOSTNAME}}" ]; then
+    log_error "Hostname must be configured"
+    exit 1
+fi
+
+# Validate username
+if [ -z "$USERNAME" ] || [ "$USERNAME" = "{{DEPLOY_USER}}" ]; then
+    log_error "Deploy user must be configured"
+    exit 1
+fi
+
+log_message "✅ Parameter validation completed successfully"
+
 # Configuration validation framework
 validate_critical_configs() {
     local errors=0
@@ -612,6 +654,10 @@ create_rollback_point() {
 # ========= System Resource Detection =========
 log_message "===== 0. Detecting system resources ====="
 detect_system_resources
+
+# Calculate optimization parameters based on detected resources
+log_message "===== 0.1. Calculating optimization parameters ====="
+calculate_optimization_parameters
 
 # ========= Basic server hardening =========
 log_message "===== 1. Updating system packages ====="
@@ -954,6 +1000,17 @@ else
     # Test installations
     if systemctl is-active --quiet php8.4-fpm; then
         echo "✅ PHP-FPM is running"
+        
+        # Update PHP-FPM configuration with calculated values
+        update_php_fpm_config
+        
+        # Restart PHP-FPM to apply updated configuration
+        systemctl restart php8.4-fpm
+        if systemctl is-active --quiet php8.4-fpm; then
+            echo "✅ PHP-FPM restarted with optimized configuration"
+        else
+            echo "⚠️ PHP-FPM failed to restart after configuration update"
+        fi
     else
         echo "⚠️ PHP-FPM failed to start - check logs: journalctl -u php8.4-fpm"
     fi
@@ -1818,26 +1875,56 @@ if [ "$DOCKER_MODE" = "false" ]; then
     logger -p auth.info "Server setup: Initializing auth.log for fail2ban"
     
     cat > /etc/fail2ban/jail.local << EOF
-[DEFAULT]
-# Enable IPv6 support for modern infrastructure
-allowipv6 = yes
+    [DEFAULT]
+    # Enable IPv6 support for modern infrastructure
+    allowipv6 = yes
+    # Do not ban localhost and the trusted client IP if provided
+    ignoreip = 127.0.0.1/8 ::1 ${CLIENT_IP:-}
 
-# Use systemd backend for Debian 13 reliability
-backend = systemd
+    # Use systemd backend for Debian 13 reliability
+    backend = systemd
 
-# Use UFW/nftables for Debian 13 firewall management
-banaction = ufw
-banaction_allports = ufw
-action = %(banaction)s[blocktype=reject]
+    # Use UFW/nftables for Debian 13 firewall management
+    banaction = ufw
+    banaction_allports = ufw
+    action = %(banaction)s[blocktype=reject]
 
-[sshd]
-enabled = true
-port = $SSH_PORT
-filter = sshd
-logpath = /var/log/auth.log
-maxretry = 3
-bantime = 3600
-# Inherit UFW action from DEFAULT section
+    [sshd]
+    enabled = true
+    port = $SSH_PORT
+    filter = sshd
+    logpath = /var/log/auth.log
+    maxretry = 3
+    bantime = 3600
+    findtime = 600
+
+    [sshd-ddos]
+    enabled = true
+    port = $SSH_PORT
+    filter = sshd-ddos
+    logpath = /var/log/auth.log
+    maxretry = 2
+    bantime = 3600
+
+    [recidive]
+    enabled = true
+    filter = recidive
+    logpath = /var/log/fail2ban.log
+    action = %(banaction)s[name=recidive, port="all"]
+    bantime = 86400
+    findtime = 86400
+    maxretry = 5
+EOF
+
+    # Create custom filter for SSH pre-auth connection floods and non-identifying clients
+    cat > /etc/fail2ban/filter.d/sshd-ddos.conf << 'EOF'
+    # Fail2Ban filter for SSH pre-auth connection floods and non-identifying clients
+    [Definition]
+    failregex = ^%(__prefix_line)sDid not receive identification string from <HOST>\s*$
+                ^%(__prefix_line)sConnection closed by <HOST> port \d+ \[preauth\]$
+                ^%(__prefix_line)sDisconnected from <HOST> port \d+ \[preauth\]$
+                ^%(__prefix_line)sConnection reset by <HOST> port \d+ \[preauth\]$
+    ignoreregex =
 EOF
     
     # Test fail2ban configuration before starting
@@ -6424,11 +6511,12 @@ local-infile = 0
 symbolic-links = 0
 secure-file-priv = "/var/lib/mysql-files/"
 
-# Performance and resource limits
-max_connections = 100
-max_user_connections = 50
+# Performance and resource limits (calculated based on system resources)
+max_connections = $DB_MAX_CONNECTIONS
+max_user_connections = $((DB_MAX_CONNECTIONS / 2))
 table_open_cache = 2000
-query_cache_size = 32M
+innodb_buffer_pool_size = ${INNODB_BUFFER_POOL_MB}M
+query_cache_size = ${QUERY_CACHE_SIZE}M
 query_cache_limit = 2M
 MARIADB_EOF
                     
@@ -6445,6 +6533,20 @@ MARIADB_EOF
                     # Update pg_hba.conf for security
                     sed -i "s/#listen_addresses = 'localhost'/listen_addresses = 'localhost'/" /etc/postgresql/*/main/postgresql.conf
                     sed -i "s/local   all             all                                     peer/local   all             all                                     md5/" /etc/postgresql/*/main/pg_hba.conf
+                    
+                    # Add performance tuning to postgresql.conf
+                    cat >> /etc/postgresql/*/main/postgresql.conf << 'POSTGRESQL_EOF'
+
+# Performance tuning (calculated based on system resources)
+max_connections = $DB_MAX_CONNECTIONS
+shared_buffers = ${INNODB_BUFFER_POOL_MB}MB
+effective_cache_size = $((TOTAL_RAM_MB * 75 / 100))MB
+maintenance_work_mem = $((TOTAL_RAM_MB / 16))MB
+checkpoint_completion_target = 0.9
+wal_buffers = 16MB
+default_statistics_target = 100
+random_page_cost = 1.1
+POSTGRESQL_EOF
                     
                     systemctl restart postgresql
                     echo "✅ PostgreSQL installed with secure defaults"
@@ -6464,6 +6566,23 @@ MARIADB_EOF
                     
                     # Configure PM2 startup
                     sudo -u {{USERNAME}} pm2 startup systemd -u {{USERNAME}} --hp /home/{{USERNAME}}
+                    
+                    # Create optimized PM2 ecosystem template
+                    cat > /home/{{USERNAME}}/ecosystem.config.js << "PM2_EOF"
+module.exports = {
+  apps: [{
+    name: 'app',
+    script: './app.js',
+    instances: $PM2_INSTANCES,
+    exec_mode: 'cluster',
+    env: {
+      NODE_ENV: 'production',
+      PORT: 3000
+    }
+  }]
+};
+PM2_EOF
+                    chown {{USERNAME}}:{{USERNAME}} /home/{{USERNAME}}/ecosystem.config.js
                     
                     echo "✅ Node.js and PM2 installed from NodeSource (current LTS)"
                     echo "   • Node.js version: $(node --version)"
@@ -6495,10 +6614,10 @@ MARIADB_EOF
                     echo "===== 16.1.9 Installing Redis with Secure Configuration ====="
                     apt-get install -y redis-server
                     
-                    # Configure Redis for security
+                    # Configure Redis for security and performance (calculated based on system resources)
                     sed -i "s/^# requirepass foobared/requirepass {{REDIS_PASSWORD:-\$(openssl rand -base64 32)}}/" /etc/redis/redis.conf
                     sed -i 's/^bind 127.0.0.1 ::1/bind 127.0.0.1/' /etc/redis/redis.conf
-                    sed -i 's/^# maxmemory <bytes>/maxmemory 256mb/' /etc/redis/redis.conf
+                    sed -i "s/^# maxmemory <bytes>/maxmemory ${REDIS_MAXMEMORY}mb/" /etc/redis/redis.conf
                     sed -i 's/^# maxmemory-policy noeviction/maxmemory-policy allkeys-lru/' /etc/redis/redis.conf
                     
                     systemctl restart redis-server
