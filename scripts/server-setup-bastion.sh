@@ -1457,8 +1457,35 @@ include-toplevel: "/etc/unbound/unbound.conf.d/*.conf"
 EOF
 
 # Disable unbound-resolvconf service (causes issues in bastion environment)
-#systemctl disable unbound-resolvconf 2>/dev/null || true
-#systemctl mask unbound-resolvconf 2>/dev/null || true
+# The unbound-resolvconf service tries to configure loopback which fails with:
+# "Failed to set DNS configuration: Link lo is loopback device"
+systemctl stop unbound-resolvconf 2>/dev/null || true
+systemctl disable unbound-resolvconf 2>/dev/null || true
+systemctl mask unbound-resolvconf 2>/dev/null || true
+echo "✅ Disabled unbound-resolvconf service (not needed for bastion)"
+
+# Configure AppArmor to allow Unbound net_admin capability
+# This is required for Unbound to manage network configuration
+echo "Configuring AppArmor for Unbound..."
+mkdir -p /etc/apparmor.d/local
+if [ ! -f /etc/apparmor.d/local/usr.sbin.unbound ]; then
+    cat > /etc/apparmor.d/local/usr.sbin.unbound << 'APPARMOR_EOF'
+# Site-specific additions and overrides for usr.sbin.unbound.
+# For more details, please see /etc/apparmor.d/local/README.
+
+# Allow net_admin capability for network configuration
+capability net_admin,
+APPARMOR_EOF
+    echo "✅ Created AppArmor local override for Unbound"
+
+    # Reload AppArmor profile if it exists
+    if [ -f /etc/apparmor.d/usr.sbin.unbound ]; then
+        apparmor_parser -r /etc/apparmor.d/usr.sbin.unbound 2>/dev/null || true
+        echo "✅ Reloaded AppArmor profile for Unbound"
+    fi
+else
+    echo "✅ AppArmor override already exists for Unbound"
+fi
 
 # Create systemd override for Unbound to ensure IPv4-only operation
 mkdir -p /etc/systemd/system/unbound.service.d

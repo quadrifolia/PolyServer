@@ -32,3 +32,8 @@ Thumbs.db
 /local-backup.mv.db
 /nginx-conf
 fix-sensor-log.sh
+fix-unbound-apparmor.sh
+fix-postfix.sh
+fix-aide.sh
+fix-audit-rules.sh
+disable-smt.sh
