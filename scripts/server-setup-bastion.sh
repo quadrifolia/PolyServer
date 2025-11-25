@@ -2774,8 +2774,9 @@ mkdir -p /var/log/aide
 echo "AIDE integrity check started at \$(date)" > \$AIDE_LOG
 echo "=====================================" >> \$AIDE_LOG
 
-# Run AIDE check with proper error handling
-if aide --check 2>&1 | tee -a \$AIDE_LOG; then
+# Run AIDE check with explicit config file
+# Debian stores AIDE config at /etc/aide/aide.conf
+if aide --config=/etc/aide/aide.conf --check 2>&1 | tee -a \$AIDE_LOG; then
     # AIDE completed successfully
     echo "AIDE check completed at \$(date)" >> \$AIDE_LOG
     
