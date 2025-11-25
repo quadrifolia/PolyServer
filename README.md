@@ -545,6 +545,54 @@ A bastion host is a specialized server that:
 
 The bastion setup provides enhanced security beyond the standard server hardening:
 
+#### Core Security Components (Always Installed)
+- **Fail2ban**: Brute force protection with aggressive SSH monitoring
+- **UFW Firewall**: Restrictive rules with only essential ports open
+- **AIDE**: File integrity monitoring for detecting unauthorized changes
+- **Unbound DNS**: Caching DNS resolver for improved performance and privacy
+- **Postfix**: Local mail system for security notifications
+- **AppArmor**: Mandatory access control for critical services
+
+#### Optional Security Components (Disabled by Default)
+
+**⚠️ Important:** The bastion script uses **conservative defaults** and does NOT install resource-intensive optional components unless explicitly requested. This ensures optimal performance on resource-constrained systems.
+
+To enable optional components, set environment variables before running the script:
+
+```bash
+# Enable all optional security components
+export INSTALL_CLAMAV=true      # Antivirus scanning (HIGH resource usage - 500MB+ RAM)
+export INSTALL_MALDET=true      # Linux Malware Detect (MEDIUM resource - disk I/O intensive)
+export INSTALL_RKHUNTER=true    # Rootkit detection (LOW resource usage)
+export INSTALL_SURICATA=true    # Network IDS (MEDIUM resource - CPU intensive)
+export INSTALL_NETDATA=true     # Real-time monitoring (optional - uses ~100MB RAM)
+
+# Run the script with environment preserved
+sudo -E ./scripts/server-setup-bastion.sh
+```
+
+**Default Behavior (No Environment Variables Set):**
+- All optional components default to `false`
+- Only core security tools are installed
+- Minimal resource footprint (~200MB RAM for security services)
+- Perfectly suitable for production bastion hosts
+
+**What Each Optional Component Does:**
+- **ClamAV** (`INSTALL_CLAMAV`): Antivirus scanning for uploaded files and malware detection. High resource usage.
+- **Malware Detect** (`INSTALL_MALDET`): Linux-specific malware scanner. Periodic file system scanning.
+- **RKHunter** (`INSTALL_RKHUNTER`): Rootkit detection and system integrity checking. Minimal overhead.
+- **Suricata** (`INSTALL_SURICATA`): Network intrusion detection system with real-time traffic analysis.
+- **Netdata** (`INSTALL_NETDATA`): Real-time performance monitoring with web dashboard.
+
+**Viewing Current Configuration:**
+
+After installation, check which components are active:
+```bash
+sudo bastionstat
+```
+
+This shows which security services are running and which are inactive (not installed).
+
 #### Enhanced SSH Security
 - **Key-only authentication**: No password authentication allowed
 - **Custom SSH port**: Default port 2222 to reduce attack surface
@@ -571,12 +619,12 @@ The bastion setup provides enhanced security beyond the standard server hardenin
 - **Enhanced fail2ban**: Aggressive protection against brute force attacks
 - **Traffic monitoring**: Network activity logging and analysis
 
-#### Built-in Tools
-- **Network diagnostics**: nmap, ncat, socat, mtr, traceroute
-- **Security scanning**: ClamAV, maldet, rkhunter, chkrootkit
-- **Traffic analysis**: tcpdump, iftop, nethogs
+#### Diagnostic and Management Tools (Always Installed)
+- **Network diagnostics**: nmap, ncat, socat, mtr, traceroute, tcpdump
 - **System monitoring**: htop, iotop, atop, sysstat
-- **Optional Netdata monitoring**: Bastion-optimized monitoring with Cloud integration
+- **Custom commands**: `bastionstat` (system status), `sshmon` (SSH monitoring), `bastionmail` (local mail reader)
+
+Note: Security scanning tools (ClamAV, maldet, rkhunter, chkrootkit) are **optional** and only installed if explicitly enabled via environment variables (see Optional Security Components section above).
 
 ### Using the Bastion Host
 
