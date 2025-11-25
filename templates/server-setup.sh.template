@@ -1920,10 +1920,10 @@ EOF
     cat > /etc/fail2ban/filter.d/sshd-ddos.conf << 'EOF'
     # Fail2Ban filter for SSH pre-auth connection floods and non-identifying clients
     [Definition]
-    failregex = ^%(__prefix_line)sDid not receive identification string from <HOST>\s*$
-                ^%(__prefix_line)sConnection closed by <HOST> port \d+ \[preauth\]$
-                ^%(__prefix_line)sDisconnected from <HOST> port \d+ \[preauth\]$
-                ^%(__prefix_line)sConnection reset by <HOST> port \d+ \[preauth\]$
+    failregex = ^.*sshd\[\d+\]: Did not receive identification string from <HOST>\s*$
+                ^.*sshd\[\d+\]: Connection closed by <HOST> port \d+ \[preauth\]$
+                ^.*sshd\[\d+\]: Disconnected from <HOST> port \d+ \[preauth\]$
+                ^.*sshd\[\d+\]: Connection reset by <HOST> port \d+ \[preauth\]$
     ignoreregex =
 EOF
     
