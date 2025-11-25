@@ -2301,9 +2301,19 @@ if id "$USERNAME" &>/dev/null; then
             sudo -u "$USERNAME" rm -rf "$USER_HOME/.oh-my-zsh" "$USER_HOME/.zshrc"
         fi
 
-        # Install Oh My Zsh with proper HOME environment variable set
+        # Install Oh My Zsh with proper HOME and USER environment variables set
+        # The Oh My Zsh installer uses $USER to determine the home directory, so we must set both
         echo "Downloading and installing Oh My Zsh..."
-        sudo -u "$USERNAME" HOME="$USER_HOME" sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+
+        # Download the installer first to ensure we can set environment properly
+        curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh -o /tmp/omz-install.sh
+        chmod +x /tmp/omz-install.sh
+
+        # Run with explicit environment variables that will be preserved
+        sudo -u "$USERNAME" env HOME="$USER_HOME" USER="$USERNAME" sh /tmp/omz-install.sh --unattended
+
+        # Clean up installer
+        rm -f /tmp/omz-install.sh
 
         # Configure with security and network monitoring plugins
         if [ -f "$USER_HOME/.zshrc" ]; then
