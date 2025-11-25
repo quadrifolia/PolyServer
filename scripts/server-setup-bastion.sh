@@ -2188,8 +2188,13 @@ if sensors 2>/dev/null | grep -E "CRITICAL|ALARM" | grep -v "+0.0"; then
 fi
 
 # Rotate log if it gets too large (keep last 1000 lines)
-if [ -f "$LOGFILE" ] && [ $(wc -l < "$LOGFILE") -gt 1000 ]; then
-    tail -n 500 "$LOGFILE" > "${LOGFILE}.tmp" && mv "${LOGFILE}.tmp" "$LOGFILE"
+if [ -f "$LOGFILE" ] && [ $(wc -l < "$LOGFILE" 2>/dev/null || echo 0) -gt 1000 ]; then
+    if tail -n 500 "$LOGFILE" > "${LOGFILE}.tmp" 2>/dev/null; then
+        mv "${LOGFILE}.tmp" "$LOGFILE"
+    else
+        # If tail fails, remove any partial temp file
+        rm -f "${LOGFILE}.tmp"
+    fi
 fi
 EOF
         
