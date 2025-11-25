@@ -70,8 +70,13 @@ render_template() {
   section_vars=$(echo "$content" | grep -oE '{{#[A-Za-z0-9_]+}}' | sed 's/{{#//;s/}}//g' | sort -u || true)
   for var in $section_vars; do
     # Read value from environment (ENV_FILE has been sourced above)
-    local val
-    val="$(eval echo "\${$var:-}")"
+    # Use indirect expansion via eval but with proper quoting
+    local val=""
+    if eval "[ -n \"\${${var}+x}\" ]"; then
+      # Variable is set, get its value
+      val="$(eval "echo \"\$${var}\"")"
+    fi
+
     if _is_truthy "$val"; then
       # Keep contents, strip the section markers
       content=$(echo "$content" | sed -e "s|{{#$var}}||g" -e "s|{{/$var}}||g")
