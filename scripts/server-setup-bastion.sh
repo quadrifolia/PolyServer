@@ -2968,16 +2968,13 @@ cat > /etc/audit/rules.d/bastion-audit.rules << EOF
 -w /etc/ufw/ -p wa -k firewall_config
 -w /etc/default/ufw -p wa -k firewall_config
 
-## Track all command executions by non-system users
+## Track all command executions by non-system users (64-bit only to reduce load)
 -a always,exit -F arch=b64 -S execve -F uid>=1000 -F uid!=4294967295 -k user_commands
--a always,exit -F arch=b32 -S execve -F uid>=1000 -F uid!=4294967295 -k user_commands
 
-## Monitor file access in sensitive directories
--w /etc/ -p wa -k config_changes
--w /bin/ -p wa -k system_binaries
--w /sbin/ -p wa -k system_binaries
--w /usr/bin/ -p wa -k system_binaries
--w /usr/sbin/ -p wa -k system_binaries
+## Monitor critical system binaries (specific files, not entire directories)
+-w /bin/su -p x -k privilege_escalation
+-w /bin/sudo -p x -k privilege_escalation
+-w /usr/bin/sudo -p x -k privilege_escalation
 
 ## Track privilege escalation attempts
 -a always,exit -F arch=b64 -S setuid -S setgid -S setresuid -S setresgid -k privilege_escalation
@@ -3007,19 +3004,9 @@ cat > /etc/audit/rules.d/bastion-audit.rules << EOF
 -a always,exit -F arch=b32 -S clock_settime -k time_change
 -w /etc/localtime -p wa -k time_change
 
-## Monitor cron jobs
--w /etc/cron.allow -p wa -k cron
--w /etc/cron.deny -p wa -k cron
--w /etc/cron.d/ -p wa -k cron
--w /etc/cron.daily/ -p wa -k cron
--w /etc/cron.hourly/ -p wa -k cron
--w /etc/cron.monthly/ -p wa -k cron
--w /etc/cron.weekly/ -p wa -k cron
+## Monitor cron jobs (main file only, directories too noisy)
 -w /etc/crontab -p wa -k cron
--w /var/spool/cron/ -p wa -k cron
-
-## Monitor log files
--w /var/log/ -p wa -k log_files
+-w /var/spool/cron/crontabs/ -p wa -k cron
 
 ## Make audit rules immutable (uncomment for production)
 ## WARNING: Requires reboot to make changes after enabling
@@ -3066,26 +3053,9 @@ else
     echo "⚠️ auditctl command not available"
 fi
 
-# Always create fallback rules to ensure we have something
-echo "Creating minimal audit rules as safety fallback..."
-cat > /etc/audit/rules.d/bastion-audit.rules << EOF
-## Minimal Bastion Audit Rules - Fallback Configuration
--D
--b 8192
--f 1
-
-## Critical authentication monitoring
--w /var/log/wtmp -p wa -k session
--w /var/log/btmp -p wa -k session
--w /etc/passwd -p wa -k identity
--w /etc/shadow -p wa -k identity
--w /etc/ssh/sshd_config -p wa -k ssh_config
-
-## Basic privilege monitoring
--w /etc/sudoers -p wa -k privilege_escalation
--a always,exit -F arch=b64 -S execve -F uid>=1000 -F uid!=4294967295 -k user_commands
-EOF
-echo "✅ Minimal audit rules created as safety fallback"
+# Note: The comprehensive audit rules above are already sufficient
+# We do NOT overwrite them with minimal rules - that was causing issues
+echo "✅ Audit rules configuration completed"
 
 # Configure auditd systemd resource limits for bastion host
 echo "===== 8.1.1 Configuring Auditd Resource Management ====="
@@ -3103,8 +3073,8 @@ OOMPolicy=continue
 OOMScoreAdjust=-200
 
 # Security and isolation (limited for auditd requirements)
+# Note: ProtectHome=true can interfere with audit rule loading
 NoNewPrivileges=true
-ProtectHome=true
 ReadWritePaths=/var/log/audit /etc/audit
 
 # Restart policy for audit reliability
