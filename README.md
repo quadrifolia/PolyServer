@@ -600,6 +600,78 @@ This shows which security services are running and which are inactive (not insta
 - **Connection limits**: Maximum 5 concurrent sessions
 - **Client keep-alive**: Automatic session management
 
+#### Authentication and Access Model
+
+**IMPORTANT:** The bastion host uses a strict SSH key-only authentication model for maximum security.
+
+**Bastion User Account:**
+- **Password Authentication**: Intentionally DISABLED (no password login possible)
+- **SSH Key Authentication**: REQUIRED (your public key must be configured)
+- **Sudo Access**: Available via passwordless sudo when authenticated with SSH key
+- **Login Method**: SSH key authentication only
+
+**Root Account:**
+- **Password**: Set during installation for emergency console access
+- **SSH Login**: DISABLED (root cannot SSH in)
+- **Console Access**: Available for emergency recovery via hosting provider console
+- **Use Case**: Emergency access when SSH keys are lost or bastion user is locked out
+
+**After Installation:**
+
+```bash
+# Correct login method (SSH with key)
+ssh -p 2222 bastion@your-bastion-ip
+
+# Sudo works without password (when using SSH key authentication)
+bastion@bastion:~$ sudo systemctl status sshd
+# Works immediately - no password prompt
+
+# Password login attempts will FAIL (by design)
+ssh -p 2222 -o PubkeyAuthentication=no bastion@your-bastion-ip
+# This will fail - password authentication is disabled
+
+# If you need root access (emergency only)
+# Use hosting provider console and login as root with the password you set
+```
+
+**Why This Design:**
+- **Eliminates password brute-force attacks**: No password = no brute-forcing
+- **Enforces strong authentication**: SSH keys are cryptographically stronger than passwords
+- **Audit trail**: All access tied to specific SSH keys
+- **Compliance**: Meets security requirements for privileged access management
+- **Emergency recovery**: Root password via console provides last-resort access
+
+**Common Issues:**
+
+```bash
+# Issue: "sudo password doesn't work"
+# Solution: This is expected - bastion user has no password
+# Use SSH key authentication and sudo will work without password
+
+# Issue: "I need to set a password for bastion user"
+# Solution: Don't - this defeats the security model
+# If you absolutely need it, see security implications below
+```
+
+**Security Implications of Enabling Passwords:**
+
+If you absolutely must enable password authentication (NOT RECOMMENDED):
+
+```bash
+# As root (via console)
+passwd bastion          # Set a password
+nano /etc/ssh/sshd_config
+# Change: PasswordAuthentication no → yes
+systemctl restart sshd
+
+# WARNING: This significantly reduces security by:
+# - Allowing password brute-force attacks
+# - Creating weaker authentication
+# - Violating bastion host best practices
+```
+
+**Recommendation:** Keep the default SSH key-only configuration. Use the root console access for emergencies only.
+
 #### Advanced Monitoring
 - **Comprehensive audit logging**: All user activities tracked
 - **Real-time SSH monitoring**: Live monitoring of SSH connections
