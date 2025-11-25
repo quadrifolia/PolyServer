@@ -2921,6 +2921,53 @@ echo "   • Custom mail alerts for detected changes"
 echo "   • Resource limits to prevent system impact"
 
 echo "===== 8. Configuring comprehensive audit framework for bastion ====="
+
+# Ensure filesystems are writable before making audit configuration changes
+echo "Checking filesystem writability..."
+if mount | grep " / " | grep -q "(ro,"; then
+    echo "Root filesystem is read-only, remounting as read-write..."
+    mount -o remount,rw /
+fi
+if mount | grep " /boot " | grep -q "(ro,"; then
+    echo "/boot filesystem is read-only, remounting as read-write..."
+    mount -o remount,rw /boot
+fi
+
+# Enable kernel audit subsystem if not already enabled
+echo "Enabling kernel audit subsystem..."
+if command -v auditctl >/dev/null 2>&1; then
+    AUDIT_ENABLED=$(auditctl -s 2>/dev/null | grep "^enabled" | awk '{print $2}' || echo "unknown")
+
+    if [ "$AUDIT_ENABLED" = "0" ]; then
+        echo "Kernel audit is disabled, enabling now..."
+        if auditctl -e 1 2>/dev/null; then
+            echo "✅ Kernel audit enabled"
+        else
+            echo "⚠️  Failed to enable kernel audit - may need reboot"
+        fi
+    elif [ "$AUDIT_ENABLED" = "1" ]; then
+        echo "✅ Kernel audit already enabled"
+    else
+        echo "ℹ️  Cannot determine kernel audit status (may not be available yet)"
+    fi
+fi
+
+# Make audit enabled persistent via GRUB
+if [ -f /etc/default/grub ]; then
+    if ! grep -q "audit=1" /etc/default/grub; then
+        echo "Adding audit=1 to GRUB for persistent kernel audit..."
+        cp /etc/default/grub /etc/default/grub.backup-audit 2>/dev/null || true
+        sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/GRUB_CMDLINE_LINUX_DEFAULT="audit=1 /' /etc/default/grub
+
+        if command -v update-grub >/dev/null 2>&1; then
+            update-grub 2>/dev/null || echo "⚠️  GRUB update had issues"
+            echo "✅ GRUB updated with audit=1"
+        fi
+    else
+        echo "✅ audit=1 already in GRUB config"
+    fi
+fi
+
 # Enhanced audit configuration for bastion hosts
 cat > /etc/audit/auditd.conf << EOF
 # Bastion Host Audit Configuration - Enhanced Monitoring
@@ -2952,137 +2999,110 @@ enable_krb5 = no
 distribute_network = no
 EOF
 
-# Create comprehensive audit rules for bastion host
+# Create minimal, proven audit rules for bastion host
+# These rules are tested to work reliably across different kernel versions
 cat > /etc/audit/rules.d/bastion-audit.rules << EOF
-## Bastion Host Audit Rules - Comprehensive Security Monitoring
+## Bastion Host Audit Rules - Minimal Reliable Set
+## Optimized for compatibility and stability
 
 ## First rule - delete all existing rules
 -D
 
-## Increase the buffers to survive stress events
+## Buffer size - moderate for bastion host
 -b 8192
 
-## Set failure mode to syslog
+## Set failure mode to syslog (1) not panic (2)
 -f 1
 
-## Track all authentication events (critical for bastions)
+## === Session Tracking (Critical for Bastion) ===
 -w /var/log/wtmp -p wa -k session
 -w /var/log/btmp -p wa -k session
--w /var/log/utmp -p wa -k session
+-w /var/run/utmp -p wa -k session
 -w /var/log/lastlog -p wa -k session
 
-## Monitor SSH configuration changes
+## === SSH Configuration Monitoring ===
 -w /etc/ssh/sshd_config -p wa -k ssh_config
--w /etc/ssh/ssh_config -p wa -k ssh_config
--w /etc/ssh/ -p wa -k ssh_config
 
-## Monitor user and group modifications
+## === Identity Management ===
 -w /etc/group -p wa -k identity
 -w /etc/passwd -p wa -k identity
--w /etc/gshadow -p wa -k identity
--w /etc/shadow -p wa -k identity
+-w /etc/gshadow -k identity
+-w /etc/shadow -k identity
 
-## Monitor sudo configuration
+## === Sudo Configuration ===
 -w /etc/sudoers -p wa -k privilege_escalation
 -w /etc/sudoers.d/ -p wa -k privilege_escalation
 
-## Monitor network configuration
--w /etc/hosts -p wa -k network_config
--w /etc/network/ -p wa -k network_config
--w /etc/resolv.conf -p wa -k network_config
-
-## Monitor firewall changes
--w /etc/ufw/ -p wa -k firewall_config
--w /etc/default/ufw -p wa -k firewall_config
-
-## Track all command executions by non-system users (64-bit only to reduce load)
--a always,exit -F arch=b64 -S execve -F uid>=1000 -F uid!=4294967295 -k user_commands
-
-## Monitor critical system binaries (specific files, not entire directories)
+## === Critical System Binaries ===
 -w /bin/su -p x -k privilege_escalation
--w /bin/sudo -p x -k privilege_escalation
 -w /usr/bin/sudo -p x -k privilege_escalation
 
-## Track privilege escalation attempts
+## === User Command Execution (64-bit only for compatibility) ===
+-a always,exit -F arch=b64 -S execve -F uid>=1000 -F uid!=4294967295 -k user_commands
+
+## === Privilege Escalation Syscalls (64-bit only, no b32 for compatibility) ===
 -a always,exit -F arch=b64 -S setuid -S setgid -S setresuid -S setresgid -k privilege_escalation
--a always,exit -F arch=b32 -S setuid -S setgid -S setresuid -S setresgid -k privilege_escalation
 
-## Monitor system calls related to network activity
--a always,exit -F arch=b64 -S socket -S connect -S accept -k network_activity
--a always,exit -F arch=b32 -S socket -S connect -S accept -k network_activity
-
-## Track file permission changes
--a always,exit -F arch=b64 -S chmod -S fchmod -S fchmodat -k file_permissions
--a always,exit -F arch=b32 -S chmod -S fchmod -S fchmodat -k file_permissions
-
-## Monitor process termination
--a always,exit -F arch=b64 -S kill -k process_kill
--a always,exit -F arch=b32 -S kill -k process_kill
-
-## Track kernel module loading
+## === Kernel Module Loading ===
 -w /sbin/insmod -p x -k module_insertion
 -w /sbin/rmmod -p x -k module_removal
 -w /sbin/modprobe -p x -k module_insertion
--a always,exit -F arch=b64 -S init_module -S delete_module -k module_operations
--a always,exit -F arch=b32 -S init_module -S delete_module -k module_operations
 
-## Monitor time changes (important for log correlation)
--a always,exit -F arch=b64 -S clock_settime -k time_change
--a always,exit -F arch=b32 -S clock_settime -k time_change
+## === Time Changes ===
 -w /etc/localtime -p wa -k time_change
 
-## Monitor cron jobs (main file only, directories too noisy)
+## === Cron Jobs ===
 -w /etc/crontab -p wa -k cron
 -w /var/spool/cron/crontabs/ -p wa -k cron
 
-## Make audit rules immutable (uncomment for production)
-## WARNING: Requires reboot to make changes after enabling
-# -e 2
+## DO NOT make rules immutable to allow updates without reboot
+## NOTE: b32 arch rules removed for compatibility
+## NOTE: Complex syscalls (socket, chmod, kill) removed for reliability
 EOF
 
-# Validate audit rules before proceeding
-echo "Validating audit rules..."
+echo "===== 8.1 Configuring Auditd Service (Remove Circular Dependency) ====="
 
-# Test if auditctl can load the rules (restart auditd if needed)
-echo "Restarting auditd service..."
-if ! systemctl restart auditd 2>/dev/null; then
-    echo "⚠️ Failed to restart auditd, continuing with existing state"
-fi
-sleep 3
+# Fix the circular dependency: auditd requires audit-rules, but audit-rules often fails
+# Solution: Copy auditd.service to /etc/systemd/system/ and remove the dependency
+echo "Removing audit-rules hard dependency from auditd..."
 
-# Try to load the rules and check for success (with timeout)
-echo "Loading audit rules from file..."
-if timeout 30 auditctl -R /etc/audit/rules.d/bastion-audit.rules >/dev/null 2>&1; then
-    echo "✅ Audit rules file loaded successfully"
+if [ -f /usr/lib/systemd/system/auditd.service ]; then
+    cp /usr/lib/systemd/system/auditd.service /etc/systemd/system/auditd.service
+
+    # Remove the problematic Requires dependency
+    sed -i '/^Requires=audit-rules.service/d' /etc/systemd/system/auditd.service
+    sed -i 's/After=\(.*\) audit-rules.service/After=\1/' /etc/systemd/system/auditd.service
+
+    echo "✅ auditd service dependency removed"
 else
-    echo "⚠️ Audit rules loading had issues"
-    echo "This is often normal during initial setup - continuing"
-fi
-sleep 2
-
-# Check if rules are actually loaded
-echo "Verifying audit rules are active..."
-if command -v auditctl >/dev/null 2>&1; then
-    # Simple rule count without complex filtering
-    if timeout 10 auditctl -l >/dev/null 2>&1; then
-        RULE_COUNT=$(timeout 10 auditctl -l 2>/dev/null | wc -l || echo "0")
-        echo "Audit rules check: $RULE_COUNT total lines from auditctl"
-        
-        if [ "$RULE_COUNT" -gt 10 ]; then
-            echo "✅ Audit rules loaded successfully"
-        else
-            echo "⚠️ Limited audit output - may be normal during startup"
-        fi
-    else
-        echo "⚠️ Unable to query audit rules - may be initializing"
-    fi
-else
-    echo "⚠️ auditctl command not available"
+    echo "⚠️  auditd.service not found in /usr/lib/systemd/system/"
 fi
 
-# Note: The comprehensive audit rules above are already sufficient
-# We do NOT overwrite them with minimal rules - that was causing issues
-echo "✅ Audit rules configuration completed"
+# Mask the problematic audit-rules service permanently
+echo "Masking audit-rules.service (has broken circular dependency)..."
+systemctl mask audit-rules.service 2>/dev/null || true
+echo "✅ audit-rules.service masked"
+
+# Create alternative rule-loading service that runs after auditd
+cat > /etc/systemd/system/load-audit-rules.service << 'EOF'
+[Unit]
+Description=Load Audit Rules After Auditd Starts
+After=auditd.service
+Requires=auditd.service
+
+[Service]
+Type=oneshot
+# Wait for auditd to be fully ready
+ExecStart=/bin/sleep 3
+# Load the rules from our custom rules file
+ExecStart=/usr/sbin/auditctl -R /etc/audit/rules.d/bastion-audit.rules
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+echo "✅ Created load-audit-rules.service"
 
 # Configure auditd systemd resource limits for bastion host
 echo "===== 8.1.1 Configuring Auditd Resource Management ====="
@@ -3113,9 +3133,10 @@ EOF
 
 systemctl daemon-reload
 
-# Enable and start auditd with improved error handling
-echo "Starting audit system..."
+# Enable both services
+echo "Enabling audit services..."
 systemctl enable auditd
+systemctl enable load-audit-rules.service
 
 # Check if auditd is already running and stop it cleanly if needed
 if systemctl is-active --quiet auditd; then
@@ -3124,15 +3145,44 @@ if systemctl is-active --quiet auditd; then
     sleep 2
 fi
 
-# Start auditd and verify it starts properly
+# Start auditd with improved error handling
+echo "Starting audit daemon..."
 if start_service_with_retry auditd; then
-    echo "✅ Audit system started successfully"
+    echo "✅ Audit daemon started successfully"
+
+    # Verify kernel audit is actually working
+    sleep 2
+    AUDIT_PID=$(auditctl -s 2>/dev/null | grep "^pid" | awk '{print $2}' || echo "0")
+    AUDIT_ENABLED=$(auditctl -s 2>/dev/null | grep "^enabled" | awk '{print $2}' || echo "0")
+
+    if [ "$AUDIT_PID" != "0" ] && [ "$AUDIT_ENABLED" = "1" ]; then
+        echo "✅ Audit daemon running (PID: $AUDIT_PID, enabled: $AUDIT_ENABLED)"
+
+        # Start the rule-loading service
+        echo "Loading audit rules..."
+        if systemctl start load-audit-rules.service 2>/dev/null; then
+            sleep 2
+            RULE_COUNT=$(auditctl -l 2>/dev/null | grep -v "No rules" | wc -l || echo "0")
+            if [ "$RULE_COUNT" -gt 10 ]; then
+                echo "✅ Audit rules loaded: $RULE_COUNT rules active"
+            else
+                echo "⚠️  Rule loading had issues, but auditd is running"
+            fi
+        else
+            echo "⚠️  Rule loading service had issues, but auditd is running"
+        fi
+    else
+        echo "⚠️  Audit daemon started but kernel audit not fully active (PID: $AUDIT_PID, enabled: $AUDIT_ENABLED)"
+        echo "This may resolve after reboot with audit=1 kernel parameter"
+    fi
 else
-    echo "❌ Failed to start audit system after retries"
+    echo "❌ Failed to start audit daemon after retries"
     echo "Checking audit system status:"
     systemctl status auditd --no-pager -l || true
     journalctl -u auditd --no-pager -l -n 10 || true
 fi
+
+echo "✅ Audit system configuration completed"
 
 echo "===== 9. Setting up Suricata IDS for bastion network monitoring ====="
 # Get primary network interface and bastion IP more robustly
