@@ -293,11 +293,11 @@ SSH_LOGIN_GRACE_TIME="30"               # SSH login grace time
 SSH_CLIENT_ALIVE_INTERVAL="300"         # Keep alive interval
 SSH_CLIENT_ALIVE_COUNT_MAX="2"          # Max keep alive attempts
 
-# Optional Security Components (defaults to false for resource-conscious bastions)
-: "${INSTALL_CLAMAV:=false}"            # Install ClamAV antivirus (high resource usage)
-: "${INSTALL_MALDET:=false}"            # Install Linux Malware Detect (medium resource usage)
-: "${INSTALL_RKHUNTER:=false}"          # Install rootkit detection tools (low resource usage)
-: "${INSTALL_SURICATA:=false}"          # Install Suricata IDS (medium resource usage)
+# Security Components - Essential tools enabled by default for comprehensive bastion protection
+: "${INSTALL_CLAMAV:=false}"            # Install ClamAV antivirus (high resource usage) - optional
+: "${INSTALL_MALDET:=false}"            # Install Linux Malware Detect (medium resource usage) - optional
+: "${INSTALL_RKHUNTER:=true}"           # Install rootkit detection tools (low resource usage) - ENABLED BY DEFAULT
+: "${INSTALL_SURICATA:=true}"           # Install Suricata IDS (medium resource usage) - ENABLED BY DEFAULT
 
 # Bastion-specific network configuration
 INTERNAL_NETWORK="10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
@@ -938,9 +938,9 @@ if [ "$INSTALL_CLAMAV" = true ]; then
     fi
 fi
 
-echo "• INSTALL_MALDET=$INSTALL_MALDET (Malware detection - MEDIUM resource usage)"
-echo "• INSTALL_RKHUNTER=$INSTALL_RKHUNTER (Rootkit detection - LOW resource usage)"
-echo "• INSTALL_SURICATA=$INSTALL_SURICATA (Network IDS - MEDIUM resource usage)"
+echo "• INSTALL_MALDET=$INSTALL_MALDET (Malware detection - MEDIUM resource usage - optional)"
+echo "• INSTALL_RKHUNTER=$INSTALL_RKHUNTER (Rootkit detection - LOW resource usage - ENABLED BY DEFAULT)"
+echo "• INSTALL_SURICATA=$INSTALL_SURICATA (Network IDS - MEDIUM resource usage - ENABLED BY DEFAULT)"
 echo ""
 
 echo "===== 5.1 Installing core bastion packages ====="
@@ -957,9 +957,9 @@ echo "✅ Bastion security package installation completed"
 INSTALLED_COMPONENTS=""
 [ "$INSTALL_CLAMAV" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS clamav"
 [ "$INSTALL_MALDET" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS maldet"
-[ "$INSTALL_RKHUNTER" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS rkhunter"
-[ "$INSTALL_SURICATA" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS suricata"
-echo "Installed optional components:${INSTALLED_COMPONENTS:-none}"
+[ "$INSTALL_RKHUNTER" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS rkhunter(default)"
+[ "$INSTALL_SURICATA" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS suricata(default)"
+echo "Installed security components:${INSTALLED_COMPONENTS:- none}"
 
 if [ "$INSTALL_CLAMAV" = true ]; then
     echo "===== 6.0.1 Configuring ClamAV with resource optimization for bastion hosts ====="
