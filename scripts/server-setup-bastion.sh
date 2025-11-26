@@ -3362,6 +3362,10 @@ EOF
     mkdir -p /etc/systemd/system/suricata.service.d
     cat > /etc/systemd/system/suricata.service.d/resource-limits.conf << EOF
 [Service]
+# Override ExecStart to specify the correct network interface
+ExecStart=
+ExecStart=/usr/bin/suricata -D --af-packet=$PRIMARY_INTERFACE -c /etc/suricata/suricata.yaml --pidfile /run/suricata.pid
+
 # Resource limits for bastion host (more conservative than production)
 CPUQuota=30%
 MemoryMax=512M
