@@ -5714,7 +5714,7 @@ Nice=-10
 PrivateTmp=yes
 ProtectSystem=strict
 # ProtectHome=yes disabled - blocks SSH key authentication
-ReadWritePaths=/var/log /var/run /run
+ReadWritePaths=/var/log /var/run /run /var/spool /var/tmp /var/lib /tmp
 EOF
 
     # Unbound DNS watchdog - essential for bastion name resolution
