@@ -5718,12 +5718,13 @@ ProtectSystem=strict
 # ProtectHome=yes disabled - blocks SSH key authentication
 # Writable paths needed for system services to function:
 # - /var/log (logging), /var/run and /run (runtime files)
-# - /var/spool (mail queue, cron), /var/tmp (temp files)
-# - /var/lib (app data), /tmp (temp), /home (user files)
+# - /var/spool (mail queue, cron), /var/spool/postfix (postfix mail queues - CRITICAL)
+# - /var/tmp (temp files), /var/lib (app data), /tmp (temp), /home (user files)
 # - /var/cache (package cache), /var/backups (backups), /var/mail (mail)
+# NOTE: /var/spool/postfix explicitly listed due to bind mount handling
 # To disable: Remove this file or change ProtectSystem=strict to ProtectSystem=full
 # See README.md "SSH Filesystem Protection" section for details
-ReadWritePaths=/var/log /var/run /run /var/spool /var/tmp /var/lib /tmp /home /var/cache /var/backups /var/mail
+ReadWritePaths=/var/log /var/run /run /var/spool /var/spool/postfix /var/tmp /var/lib /tmp /home /var/cache /var/backups /var/mail
 EOF
 
     # Unbound DNS watchdog - essential for bastion name resolution
