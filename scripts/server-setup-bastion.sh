@@ -3364,7 +3364,7 @@ EOF
 [Service]
 # Override ExecStart to specify the correct network interface
 ExecStart=
-ExecStart=/usr/bin/suricata -D --af-packet=$PRIMARY_INTERFACE -c /etc/suricata/suricata.yaml --pidfile /run/suricata.pid
+ExecStart=/usr/bin/suricata -D --af-packet=$INTERFACE -c /etc/suricata/suricata.yaml --pidfile /run/suricata.pid
 
 # Resource limits for bastion host (more conservative than production)
 CPUQuota=30%
