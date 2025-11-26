@@ -1112,11 +1112,7 @@ OOMPolicy=kill
 OOMScoreAdjust=500
 
 # Security and resource isolation
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
 NoNewPrivileges=true
-ReadWritePaths=/var/lib/clamav /var/log/clamav /run/clamav
 
 # Prevent memory fragmentation issues
 TasksMax=50
@@ -1146,11 +1142,7 @@ OOMPolicy=kill
 OOMScoreAdjust=400
 
 # Security isolation
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
 NoNewPrivileges=true
-ReadWritePaths=/var/lib/clamav /var/log/clamav
 
 # Prevent resource conflicts during updates
 TasksMax=20
@@ -2894,11 +2886,7 @@ StandardOutput=journal
 StandardError=journal
 
 # Security isolation
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
 NoNewPrivileges=true
-ReadWritePaths=/var/lib/aide /var/log/aide /etc/aide
 EOF
 
 systemctl daemon-reload
@@ -5719,21 +5707,9 @@ StartLimitBurst=5
 OOMScoreAdjust=-500
 Nice=-10
 
-# Security hardening - Balanced approach
-# ProtectSystem=full makes /usr and /boot read-only (system binaries protected)
-# but leaves /etc writable for configuration management
-# This provides good security while allowing normal system administration via SSH
-PrivateTmp=yes
-ProtectSystem=full
-# ProtectHome=yes disabled - blocks SSH key authentication
-#
-# For MAXIMUM security (not recommended - makes system very hard to manage):
-# Uncomment these lines to enable strict mode:
-# ProtectSystem=strict
-# ReadWritePaths=/var/log /var/run /run /var/spool /var/spool/postfix /var/tmp /var/lib /tmp /home /var/cache /var/backups /var/mail /etc
-#
-# Note: With strict mode, you MUST use console access for most administration tasks
-# See README.md "SSH Filesystem Protection" section for details
+# NO filesystem protection - allows normal system administration
+# ProtectSystem causes read-only filesystem issues that break apt, installations, and system management
+# Security is provided by network isolation, firewalls, and access controls instead
 EOF
 
     # Unbound DNS watchdog - essential for bastion name resolution
