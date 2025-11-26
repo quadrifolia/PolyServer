@@ -5719,21 +5719,21 @@ StartLimitBurst=5
 OOMScoreAdjust=-500
 Nice=-10
 
-# Security hardening - Read-only root filesystem protection
-# ProtectSystem=strict makes entire filesystem read-only except paths listed below
-# This protects against unauthorized modifications via SSH sessions
+# Security hardening - Balanced approach
+# ProtectSystem=full makes /usr and /boot read-only (system binaries protected)
+# but leaves /etc writable for configuration management
+# This provides good security while allowing normal system administration via SSH
 PrivateTmp=yes
-ProtectSystem=strict
+ProtectSystem=full
 # ProtectHome=yes disabled - blocks SSH key authentication
-# Writable paths needed for system services to function:
-# - /var/log (logging), /var/run and /run (runtime files)
-# - /var/spool (mail queue, cron), /var/spool/postfix (postfix mail queues - CRITICAL)
-# - /var/tmp (temp files), /var/lib (app data), /tmp (temp), /home (user files)
-# - /var/cache (package cache), /var/backups (backups), /var/mail (mail)
-# NOTE: /var/spool/postfix explicitly listed due to bind mount handling
-# To disable: Remove this file or change ProtectSystem=strict to ProtectSystem=full
+#
+# For MAXIMUM security (not recommended - makes system very hard to manage):
+# Uncomment these lines to enable strict mode:
+# ProtectSystem=strict
+# ReadWritePaths=/var/log /var/run /run /var/spool /var/spool/postfix /var/tmp /var/lib /tmp /home /var/cache /var/backups /var/mail /etc
+#
+# Note: With strict mode, you MUST use console access for most administration tasks
 # See README.md "SSH Filesystem Protection" section for details
-ReadWritePaths=/var/log /var/run /run /var/spool /var/spool/postfix /var/tmp /var/lib /tmp /home /var/cache /var/backups /var/mail
 EOF
 
     # Unbound DNS watchdog - essential for bastion name resolution

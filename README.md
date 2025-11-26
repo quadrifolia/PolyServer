@@ -740,101 +740,82 @@ systemctl restart sshd
 # - Violating bastion host best practices
 ```
 
-### SSH Filesystem Protection (ProtectSystem=strict)
+### SSH Filesystem Protection (ProtectSystem)
 
-**⚠️ CRITICAL SECURITY FEATURE**
+**⚠️ SECURITY FEATURE - BALANCED DEFAULT**
 
-The bastion host implements **read-only filesystem protection** for all SSH sessions using systemd's `ProtectSystem=strict`. This is a powerful security feature that prevents unauthorized modifications to the system via SSH.
+The bastion host implements **filesystem protection** for SSH sessions using systemd's `ProtectSystem=full`. This provides a balance between security and usability.
 
-#### How It Works
+#### How It Works (Default: ProtectSystem=full)
 
-When you SSH into the bastion, systemd creates a **mount namespace** where the entire filesystem appears **read-only**, except for specific paths needed by system services:
+When you SSH into the bastion, systemd creates a **mount namespace** with the following protections:
 
 ```
-Filesystem Status in SSH Sessions:
-✅ Writable: /var/log, /var/run, /run, /var/spool, /var/tmp, /var/lib,
-             /tmp, /home, /var/cache, /var/backups, /var/mail
-❌ Read-only: /, /usr, /etc, /boot, /opt, /srv (everything else)
+Filesystem Status in SSH Sessions (Default):
+✅ Writable: /, /etc, /var/*, /tmp, /home (normal administration allowed)
+❌ Read-only: /usr, /boot (system binaries and boot files protected)
 ```
 
-**What This Means:**
-- SSH users cannot modify system binaries, configurations, or critical files
-- Even if an attacker compromises your SSH session, they cannot:
-  - Replace system binaries
-  - Modify configuration files in /etc
-  - Install malware in system directories
-  - Tamper with boot files
-- System services still function normally (they run outside the SSH namespace)
+This means:
+- ✅ You can edit configuration files in `/etc` via SSH
+- ✅ You can run `apt update && apt upgrade` via SSH
+- ✅ System administration works normally
+- ✅ System binaries in `/usr` are protected from tampering
+- ✅ Boot files in `/boot` are protected
+
+**What This Protects:**
+- ✅ System binaries in `/usr` cannot be replaced with malicious versions
+- ✅ Boot files in `/boot` cannot be tampered with
+- ✅ Even if SSH is compromised, attacker cannot:
+  - Replace `/usr/bin/sudo` or other system binaries
+  - Modify kernel or bootloader
+  - Install rootkits in `/usr/lib`
+
+**What Remains Usable:**
+- ✅ Edit configuration files via SSH (`nano /etc/ssh/sshd_config`)
+- ✅ Run system updates via SSH (`apt update && apt upgrade`)
+- ✅ Install software via SSH (`apt install package`)
+- ✅ All normal system administration tasks work
 
 #### Running System Updates
 
-**Option 1: Use Console Access (Most Secure)**
-```bash
-# 1. Access server via hosting provider console (OVH/Hetzner web console)
-# 2. Login as root directly
-# 3. Run updates normally
-apt update && apt upgrade -y
-```
-
-**Option 2: Use Root via SSH Console Tools**
-```bash
-# From your local machine, run commands as root over SSH
-ssh -p 2222 bastion@your-bastion "su - -c 'apt update && apt upgrade -y'"
-# You'll be prompted for root password
-```
-
-**Option 3: Temporarily from SSH Session**
+**With Default ProtectSystem=full (Simple):**
 ```bash
 # SSH in as bastion user
 ssh -p 2222 bastion@your-bastion
 
-# Switch to root (not affected by ProtectSystem)
+# Switch to root
 su -
 Password: [root password]
 
-# Now filesystem is fully writable
+# Run updates normally - everything works!
 apt update
 apt upgrade -y
 apt autoremove
 exit
 ```
 
+**No special steps needed** - the default configuration allows normal system administration.
+
 #### Common Issues and Solutions
 
-**Issue: "Read-only file system" errors during SSH**
+**Issue: Can't modify files in /usr or /boot**
 
 ```bash
-# When logged in via SSH, you might see:
-bastion@bastion:~$ sudo touch /etc/test
-touch: cannot touch '/etc/test': Read-only file system
-
-# Solution: This is intentional - use root via 'su -' or console
-```
-
-**Issue: System services reporting write errors**
-
-```bash
-# Symptoms:
-# - Postfix: "create file maildrop: Read-only file system"
-# - Services failing to write logs or temp files
-
-# Solution: Add missing paths to ReadWritePaths
-# Edit: /etc/systemd/system/ssh.service.d/watchdog.conf
-# Add the path to ReadWritePaths line
-# Reload: systemctl daemon-reload && systemctl restart ssh
-```
-
-**Issue: Need to install software via SSH**
-
-```bash
-# ❌ This won't work:
-bastion@bastion:~$ sudo apt install package
-# Read-only filesystem
-
-# ✅ Use root instead:
+# This is intentional protection - these should rarely be modified
+# If you really need to (very rare):
 bastion@bastion:~$ su -
-Password: [root password]
-root@bastion:~# apt install package
+root@bastion:~# nano /usr/local/bin/somescript  # This works as root
+```
+
+**Issue: "Read-only file system" in /usr during package installation**
+
+```bash
+# This should not happen with default ProtectSystem=full
+# If it does, you might be in strict mode - check configuration:
+systemctl cat ssh.service | grep ProtectSystem
+
+# Should show: ProtectSystem=full (not strict)
 ```
 
 #### Configuration Location
@@ -844,101 +825,111 @@ The filesystem protection is configured in:
 /etc/systemd/system/ssh.service.d/watchdog.conf
 ```
 
-#### Modifying Writable Paths
+#### Enabling Maximum Security (Strict Mode)
 
-If you need to make additional paths writable:
+**⚠️ WARNING: Makes system administration very difficult!**
+
+If you need maximum security and are willing to use console access for most administration:
 
 ```bash
-# 1. Access as root (console or su -)
-su -
+# 1. Access as root via console (SSH won't work for this!)
+# Use hosting provider console
 
 # 2. Edit SSH service configuration
 nano /etc/systemd/system/ssh.service.d/watchdog.conf
 
-# 3. Find this line:
-ReadWritePaths=/var/log /var/run /run /var/spool /var/tmp /var/lib /tmp /home /var/cache /var/backups /var/mail
+# 3. Change:
+ProtectSystem=full
 
-# 4. Add your path (space-separated):
-ReadWritePaths=/var/log /var/run /run /var/spool /var/tmp /var/lib /tmp /home /var/cache /var/backups /var/mail /your/custom/path
+# To:
+ProtectSystem=strict
+ReadWritePaths=/var/log /var/run /run /var/spool /var/spool/postfix /var/tmp /var/lib /tmp /home /var/cache /var/backups /var/mail /etc
 
-# 5. Save and exit (Ctrl+X, Y, Enter)
-
-# 6. Reload and restart SSH
+# 4. Save and reload
 systemctl daemon-reload
-systemctl restart ssh  # Will disconnect current SSH sessions
+systemctl restart ssh
 ```
+
+**With strict mode:**
+- ❌ Can't edit most system files via SSH
+- ❌ Must use console access for configuration changes
+- ✅ Maximum protection against SSH-based attacks
+- ✅ Root filesystem completely read-only from SSH
 
 #### Disabling Filesystem Protection
 
-**⚠️ WARNING: This significantly reduces security - not recommended!**
+**⚠️ WARNING: Reduces security - only for testing/development**
 
-If you must disable the read-only protection:
-
-**Method 1: Change to Less Restrictive Mode**
 ```bash
-# As root (console or su -)
+# As root (via su -)
 nano /etc/systemd/system/ssh.service.d/watchdog.conf
 
-# Change this line:
-ProtectSystem=strict
+# Change:
+ProtectSystem=full
 
-# To one of these:
-ProtectSystem=full     # /usr and /boot read-only, rest writable
-ProtectSystem=yes      # Only /usr read-only
-ProtectSystem=off      # No protection (not recommended)
+# To:
+ProtectSystem=off      # No protection at all
 
 # Reload and restart
 systemctl daemon-reload
 systemctl restart ssh
 ```
 
-**Method 2: Remove Configuration Entirely**
-```bash
-# As root
-rm /etc/systemd/system/ssh.service.d/watchdog.conf
-systemctl daemon-reload
-systemctl restart ssh
-
-# ⚠️ This removes ALL SSH hardening, not just filesystem protection!
-```
-
 #### Impact on Different Tasks
 
-| Task | Works via SSH | Requires Root/Console |
-|------|---------------|----------------------|
+**Default (ProtectSystem=full):**
+
+| Task | Works via SSH (as root with su -) | Limited/Blocked |
+|------|-----------------------------------|-----------------|
+| Read system logs | ✅ Yes | - |
+| Monitor services | ✅ Yes | - |
+| View configurations | ✅ Yes | - |
+| Edit /etc configs | ✅ Yes (via su -) | - |
+| System updates (apt) | ✅ Yes (via su -) | - |
+| Install software | ✅ Yes (via su -) | - |
+| Service restart | ✅ Yes (via su -) | - |
+| Edit files in /home | ✅ Yes | - |
+| Modify /usr binaries | ❌ No | ✅ Protected |
+| Modify /boot files | ❌ No | ✅ Protected |
+
+**If Using Strict Mode (Optional):**
+
+| Task | Works via SSH | Requires Console |
+|------|---------------|------------------|
 | Read system logs | ✅ Yes (with sudo) | - |
 | Monitor services | ✅ Yes (with sudo) | - |
-| View configurations | ✅ Yes | - |
-| Edit user files in /home | ✅ Yes | - |
-| System updates (apt) | ❌ No | ✅ Requires root |
-| Edit /etc configs | ❌ No | ✅ Requires root |
-| Install software | ❌ No | ✅ Requires root |
-| Service restart | ❌ No | ✅ Requires root |
-| Create files in /opt | ❌ No | ✅ Requires root |
+| System updates | ❌ No | ✅ Console only |
+| Edit /etc configs | ❌ No | ✅ Console only |
+| Install software | ❌ No | ✅ Console only |
 
 #### Why This Is Important
 
-**Without ProtectSystem=strict:**
+**Without ProtectSystem (No Protection):**
 - Attacker with SSH access could replace `/usr/bin/sudo` with malicious version
 - Could modify `/etc/ssh/sshd_config` to create backdoors
 - Could install rootkits in system directories
 - Could tamper with boot process
 
-**With ProtectSystem=strict:**
-- ✅ System binaries protected from tampering
-- ✅ Configuration files protected
-- ✅ Boot process protected
-- ✅ Even compromised SSH session cannot modify system
-- ✅ Limits blast radius of SSH-based attacks
+**With ProtectSystem=full (Default):**
+- ✅ System binaries in `/usr` protected from tampering
+- ✅ Boot process in `/boot` protected
+- ✅ Normal system administration still works
+- ✅ Good balance between security and usability
+- ✅ Attacker cannot replace core system binaries
+
+**With ProtectSystem=strict (Maximum Security):**
+- ✅ Everything in full mode PLUS
+- ✅ Configuration files in `/etc` also protected
+- ✅ Maximum protection against all filesystem modifications
+- ❌ **But**: Requires console access for most administration
 
 #### Best Practices
 
-1. **Keep ProtectSystem=strict enabled** - It's one of the strongest defenses
-2. **Use console access for system administration** - Hosting provider console bypasses restrictions
-3. **Use `su -` for administrative tasks** - Root sessions are not restricted
-4. **Only add paths to ReadWritePaths if absolutely necessary** - Each path reduces protection
-5. **Never disable completely** - Use less restrictive modes (full/yes) if strict is too limiting
-6. **Document any changes** - If you add custom writable paths, document why
+1. **Keep default ProtectSystem=full** - Good balance for most environments
+2. **Use `su -` for administrative tasks** - Works perfectly with default settings
+3. **Only use strict mode if you have easy console access** - Strict makes SSH administration very difficult
+4. **Never disable completely** - Even `ProtectSystem=yes` is better than `off`
+5. **Test strict mode before deploying** - Make sure you can access console if needed
 
 #### Troubleshooting
 
