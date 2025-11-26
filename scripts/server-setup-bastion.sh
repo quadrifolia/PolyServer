@@ -3159,7 +3159,7 @@ if start_service_with_retry auditd; then
         echo "Loading audit rules..."
         if systemctl start load-audit-rules.service 2>/dev/null; then
             sleep 2
-            RULE_COUNT=$(auditctl -l 2>/dev/null | grep -v "No rules" | wc -l || echo "0")
+            RULE_COUNT=$(auditctl -l 2>/dev/null | grep -vc "No rules" || echo "0")
             if [ "$RULE_COUNT" -gt 10 ]; then
                 echo "✅ Audit rules loaded: $RULE_COUNT rules active"
             else
