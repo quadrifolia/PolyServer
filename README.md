@@ -742,44 +742,39 @@ systemctl restart sshd
 
 ### SSH Filesystem Protection (ProtectSystem)
 
-**⚠️ SECURITY FEATURE - BALANCED DEFAULT**
+**ℹ️ DISABLED BY DEFAULT FOR USABILITY**
 
-The bastion host implements **filesystem protection** for SSH sessions using systemd's `ProtectSystem=full`. This provides a balance between security and usability.
+As of the latest version, **ProtectSystem is disabled by default** on the SSH service to ensure the system remains manageable and usable. System administration works normally without read-only filesystem issues.
 
-#### How It Works (Default: ProtectSystem=full)
+#### Current Default Behavior (No ProtectSystem)
 
-When you SSH into the bastion, systemd creates a **mount namespace** with the following protections:
+By default, the SSH service has **no filesystem restrictions**, providing a normal Linux experience:
 
 ```
 Filesystem Status in SSH Sessions (Default):
-✅ Writable: /, /etc, /var/*, /tmp, /home (normal administration allowed)
-❌ Read-only: /usr, /boot (system binaries and boot files protected)
+✅ Fully writable: All directories including /, /etc, /var, /usr, /boot, /tmp, /home
+✅ Normal system administration without restrictions
+✅ apt install/update works without issues
+✅ No read-only filesystem errors
 ```
 
-This means:
-- ✅ You can edit configuration files in `/etc` via SSH
-- ✅ You can run `apt update && apt upgrade` via SSH
-- ✅ System administration works normally
-- ✅ System binaries in `/usr` are protected from tampering
-- ✅ Boot files in `/boot` are protected
+**Why ProtectSystem was removed:**
+- ❌ Caused read-only filesystem errors during package installations
+- ❌ Made system administration unnecessarily complex
+- ❌ Required console access for basic maintenance tasks
+- ❌ Broke apt, dpkg, and other standard tools
+- ✅ Security is better provided through network isolation, firewalls, and access controls
 
-**What This Protects:**
-- ✅ System binaries in `/usr` cannot be replaced with malicious versions
-- ✅ Boot files in `/boot` cannot be tampered with
-- ✅ Even if SSH is compromised, attacker cannot:
-  - Replace `/usr/bin/sudo` or other system binaries
-  - Modify kernel or bootloader
-  - Install rootkits in `/usr/lib`
-
-**What Remains Usable:**
-- ✅ Edit configuration files via SSH (`nano /etc/ssh/sshd_config`)
-- ✅ Run system updates via SSH (`apt update && apt upgrade`)
-- ✅ Install software via SSH (`apt install package`)
-- ✅ All normal system administration tasks work
+**Current Security Model:**
+- ✅ Network-level protection (UFW firewall, fail2ban, port restrictions)
+- ✅ Access control (key-based SSH authentication only, no password login)
+- ✅ Monitoring and detection (Suricata IDS, auditd, comprehensive logging)
+- ✅ Application-level sandboxing (individual services have their own protections)
+- ✅ Usable system that can be properly maintained and updated
 
 #### Running System Updates
 
-**With Default ProtectSystem=full (Simple):**
+**Default behavior (No restrictions):**
 ```bash
 # SSH in as bastion user
 ssh -p 2222 bastion@your-bastion
@@ -795,175 +790,72 @@ apt autoremove
 exit
 ```
 
-**No special steps needed** - the default configuration allows normal system administration.
+Everything works as expected on a normal Linux system.
 
-#### Common Issues and Solutions
+#### Optional: Enabling ProtectSystem for Enhanced Security
 
-**Issue: Can't modify files in /usr or /boot**
+**⚠️ WARNING: Only enable if you understand the implications!**
 
-```bash
-# This is intentional protection - these should rarely be modified
-# If you really need to (very rare):
-bastion@bastion:~$ su -
-root@bastion:~# nano /usr/local/bin/somescript  # This works as root
-```
-
-**Issue: "Read-only file system" in /usr during package installation**
+If you want to add filesystem protection despite the usability issues, you can manually enable it:
 
 ```bash
-# This should not happen with default ProtectSystem=full
-# If it does, you might be in strict mode - check configuration:
-systemctl cat ssh.service | grep ProtectSystem
-
-# Should show: ProtectSystem=full (not strict)
-```
-
-#### Configuration Location
-
-The filesystem protection is configured in:
-```
-/etc/systemd/system/ssh.service.d/watchdog.conf
-```
-
-#### Enabling Maximum Security (Strict Mode)
-
-**⚠️ WARNING: Makes system administration very difficult!**
-
-If you need maximum security and are willing to use console access for most administration:
-
-```bash
-# 1. Access as root via console (SSH won't work for this!)
-# Use hosting provider console
-
-# 2. Edit SSH service configuration
+# 1. Edit SSH service configuration
 nano /etc/systemd/system/ssh.service.d/watchdog.conf
 
-# 3. Change:
-ProtectSystem=full
+# 2. Add ProtectSystem setting:
+[Service]
+Restart=on-failure
+RestartSec=5
+StartLimitInterval=300
+StartLimitBurst=5
+OOMScoreAdjust=-500
+Nice=-10
 
-# To:
-ProtectSystem=strict
-ReadWritePaths=/var/log /var/run /run /var/spool /var/spool/postfix /var/tmp /var/lib /tmp /home /var/cache /var/backups /var/mail /etc
+# Add one of these protection levels:
+ProtectSystem=full    # Protects /usr and /boot only (recommended if enabling)
+# OR
+ProtectSystem=strict  # Protects everything (requires console access for admin)
+ReadWritePaths=/var/log /var/run /run /var/spool /var/tmp /var/lib /tmp /home /var/cache /var/backups /var/mail /etc
 
-# 4. Save and reload
+# 3. Save and reload
 systemctl daemon-reload
 systemctl restart ssh
 ```
 
-**With strict mode:**
-- ❌ Can't edit most system files via SSH
-- ❌ Must use console access for configuration changes
-- ✅ Maximum protection against SSH-based attacks
-- ✅ Root filesystem completely read-only from SSH
+**Consequences of enabling ProtectSystem:**
+- ⚠️ May cause "Read-only file system" errors
+- ⚠️ Can break apt, dpkg, and package installations
+- ⚠️ Requires console access for many admin tasks
+- ⚠️ Makes system harder to maintain and update
+- ✅ Provides additional filesystem-level protection
 
-#### Disabling Filesystem Protection
+#### Security Philosophy
 
-**⚠️ WARNING: Reduces security - only for testing/development**
+The bastion host implements a **layered security approach** without relying on ProtectSystem:
 
-```bash
-# As root (via su -)
-nano /etc/systemd/system/ssh.service.d/watchdog.conf
+**Defense in Depth:**
+1. **Network Layer**: UFW firewall, fail2ban, Suricata IDS
+2. **Access Layer**: Key-only SSH authentication, no password login, restricted sudo
+3. **Monitoring Layer**: Comprehensive auditd rules, system logging, alerting
+4. **Application Layer**: Individual services have their own sandboxing where appropriate
 
-# Change:
-ProtectSystem=full
+**Why this approach works better:**
+- ✅ Security where it matters (network perimeter, access control)
+- ✅ System remains usable and maintainable
+- ✅ Can respond quickly to security incidents
+- ✅ Proper monitoring and detection capabilities
+- ✅ No unexpected "read-only filesystem" errors breaking operations
 
-# To:
-ProtectSystem=off      # No protection at all
+**If an attacker gets SSH access:**
+- They still need to get root (auditd logs all attempts)
+- All their actions are logged and monitored
+- fail2ban will block repeated failed attempts
+- Suricata IDS will detect suspicious patterns
+- Network isolation limits lateral movement
 
-# Reload and restart
-systemctl daemon-reload
-systemctl restart ssh
-```
+This provides effective security while maintaining a usable, maintainable system.
 
-#### Impact on Different Tasks
-
-**Default (ProtectSystem=full):**
-
-| Task | Works via SSH (as root with su -) | Limited/Blocked |
-|------|-----------------------------------|-----------------|
-| Read system logs | ✅ Yes | - |
-| Monitor services | ✅ Yes | - |
-| View configurations | ✅ Yes | - |
-| Edit /etc configs | ✅ Yes (via su -) | - |
-| System updates (apt) | ✅ Yes (via su -) | - |
-| Install software | ✅ Yes (via su -) | - |
-| Service restart | ✅ Yes (via su -) | - |
-| Edit files in /home | ✅ Yes | - |
-| Modify /usr binaries | ❌ No | ✅ Protected |
-| Modify /boot files | ❌ No | ✅ Protected |
-
-**If Using Strict Mode (Optional):**
-
-| Task | Works via SSH | Requires Console |
-|------|---------------|------------------|
-| Read system logs | ✅ Yes (with sudo) | - |
-| Monitor services | ✅ Yes (with sudo) | - |
-| System updates | ❌ No | ✅ Console only |
-| Edit /etc configs | ❌ No | ✅ Console only |
-| Install software | ❌ No | ✅ Console only |
-
-#### Why This Is Important
-
-**Without ProtectSystem (No Protection):**
-- Attacker with SSH access could replace `/usr/bin/sudo` with malicious version
-- Could modify `/etc/ssh/sshd_config` to create backdoors
-- Could install rootkits in system directories
-- Could tamper with boot process
-
-**With ProtectSystem=full (Default):**
-- ✅ System binaries in `/usr` protected from tampering
-- ✅ Boot process in `/boot` protected
-- ✅ Normal system administration still works
-- ✅ Good balance between security and usability
-- ✅ Attacker cannot replace core system binaries
-
-**With ProtectSystem=strict (Maximum Security):**
-- ✅ Everything in full mode PLUS
-- ✅ Configuration files in `/etc` also protected
-- ✅ Maximum protection against all filesystem modifications
-- ❌ **But**: Requires console access for most administration
-
-#### Best Practices
-
-1. **Keep default ProtectSystem=full** - Good balance for most environments
-2. **Use `su -` for administrative tasks** - Works perfectly with default settings
-3. **Only use strict mode if you have easy console access** - Strict makes SSH administration very difficult
-4. **Never disable completely** - Even `ProtectSystem=yes` is better than `off`
-5. **Test strict mode before deploying** - Make sure you can access console if needed
-
-#### Troubleshooting
-
-**Check current SSH service configuration:**
-```bash
-systemctl cat ssh.service | grep -A 20 "ProtectSystem"
-```
-
-**View writable paths:**
-```bash
-grep ReadWritePaths /etc/systemd/system/ssh.service.d/watchdog.conf
-```
-
-**Test filesystem writability from SSH:**
-```bash
-# This should fail (read-only):
-touch /etc/test-file
-
-# This should work (writable):
-touch /var/tmp/test-file
-touch ~/test-file
-```
-
-**Check if running in restricted namespace:**
-```bash
-# SSH session - shows mount namespace
-cat /proc/self/mountinfo | grep " / "
-
-# Root session via 'su -' - shows real mounts
-su -
-cat /proc/self/mountinfo | grep " / "
-```
-
-**Recommendation:** Keep the default SSH key-only configuration. Use the root console access for emergencies only.
+---
 
 #### Advanced Monitoring
 - **Comprehensive audit logging**: All user activities tracked
