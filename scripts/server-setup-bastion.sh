@@ -2211,12 +2211,14 @@ if sensors 2>/dev/null | grep -E "CRITICAL|ALARM" | grep -v "+0.0"; then
 fi
 
 # Rotate log if it gets too large (keep last 1000 lines)
+# Use /tmp for temporary file to avoid read-only filesystem issues
 if [ -f "$LOGFILE" ] && [ $(wc -l < "$LOGFILE" 2>/dev/null || echo 0) -gt 1000 ]; then
-    if tail -n 500 "$LOGFILE" > "${LOGFILE}.tmp" 2>/dev/null; then
-        mv "${LOGFILE}.tmp" "$LOGFILE"
+    TMPFILE=$(mktemp /tmp/sensors-log-XXXXXX)
+    if tail -n 500 "$LOGFILE" > "$TMPFILE" 2>/dev/null && [ -s "$TMPFILE" ]; then
+        mv "$TMPFILE" "$LOGFILE"
     else
-        # If tail fails, remove any partial temp file
-        rm -f "${LOGFILE}.tmp"
+        # If tail fails, remove any partial temp file and keep original
+        rm -f "$TMPFILE"
     fi
 fi
 EOF
@@ -3525,10 +3527,11 @@ echo "===== 10. Setting up comprehensive logging and monitoring ====="
 # Configure rsyslog with traditional timestamp format for logwatch compatibility
 if ! grep -q "RSYSLOG_TraditionalFileFormat" /etc/rsyslog.conf; then
     cp /etc/rsyslog.conf /etc/rsyslog.conf.backup
+    RSYSLOG_TMP=$(mktemp /tmp/rsyslog-config-XXXXXX)
     {
         echo "\$ActionFileDefaultTemplate RSYSLOG_TraditionalFileFormat"
         cat /etc/rsyslog.conf
-    } > /etc/rsyslog.conf.tmp && mv /etc/rsyslog.conf.tmp /etc/rsyslog.conf
+    } > "$RSYSLOG_TMP" && mv "$RSYSLOG_TMP" /etc/rsyslog.conf
     echo "✅ Configured rsyslog to use traditional timestamp format"
 fi
 
@@ -5171,10 +5174,16 @@ emergency_cleanup() {
     find /var/log -name "*.log.*" -mtime +3 -delete 2>/dev/null || true
     
     # Truncate large current log files (keep last 1000 lines)
+    # Use /tmp for temporary files to avoid read-only filesystem issues
     for logfile in /var/log/*.log; do
         if [ -f "\$logfile" ] && [ "\$(stat -c%s "\$logfile" 2>/dev/null)" -gt 104857600 ]; then  # 100MB
-            tail -n 1000 "\$logfile" > "\$logfile.tmp" && mv "\$logfile.tmp" "\$logfile"
-            echo "\$(date): Truncated large log file: \$logfile" >> /var/log/emergency-cleanup.log
+            tmpfile=\$(mktemp /tmp/log-truncate-XXXXXX)
+            if tail -n 1000 "\$logfile" > "\$tmpfile" 2>/dev/null && [ -s "\$tmpfile" ]; then
+                mv "\$tmpfile" "\$logfile"
+                echo "\$(date): Truncated large log file: \$logfile" >> /var/log/emergency-cleanup.log
+            else
+                rm -f "\$tmpfile"
+            fi
         fi
     done
     
