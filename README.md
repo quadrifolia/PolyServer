@@ -553,36 +553,41 @@ The bastion setup provides enhanced security beyond the standard server hardenin
 - **Postfix**: Local mail system for security notifications
 - **AppArmor**: Mandatory access control for critical services
 
-#### Optional Security Components (Disabled by Default)
+#### Enhanced Security Components (Enabled by Default)
 
-**⚠️ Important:** The bastion script uses **conservative defaults** and does NOT install resource-intensive optional components unless explicitly requested. This ensures optimal performance on resource-constrained systems.
+These essential security tools are **now enabled by default** to provide comprehensive bastion protection:
 
-To enable optional components, set environment variables before running the script:
+- **RKHunter + chkrootkit**: Rootkit detection and system integrity checking (LOW resource - ~10MB RAM)
+- **Suricata IDS**: Network intrusion detection system with real-time traffic analysis (MEDIUM resource - ~150MB RAM)
+
+**Why these are enabled by default:**
+- Bastion hosts are high-value targets requiring maximum security
+- Rootkit detection is essential and has minimal resource impact
+- Network IDS is critical for monitoring all traffic through the bastion gateway
+- Combined resource usage: ~160MB RAM - acceptable for modern bastions
+
+#### Optional Security Components
+
+Additional security tools available for specific needs:
 
 ```bash
-# Enable all optional security components
-export INSTALL_CLAMAV=true      # Antivirus scanning (HIGH resource usage - 500MB+ RAM)
+# Enable optional components (disabled by default)
+export INSTALL_CLAMAV=true      # Antivirus scanning (HIGH resource - 500MB+ RAM)
 export INSTALL_MALDET=true      # Linux Malware Detect (MEDIUM resource - disk I/O intensive)
-export INSTALL_RKHUNTER=true    # Rootkit detection (LOW resource usage)
-export INSTALL_SURICATA=true    # Network IDS (MEDIUM resource - CPU intensive)
-export INSTALL_NETDATA=true     # Real-time monitoring (optional - uses ~100MB RAM)
+
+# Disable default components if needed (not recommended)
+export INSTALL_RKHUNTER=false   # Disable rootkit detection (not recommended)
+export INSTALL_SURICATA=false   # Disable network IDS (not recommended)
 
 # Run the script with environment preserved
 sudo -E ./scripts/server-setup-bastion.sh
 ```
 
-**Default Behavior (No Environment Variables Set):**
-- All optional components default to `false`
-- Only core security tools are installed
-- Minimal resource footprint (~200MB RAM for security services)
-- Perfectly suitable for production bastion hosts
-
-**What Each Optional Component Does:**
-- **ClamAV** (`INSTALL_CLAMAV`): Antivirus scanning for uploaded files and malware detection. High resource usage.
-- **Malware Detect** (`INSTALL_MALDET`): Linux-specific malware scanner. Periodic file system scanning.
-- **RKHunter** (`INSTALL_RKHUNTER`): Rootkit detection and system integrity checking. Minimal overhead.
-- **Suricata** (`INSTALL_SURICATA`): Network intrusion detection system with real-time traffic analysis.
-- **Netdata** (`INSTALL_NETDATA`): Real-time performance monitoring with web dashboard.
+**What Each Component Does:**
+- **ClamAV** (`INSTALL_CLAMAV`): Antivirus scanning for files. Better for mail/file servers. High resource usage.
+- **Malware Detect** (`INSTALL_MALDET`): Linux malware scanner. Better for web servers with file uploads. Disk I/O intensive.
+- **RKHunter** (`INSTALL_RKHUNTER`): **ENABLED BY DEFAULT** - Rootkit detection with daily automated scans.
+- **Suricata** (`INSTALL_SURICATA`): **ENABLED BY DEFAULT** - Network IDS monitoring all bastion traffic.
 
 **Viewing Current Configuration:**
 
