@@ -5710,11 +5710,20 @@ StartLimitBurst=5
 OOMScoreAdjust=-500
 Nice=-10
 
-# Security hardening
+# Security hardening - Read-only root filesystem protection
+# ProtectSystem=strict makes entire filesystem read-only except paths listed below
+# This protects against unauthorized modifications via SSH sessions
 PrivateTmp=yes
 ProtectSystem=strict
 # ProtectHome=yes disabled - blocks SSH key authentication
-ReadWritePaths=/var/log /var/run /run /var/spool /var/tmp /var/lib /tmp
+# Writable paths needed for system services to function:
+# - /var/log (logging), /var/run and /run (runtime files)
+# - /var/spool (mail queue, cron), /var/tmp (temp files)
+# - /var/lib (app data), /tmp (temp), /home (user files)
+# - /var/cache (package cache), /var/backups (backups), /var/mail (mail)
+# To disable: Remove this file or change ProtectSystem=strict to ProtectSystem=full
+# See README.md "SSH Filesystem Protection" section for details
+ReadWritePaths=/var/log /var/run /run /var/spool /var/tmp /var/lib /tmp /home /var/cache /var/backups /var/mail
 EOF
 
     # Unbound DNS watchdog - essential for bastion name resolution
