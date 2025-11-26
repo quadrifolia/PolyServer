@@ -3341,7 +3341,7 @@ alert udp \$HOME_NET any -> any 53 (msg:"BASTION DNS Tunneling Attempt"; content
 EOF
 
     # Set up Suricata log rotation
-    cat > /etc/logrotate.d/suricata << EOF
+    cat > /etc/logrotate.d/suricata << 'EOF'
 /var/log/suricata/*.log /var/log/suricata/*.json {
     daily
     size 100M
@@ -4172,9 +4172,10 @@ echo ""
 
 echo "3. Checking cron jobs:"
 if [ -f /etc/cron.daily/00logwatch ]; then
-    echo "✅ Daily cron job exists and is executable: $(ls -la /etc/cron.daily/00logwatch | cut -d' ' -f1)"
+    PERMS=$(ls -la /etc/cron.daily/00logwatch 2>/dev/null | cut -d' ' -f1)
+    echo "✅ Daily cron job exists and is executable: $PERMS"
 else
-    echo "❌ Daily cron job not found"
+    echo "⏭️  Daily cron job not found (logwatch may use systemd timer instead)"
 fi
 
 if [ -f /etc/cron.d/logwatch ]; then
