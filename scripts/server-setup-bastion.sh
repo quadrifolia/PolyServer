@@ -5441,11 +5441,13 @@ if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; the
     web files group = netdata
     
 [plugins]
-    # Enable all plugins for complete monitoring
+    # Enable essential plugins for bastion monitoring
     proc = yes
     diskspace = yes
     cgroups = yes
-    tc = yes
+    tc = no
+    # tc (traffic control/QoS) disabled - not needed on bastion
+    # Bastion has minimal SSH traffic, no need for bandwidth shaping
     
 EOF
 
