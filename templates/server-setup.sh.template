@@ -4159,6 +4159,28 @@ echo "Using generated Unbound configuration from template system..."
 # The configuration file is generated from templates/unbound/local.conf.template
 # and placed in /etc/unbound/unbound.conf.d/local.conf during deployment
 
+    # Fix AppArmor for Unbound - grant net_admin capability
+    echo "Configuring AppArmor for Unbound..."
+    mkdir -p /etc/apparmor.d/local
+    cat > /etc/apparmor.d/local/usr.sbin.unbound << 'EOF'
+# Site-specific additions and overrides for usr.sbin.unbound
+# Grant net_admin capability for Unbound network configuration
+capability net_admin,
+EOF
+
+    # Reload AppArmor profile
+    if command -v apparmor_parser >/dev/null 2>&1 && [ -f /etc/apparmor.d/usr.sbin.unbound ]; then
+        apparmor_parser -r /etc/apparmor.d/usr.sbin.unbound 2>/dev/null || true
+        echo "✅ AppArmor profile updated for Unbound"
+    fi
+
+    # Disable unbound-resolvconf service (not needed and causes errors)
+    echo "Disabling unbound-resolvconf service..."
+    systemctl stop unbound-resolvconf.service 2>/dev/null || true
+    systemctl disable unbound-resolvconf.service 2>/dev/null || true
+    systemctl mask unbound-resolvconf.service 2>/dev/null || true
+    echo "✅ Unbound-resolvconf service disabled"
+
     # Restart Unbound service to apply changes
     docker_systemctl restart unbound
 
