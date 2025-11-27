@@ -1422,11 +1422,11 @@ server:
     so-rcvbuf: 256k
     so-sndbuf: 256k
     so-reuseport: yes
-    
-    # DNSSEC - disable for simplified bastion configuration
-    # trust-anchor-file: "/var/lib/unbound/root.key"
-    auto-trust-anchor-file: "/var/lib/unbound/root.key"
-    
+
+    # DNSSEC disabled for simplified bastion configuration
+    # (DNSSEC validation adds complexity and potential failure points)
+    # If needed in future, uncomment: auto-trust-anchor-file: "/var/lib/unbound/root.key"
+
     # Private address handling
     private-address: 192.168.0.0/16
     private-address: 172.16.0.0/12
