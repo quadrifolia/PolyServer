@@ -5208,8 +5208,9 @@ chmod +x /etc/cron.hourly/disk-space-protection
 # Create a separate config file instead of modifying main logrotate.conf
 cat > /etc/logrotate.d/emergency-space-management << EOF
 # Emergency space management for bastion hosts
-# Force rotation of any logs larger than 100M
-/var/log/*.log /var/log/*/*.log {
+# Force rotation of unconfigured logs larger than 100M
+# Note: Only matches top-level /var/log/*.log to avoid conflicts with service-specific configs
+/var/log/*.log {
     size 100M
     rotate 1
     compress
