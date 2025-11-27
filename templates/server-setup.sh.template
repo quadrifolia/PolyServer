@@ -3377,7 +3377,7 @@ cat > /etc/suricata/rules/application-custom.rules << EOF
 EOF
 
 # Set up Suricata log rotation
-cat > /etc/logrotate.d/suricata << EOF
+cat > /etc/logrotate.d/suricata << 'EOF'
 /var/log/suricata/*.log /var/log/suricata/*.json {
     daily
     size 100M
@@ -3441,8 +3441,12 @@ chmod 755 /etc/cron.daily/trivy-scan
     # Configure Suricata systemd resource limits
     echo "===== 10.4.1 Configuring Suricata Resource Management ====="
     mkdir -p /etc/systemd/system/suricata.service.d
-    cat > /etc/systemd/system/suricata.service.d/resource-limits.conf << 'EOF'
+    cat > /etc/systemd/system/suricata.service.d/resource-limits.conf << EOF
 [Service]
+# Override ExecStart to specify the correct network interface
+ExecStart=
+ExecStart=/usr/bin/suricata -D --af-packet=$INTERFACE -c /etc/suricata/suricata.yaml --pidfile /run/suricata.pid
+
 # Resource limits to prevent Suricata from overwhelming system
 CPUQuota=50%
 MemoryMax=1G
@@ -3453,12 +3457,11 @@ IOSchedulingPriority=4
 OOMPolicy=kill
 OOMScoreAdjust=200
 
-# Security and isolation
-PrivateTmp=true
-NoNewPrivileges=true
-ProtectHome=true
-ProtectSystem=strict
-ReadWritePaths=/var/log/suricata /var/lib/suricata /run/suricata
+# Security and isolation (minimal for IDS functionality)
+PrivateTmp=false
+NoNewPrivileges=false
+ProtectHome=false
+ProtectSystem=false
 
 # Restart policy for network IDS reliability
 Restart=always
