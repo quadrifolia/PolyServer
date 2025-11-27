@@ -882,44 +882,9 @@ else
     echo "🐳 Skipping NTP configuration in Docker mode (host handles time sync)"
 fi
 
-echo "===== 6. Web Server Selection ====="
-echo "Choose between traditional nginx + PHP-FPM or modern NGINX Unit for better performance:"
+echo "===== 6. Web Server Configuration ====="
+echo "Using nginx + PHP-FPM (battle-tested, industry standard)"
 echo ""
-
-# Initialize web server choice
-WEB_SERVER_TYPE="nginx"
-
-echo "🌐 Web Server Architecture Choice:"
-echo ""
-echo "📊 Traditional nginx + PHP-FPM:"
-echo "   • Widely used, battle-tested architecture"
-echo "   • Separate nginx and PHP-FPM processes"
-echo "   • Good performance, extensive documentation"
-echo "   • Industry standard for most deployments"
-echo ""
-echo "🚀 NGINX Unit (Modern Application Server):"
-echo "   • Up to 8-10x faster response times than PHP-FPM"
-echo "   • Single process handles web serving and PHP execution"
-echo "   • Dynamic configuration without restarts"
-echo "   • Better resource management under high load"
-echo "   • Newer technology, smaller community support"
-echo ""
-read -p "Use NGINX Unit for better performance? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    WEB_SERVER_TYPE="unit"
-    echo "✅ NGINX Unit selected - preparing for high-performance deployment"
-    
-    # Update environment file with web server choice
-    if [ -f "/opt/polyserver/config/defaults.env" ]; then
-        sed -i "s/WEB_SERVER_TYPE=nginx/WEB_SERVER_TYPE=unit/" "/opt/polyserver/config/defaults.env" 2>/dev/null || true
-    fi
-else
-    WEB_SERVER_TYPE="nginx"
-    echo "✅ Traditional nginx + PHP-FPM selected - reliable and well-documented"
-    
-    # Environment file already has nginx as default, no change needed
-fi
 
 echo "===== 6.1 Security Components Configuration ====="
 echo "Security components are configured via environment variables:"
@@ -941,26 +906,10 @@ OPTIONAL_PACKAGES=""
 [ "$INSTALL_RKHUNTER" = true ] && OPTIONAL_PACKAGES="$OPTIONAL_PACKAGES rkhunter chkrootkit"
 [ "$INSTALL_SURICATA" = true ] && OPTIONAL_PACKAGES="$OPTIONAL_PACKAGES suricata"
 
-# Web server specific packages
-if [ "$WEB_SERVER_TYPE" = "unit" ]; then
-    echo "Installing NGINX Unit and PHP packages..."
-    
-    # Add NGINX Unit repository
-    curl -1sLf 'https://packages.nginx.org/keys/nginx_signing.key' | gpg --dearmor > /usr/share/keyrings/nginx-archive-keyring.gpg
-    echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] https://packages.nginx.org/unit/debian/ trixie unit" > /etc/apt/sources.list.d/unit.list
-    
-    apt-get update
-    
-    # Install NGINX Unit core and PHP module
-    WEB_SERVER_PACKAGES="unit unit-php php8.4 php8.4-cli php8.4-fpm php8.4-mysql php8.4-xml php8.4-mbstring php8.4-curl php8.4-zip php8.4-gd php8.4-intl php8.4-bcmath php8.4-opcache php8.4-readline"
-    
-    echo "✅ NGINX Unit selected - using high-performance application server"
-else
-    # Traditional nginx + PHP-FPM
-    WEB_SERVER_PACKAGES="nginx-extras php8.4 php8.4-fpm php8.4-mysql php8.4-xml php8.4-mbstring php8.4-curl php8.4-zip php8.4-gd php8.4-intl php8.4-bcmath php8.4-opcache php8.4-readline"
-    
-    echo "✅ Traditional nginx + PHP-FPM selected - using stable architecture"
-fi
+# Web server packages - nginx + PHP-FPM
+WEB_SERVER_PACKAGES="nginx-extras php8.4 php8.4-fpm php8.4-mysql php8.4-xml php8.4-mbstring php8.4-curl php8.4-zip php8.4-gd php8.4-intl php8.4-bcmath php8.4-opcache php8.4-readline"
+
+echo "Installing nginx + PHP-FPM..."
 
 if [ "$DOCKER_MODE" = "true" ]; then
     # Docker-compatible package list
@@ -979,23 +928,10 @@ INSTALLED_COMPONENTS=""
 [ "$INSTALL_SURICATA" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS suricata"
 echo "Installed optional security components:${INSTALLED_COMPONENTS:-none}"
 
-# Web server specific post-installation configuration
-if [ "$WEB_SERVER_TYPE" = "unit" ]; then
-    echo "Configuring NGINX Unit..."
-    systemctl enable unit
-    systemctl start unit
-    
-    # Test Unit installation
-    if systemctl is-active --quiet unit; then
-        echo "✅ NGINX Unit is running"
-    else
-        echo "⚠️ NGINX Unit failed to start - check logs: journalctl -u unit"
-    fi
-else
-    echo "Configuring nginx and PHP-FPM..."
-    systemctl enable nginx
-    systemctl enable php8.4-fpm
-    systemctl start php8.4-fpm
+echo "Configuring nginx and PHP-FPM..."
+systemctl enable nginx
+systemctl enable php8.4-fpm
+systemctl start php8.4-fpm
     
     # Test installations
     if systemctl is-active --quiet php8.4-fpm; then
@@ -6041,15 +5977,6 @@ if [ "$DEPLOYMENT_MODE" != "docker" ]; then
     fi
 fi
 
-# Web Servers
-echo ""
-echo "=== Web Server Options ==="
-read -p "Install Nginx Unit (modern application server)? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    INSTALL_COMPONENTS="$INSTALL_COMPONENTS nginx-unit"
-fi
-
 # PHP Stack
 echo ""
 echo "=== PHP Development Stack ==="
@@ -6219,116 +6146,6 @@ DOCKER_EOF
                         docker version | head -20
                     else
                         echo "❌ Docker installation failed"
-                    fi
-                    ;;
-                nginx-unit)
-                    echo "===== 16.1.2 Installing Nginx Unit ====="
-                    
-                    # Add Nginx Unit repository
-                    curl -fsSL https://nginx.org/keys/nginx_signing.key | gpg --dearmor -o /etc/apt/keyrings/nginx-unit.gpg
-                    echo "deb [signed-by=/etc/apt/keyrings/nginx-unit.gpg] https://packages.nginx.org/unit/debian/ $(lsb_release -cs) unit" > /etc/apt/sources.list.d/unit.list
-                    echo "deb-src [signed-by=/etc/apt/keyrings/nginx-unit.gpg] https://packages.nginx.org/unit/debian/ $(lsb_release -cs) unit" >> /etc/apt/sources.list.d/unit.list
-                    
-                    apt-get update
-                    
-                    # Install Nginx Unit and modules
-                    apt-get install -y unit unit-dev unit-php unit-python3.11 unit-go unit-jsc unit-perl
-                    
-                    # Create initial Nginx Unit configuration
-                    mkdir -p /etc/unit
-                    cat > /etc/unit/initial-config.json << 'UNIT_EOF'
-{
-    "settings": {
-        "http": {
-            "header_read_timeout": 30,
-            "body_read_timeout": 30,
-            "send_timeout": 30,
-            "idle_timeout": 180,
-            "max_body_size": 8388608,
-            "static": {
-                "mime_types": {
-                    "text/plain": [
-                        ".log",
-                        ".md",
-                        ".txt"
-                    ],
-                    "application/javascript": [
-                        ".js"
-                    ],
-                    "text/css": [
-                        ".css"
-                    ],
-                    "text/html": [
-                        ".html",
-                        ".htm"
-                    ]
-                }
-            }
-        }
-    },
-    "listeners": {
-        "127.0.0.1:8080": {
-            "pass": "routes"
-        }
-    },
-    "routes": [
-        {
-            "match": {
-                "uri": "/status"
-            },
-            "action": {
-                "return": 200
-            }
-        }
-    ]
-}
-UNIT_EOF
-                    
-                    # Create systemd override for Unit with security hardening
-                    mkdir -p /etc/systemd/system/unit.service.d
-                    cat > /etc/systemd/system/unit.service.d/security.conf << 'UNIT_EOF'
-[Service]
-# Security hardening
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/unit /var/log/unit /run/unit
-RestrictRealtime=true
-RestrictSUIDSGID=true
-
-# Resource management
-Nice=0
-OOMScoreAdjust=50
-LimitNOFILE=65536
-LimitNPROC=4096
-
-# Restart policy
-Restart=on-failure
-RestartSec=5
-StartLimitBurst=3
-StartLimitInterval=300
-UNIT_EOF
-                    
-                    # Enable and start Nginx Unit
-                    systemctl daemon-reload
-                    systemctl enable unit
-                    systemctl start unit
-                    
-                    # Wait for Unit to be ready
-                    sleep 3
-                    
-                    # Apply initial configuration
-                    curl -X PUT --data-binary @/etc/unit/initial-config.json --unix-socket /var/run/unit/control.sock http://localhost/config/ 2>/dev/null || true
-                    
-                    # Test Nginx Unit installation
-                    if systemctl is-active --quiet unit; then
-                        echo "✅ Nginx Unit installed and configured"
-                        echo "   • Control socket: /var/run/unit/control.sock"
-                        echo "   • Status endpoint: http://127.0.0.1:8080/status"
-                        echo "   • Configuration: curl --unix-socket /var/run/unit/control.sock http://localhost/config/"
-                    else
-                        echo "❌ Nginx Unit installation failed"
                     fi
                     ;;
                 php)
@@ -6869,13 +6686,8 @@ if [ -n "$REDIS_MAX_MEMORY" ]; then
 fi
 echo ""
 echo "📁 Configuration templates available for deployment:"
-if [ "$WEB_SERVER_TYPE" = "unit" ]; then
-    echo "   • NGINX Unit: templates/unit/ (high-performance application server)"
-    echo "   • PHP 8.4: templates/php/ (optimized for ${TOTAL_RAM_MB}MB RAM)"
-else
-    echo "   • Nginx: templates/nginx/ (optimized for $CPU_CORES cores)"
-    echo "   • PHP 8.4: templates/php/ (optimized for ${TOTAL_RAM_MB}MB RAM)"
-fi
+echo "   • Nginx: templates/nginx/ (optimized for $CPU_CORES cores)"
+echo "   • PHP 8.4: templates/php/ (optimized for ${TOTAL_RAM_MB}MB RAM)"
 echo "   • MariaDB: templates/mariadb/ (production-ready settings)"
 echo "   • Redis: templates/redis/ (security-hardened)"
 echo ""

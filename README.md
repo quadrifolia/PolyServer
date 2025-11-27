@@ -170,9 +170,6 @@ polyserver/
 │   │   └── php.ini.template                  # Security-hardened PHP configuration
 │   ├── redis/                           # Redis cache configuration
 │   │   └── redis.conf.template               # Performance and security optimized Redis
-│   ├── unit/                            # NGINX Unit application server templates
-│   │   ├── config.json.template              # Unit config for bare metal mode
-│   │   └── config-docker.json.template       # Unit config for Docker mode (reverse proxy)
 │   ├── scripts/                         # Script templates
 │   │   ├── backup.sh.template
 │   │   └── s3backup.sh.template
@@ -1205,23 +1202,6 @@ During server setup, you can choose between two high-performance web server arch
 - **Resource Usage**: Moderate memory usage, predictable performance
 - **Best For**: Established workflows, large teams, complex nginx configurations
 
-#### **NGINX Unit** (High-Performance Option)
-- **Modern Architecture**: Single process handles both web serving and application execution
-- **Superior Performance**: 8-10x faster response times than traditional PHP-FPM
-- **Dynamic Configuration**: RESTful API for configuration changes without restarts
-- **Better Resource Management**: More efficient under high load conditions
-- **Multi-Language Support**: PHP, Python, Node.js, Go, Ruby, and more
-- **Best For**: High-traffic sites, performance-critical applications, modern deployments
-
-**Performance Comparison:**
-- Response time: NGINX Unit ~7.6ms vs PHP-FPM ~60ms (99th percentile)
-- Load handling: Unit handles 1000 requests without failures vs PHP-FPM with 200 failures
-- Resource efficiency: Better memory and CPU utilization under stress
-
-**Template Support:**
-- Traditional setup uses `templates/nginx/` and `templates/php/` configurations
-- NGINX Unit setup uses `templates/unit/` with optimized JSON configurations
-
 ### 🐘 **Database Systems**
 - **MariaDB**: High-performance MySQL-compatible database
   - Secure installation with disabled remote root access
@@ -1278,8 +1258,7 @@ Optional components are presented during the interactive server setup process:
 
 ```bash
 # During server setup, you'll be prompted:
-Install/Configure Docker with security optimizations? (y/N): 
-Install Nginx Unit (modern application server)? (y/N): 
+Install/Configure Docker with security optimizations? (y/N):
 Install PHP 8.4 with php-fpm and common extensions? (y/N): 
   Include PHP development tools (Composer, Xdebug)? (y/N): 
 Install MariaDB with secure configuration? (y/N): 
