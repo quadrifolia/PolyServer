@@ -3908,6 +3908,17 @@ cat >> /etc/logcheck/ignore.d.server/bastion-ignore << EOF
 
 # Kernel packet filtering messages
 ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ kernel: \[[0-9.]+\] af_packet: .*$
+
+# Unattended-upgrade informational messages (not errors)
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Enabled logging to syslog via daemon facility$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Checking if system is running on battery is skipped.*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Checking if connection is metered is skipped.*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Starting unattended upgrades script$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Allowed origins are:.*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Initial (blacklist|whitelist):.*$
+
+# Kernel performance tuning messages (informational)
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ kernel: \[[0-9.]+\] perf: interrupt took too long.*lowering kernel\.perf_event_max_sample_rate to [0-9]+$
 EOF
 
 echo "✅ Logcheck configured for daily server-level reports (less technical than default)"
