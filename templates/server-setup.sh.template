@@ -1555,7 +1555,7 @@ if [ "$SMTP_ENABLED" = "true" ]; then
     
     # Configure postfix for external SMTP relay
     postconf -e "relayhost = [$SMTP_SERVER]:$SMTP_PORT"
-    postconf -e "smtp_use_tls = $SMTP_USE_TLS"
+    # Note: smtp_use_tls is deprecated, using smtp_tls_security_level instead
     postconf -e "smtp_sasl_auth_enable = yes"
     postconf -e "smtp_sasl_security_options = noanonymous"
     postconf -e "smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd"
@@ -1802,7 +1802,7 @@ if [ "$CONTAINER_ENV" != "true" ]; then
     if [ "$SMTP_ENABLED" = "true" ]; then
         postconf relayhost 2>/dev/null || echo "postconf failed"
         postconf smtp_sasl_auth_enable 2>/dev/null || echo "postconf failed"
-        postconf smtp_use_tls 2>/dev/null || echo "postconf failed"
+        postconf smtp_tls_security_level 2>/dev/null || echo "postconf failed"
     else
         postconf inet_interfaces 2>/dev/null || echo "postconf failed"
         postconf mydestination 2>/dev/null || echo "postconf failed"
