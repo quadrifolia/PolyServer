@@ -631,7 +631,9 @@ PasswordAuthentication no
 PermitEmptyPasswords no
 ChallengeResponseAuthentication no
 KbdInteractiveAuthentication no
-UsePAM no
+UsePAM yes
+# PAM enabled for session accounting, limits, pam_nologin, and potential 2FA/MFA
+# AuthenticationMethods publickey still enforces key-only authentication
 AuthorizedKeysFile .ssh/authorized_keys
 
 # Forwarding and Tunneling - Essential for bastion functionality
