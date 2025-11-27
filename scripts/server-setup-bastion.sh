@@ -2891,6 +2891,32 @@ EOF
 
 systemctl daemon-reload
 
+# Configure AIDE to exclude/handle growing log files
+echo "Configuring AIDE exclusions for growing logs..."
+cat > /etc/aide/aide.conf.d/99-bastion-exclusions << 'EOF'
+# Bastion-specific AIDE exclusions for growing/active log files
+# These logs change frequently and cause warnings during AIDE scans
+
+# Exclude Suricata logs (constantly growing during operation)
+!/var/log/suricata/eve.json$
+!/var/log/suricata/fast.log$
+!/var/log/suricata/stats.log$
+
+# Exclude other frequently changing logs
+!/var/log/auth.log$
+!/var/log/syslog$
+!/var/log/kern.log$
+!/var/log/daemon.log$
+EOF
+
+# Update AIDE configuration
+if [ -f /etc/aide/aide.conf ]; then
+    # Ensure our exclusions are included
+    if ! grep -q "99-bastion-exclusions" /etc/aide/aide.conf; then
+        echo "@@include @@{TOPDIR}/aide.conf.d/99-bastion-exclusions" >> /etc/aide/aide.conf
+    fi
+fi
+
 echo "Initializing AIDE database for bastion host - this will take some time..."
 # Run aideinit in a subshell to prevent environment pollution
 (nice -n 19 aideinit)
