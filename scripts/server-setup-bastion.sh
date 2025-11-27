@@ -2913,7 +2913,7 @@ EOF
 if [ -f /etc/aide/aide.conf ]; then
     # Ensure our exclusions are included
     if ! grep -q "99-bastion-exclusions" /etc/aide/aide.conf; then
-        echo "@@include @@{TOPDIR}/aide.conf.d/99-bastion-exclusions" >> /etc/aide/aide.conf
+        echo "@@include /etc/aide/aide.conf.d/99-bastion-exclusions" >> /etc/aide/aide.conf
     fi
 fi
 
