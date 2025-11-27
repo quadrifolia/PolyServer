@@ -2189,6 +2189,16 @@ EOF
 LOGFILE="/var/log/sensors/sensors.log"
 DATE=$(date '+%Y-%m-%d %H:%M:%S')
 
+# Exit silently if sensors command not available or no sensors detected
+if ! command -v sensors >/dev/null 2>&1; then
+    exit 0
+fi
+
+# Check if sensors actually has data before logging
+if ! sensors 2>/dev/null | grep -q "°C\|°F\|RPM\|V\|W"; then
+    exit 0
+fi
+
 # Ensure log directory exists
 mkdir -p /var/log/sensors
 
