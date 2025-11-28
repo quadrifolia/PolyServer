@@ -932,24 +932,23 @@ echo "Configuring nginx and PHP-FPM..."
 systemctl enable nginx
 systemctl enable php8.4-fpm
 systemctl start php8.4-fpm
-    
-    # Test installations
+
+# Test installations
+if systemctl is-active --quiet php8.4-fpm; then
+    echo "✅ PHP-FPM is running"
+
+    # Update PHP-FPM configuration with calculated values
+    update_php_fpm_config
+
+    # Restart PHP-FPM to apply updated configuration
+    systemctl restart php8.4-fpm
     if systemctl is-active --quiet php8.4-fpm; then
-        echo "✅ PHP-FPM is running"
-        
-        # Update PHP-FPM configuration with calculated values
-        update_php_fpm_config
-        
-        # Restart PHP-FPM to apply updated configuration
-        systemctl restart php8.4-fpm
-        if systemctl is-active --quiet php8.4-fpm; then
-            echo "✅ PHP-FPM restarted with optimized configuration"
-        else
-            echo "⚠️ PHP-FPM failed to restart after configuration update"
-        fi
+        echo "✅ PHP-FPM restarted with optimized configuration"
     else
-        echo "⚠️ PHP-FPM failed to start - check logs: journalctl -u php8.4-fpm"
+        echo "⚠️ PHP-FPM failed to restart after configuration update"
     fi
+else
+    echo "⚠️ PHP-FPM failed to start - check logs: journalctl -u php8.4-fpm"
 fi
 
 # Security packages are now installed with the main package installation above

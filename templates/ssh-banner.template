@@ -1,0 +1,19 @@
+***************************************************************************
+                          {{BANNER_TITLE}}
+***************************************************************************
+
+WARNING: This is a secure {{SERVER_TYPE}}. All access is logged and monitored.
+
+Unauthorized access is prohibited and will be prosecuted to the full extent
+of the law. All activities on this system are recorded and may be used as
+evidence in legal proceedings.
+
+By accessing this system, you acknowledge that:
+- You are an authorized user
+- Your activities are being monitored and logged
+- You agree to comply with all applicable policies
+- You will not attempt to compromise system security
+
+If you are not an authorized user, disconnect immediately.
+
+***************************************************************************

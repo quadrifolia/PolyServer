@@ -285,8 +285,10 @@ validate_critical_configs() {
 # All parameters are set to secure defaults for bastion use case
 
 USERNAME="bastion"                      # Bastion user to create
-HOSTNAME="bastion"                      # Bastion hostname  
+HOSTNAME="bastion"                      # Bastion hostname
 SSH_PORT="${SSH_PORT:-2222}"            # Custom SSH port (configurable via environment, default 2222)
+BANNER_TITLE="${BANNER_TITLE:-BASTION HOST ACCESS}"  # SSH banner title (configurable)
+SERVER_TYPE="${SERVER_TYPE:-bastion host}"            # Server type for banner (configurable)
 LOGWATCH_EMAIL="root"                   # Security notification email
 MAX_SSH_SESSIONS="5"                    # Maximum concurrent SSH sessions
 SSH_LOGIN_GRACE_TIME="30"               # SSH login grace time
@@ -342,6 +344,51 @@ fi
 
 echo "✅ Valid SSH public key provided - proceeding with secure bastion setup"
 
+# Hostname configuration
+echo ""
+while true; do
+    read -r -p "Enter the hostname for this server (default: bastion): " HOSTNAME_INPUT
+    if [ -z "$HOSTNAME_INPUT" ]; then
+        HOSTNAME="bastion"
+        break
+    elif [[ "$HOSTNAME_INPUT" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
+        HOSTNAME="$HOSTNAME_INPUT"
+        break
+    else
+        echo "Please enter a valid hostname"
+    fi
+done
+
+# Default username configuration
+echo ""
+while true; do
+    read -r -p "Enter SSH username for bastion access (default: bastion): " USERNAME_INPUT
+    if [ -z "$USERNAME_INPUT" ]; then
+        USERNAME="bastion"
+        break
+    elif [[ "$USERNAME_INPUT" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+        USERNAME="$USERNAME_INPUT"
+        break
+    else
+        echo "Please enter a valid username"
+    fi
+done
+    
+# SSH port configuration
+echo ""
+while true; do
+    read -r -p "Enter SSH port for bastion access (default: 2222): " SSH_PORT_INPUT
+    if [ -z "$SSH_PORT_INPUT" ]; then
+        SSH_PORT="2222"
+        break
+    elif [[ "$SSH_PORT_INPUT" =~ ^[0-9]+$ ]] && [ "$SSH_PORT_INPUT" -ge 1024 ] && [ "$SSH_PORT_INPUT" -le 65535 ]; then
+        SSH_PORT="$SSH_PORT_INPUT"
+        break
+    else
+        echo "Please enter a valid port number (1024-65535)"
+    fi
+done
+
 # Email configuration
 echo ""
 while true; do
@@ -356,23 +403,9 @@ while true; do
         echo "Please enter a valid email address"
     fi
 done
-    
-echo ""
-while true; do
-    read -r -p "Enter SSH port for bastion access (default: 2222): " SSH_PORT_INPUT
-    if [ -z "$SSH_PORT_INPUT" ]; then
-        SSH_PORT="2222"
-        break
-    elif [[ "$SSH_PORT_INPUT" =~ ^[0-9]+$ ]] && [ "$SSH_PORT_INPUT" -ge 1024 ] && [ "$SSH_PORT_INPUT" -le 65535 ]; then
-        SSH_PORT="$SSH_PORT_INPUT"
-        break
-    else
-        echo "Please enter a valid port number (1024-65535)"
-    fi
-done
-echo ""
 
 # SMTP Configuration for reliable email delivery
+echo ""
 echo "===== SMTP EMAIL CONFIGURATION ====="
 echo ""
 echo "Configure external SMTP for reliable email delivery (recommended)."
@@ -557,13 +590,14 @@ if ! id "$USERNAME" &>/dev/null; then
     fi
 fi
 
-# Create restricted sudo access for bastion user (SECURITY HARDENED)
-echo "Setting up restricted sudo privileges for $USERNAME..."
-cat > /etc/sudoers.d/bastion-$USERNAME << EOF
-# Bastion user sudo privileges - RESTRICTED to absolute minimum for security
+# Create shared command aliases (only once, to avoid conflicts)
+if [ ! -f /etc/sudoers.d/bastion-aliases ]; then
+    echo "Creating shared sudo command aliases..."
+    cat > /etc/sudoers.d/bastion-aliases << 'EOF'
+# Bastion shared command aliases - RESTRICTED to absolute minimum for security
 # Using Cmnd_Alias with exact paths to prevent privilege escalation
 
-# Define command aliases with exact paths only
+# SSH service management
 Cmnd_Alias SSH_RESTART = /usr/bin/systemctl restart ssh, /bin/systemctl restart ssh, /usr/bin/systemctl restart sshd, /bin/systemctl restart sshd
 Cmnd_Alias SSH_STATUS = /usr/bin/systemctl status ssh, /bin/systemctl status ssh, /usr/bin/systemctl status sshd, /bin/systemctl status sshd
 Cmnd_Alias SSH_ACTIVE = /usr/bin/systemctl is-active ssh, /bin/systemctl is-active ssh, /usr/bin/systemctl is-active sshd, /bin/systemctl is-active sshd
@@ -575,23 +609,56 @@ Cmnd_Alias UFW_STATUS = /usr/sbin/ufw status, /sbin/ufw status, /usr/bin/ufw sta
 Cmnd_Alias FAIL2BAN_STATUS = /usr/bin/fail2ban-client status
 
 # Essential bastion monitoring scripts (custom commands only)
-Cmnd_Alias BASTION_COMMANDS = /usr/local/bin/bastionstat, /usr/local/bin/sshmon, /usr/local/bin/bastionmail
+Cmnd_Alias BASTION_COMMANDS = /usr/local/bin/bastionstat, /usr/local/bin/sshmon, /usr/local/bin/bastionmail, /usr/local/bin/dbstatus, /usr/local/bin/serverstatus
 
 # Specific log file access (no wildcards)
 Cmnd_Alias LOG_ACCESS = /usr/bin/tail /var/log/auth.log, /usr/bin/tail /var/log/syslog, /usr/bin/tail /var/log/fail2ban.log
 
+# MariaDB/MySQL commands (for database servers)
+Cmnd_Alias MYSQL_COMMANDS = /usr/local/bin/mysql-health, /usr/local/bin/mysql-backup, /usr/local/bin/mariadb-vrack-status
+EOF
+    chmod 440 /etc/sudoers.d/bastion-aliases
+
+    # Validate syntax
+    if ! visudo -c -f /etc/sudoers.d/bastion-aliases >/dev/null 2>&1; then
+        echo "❌ ERROR: Invalid sudoers syntax in bastion-aliases"
+        rm /etc/sudoers.d/bastion-aliases
+        exit 1
+    fi
+    echo "✅ Shared sudo aliases created and validated"
+fi
+
+# Create user-specific sudo privileges (references shared aliases)
+echo "Setting up restricted sudo privileges for $USERNAME..."
+
+# Remove any existing file for this user (in case of re-run)
+rm -f /etc/sudoers.d/bastion-$USERNAME
+
+cat > /etc/sudoers.d/bastion-$USERNAME << EOF
+# Bastion user sudo privileges for: $USERNAME
+# References shared command aliases from /etc/sudoers.d/bastion-aliases
+
 # Grant minimal required privileges
 $USERNAME ALL=(ALL) NOPASSWD: SSH_RESTART, SSH_STATUS, SSH_ACTIVE
 $USERNAME ALL=(ALL) NOPASSWD: UFW_STATUS
-$USERNAME ALL=(ALL) NOPASSWD: FAIL2BAN_STATUS  
+$USERNAME ALL=(ALL) NOPASSWD: FAIL2BAN_STATUS
 $USERNAME ALL=(ALL) NOPASSWD: BASTION_COMMANDS
 $USERNAME ALL=(ALL) NOPASSWD: LOG_ACCESS
+$USERNAME ALL=(ALL) NOPASSWD: MYSQL_COMMANDS
 
 # Security settings
 Defaults:$USERNAME !requiretty
 Defaults:$USERNAME secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 EOF
 chmod 440 /etc/sudoers.d/bastion-$USERNAME
+
+# Validate syntax
+if ! visudo -c -f /etc/sudoers.d/bastion-$USERNAME >/dev/null 2>&1; then
+    echo "❌ ERROR: Invalid sudoers syntax for $USERNAME"
+    rm /etc/sudoers.d/bastion-$USERNAME
+    exit 1
+fi
+echo "✅ Sudo privileges configured and validated for $USERNAME"
 
 # Ensure bastion user is in adm group (for existing users too)
 usermod -aG adm "$USERNAME" 2>/dev/null || true
@@ -683,13 +750,13 @@ SyslogFacility AUTH
 Banner /etc/ssh/banner
 EOF
     
-# Create SSH banner for bastion host
+# Create SSH banner (configurable via BANNER_TITLE and SERVER_TYPE variables)
 cat > /etc/ssh/banner << EOF
 ***************************************************************************
-                          BASTION HOST ACCESS
+                          ${BANNER_TITLE}
 ***************************************************************************
 
-WARNING: This is a secure bastion host. All access is logged and monitored.
+WARNING: This is a secure ${SERVER_TYPE}. All access is logged and monitored.
 
 Unauthorized access is prohibited and will be prosecuted to the full extent
 of the law. All activities on this system are recorded and may be used as
@@ -4188,7 +4255,7 @@ cat > /etc/cron.d/logwatch << EOF
 EOF
 
 # Create logwatch test script for troubleshooting
-cat > /usr/local/bin/test-logwatch << EOF
+cat > /usr/local/bin/test-logwatch << 'EOF'
 #!/bin/bash
 # Test logwatch configuration and email delivery
 
@@ -4246,7 +4313,7 @@ echo ""
 echo "5. Testing mail system:"
 if command -v mail >/dev/null 2>&1; then
     echo "✅ Mail command is available"
-    
+
     # Test mail delivery
     echo "Subject: Logwatch Test - $(date)
 
@@ -4257,7 +4324,7 @@ Host: $(hostname)
 Date: $(date)
 User: $(whoami)
 " | mail -s "Logwatch Test - $(hostname)" root
-    
+
     echo "✅ Test email sent to root"
     echo "Check /var/mail/root or configured email address"
 else
@@ -4285,7 +4352,7 @@ echo ""
 echo "Logwatch test complete!"
 echo "If you didn't receive emails, check:"
 echo "- SMTP configuration in /etc/postfix/main.cf"
-echo "- Email aliases in /etc/aliases"  
+echo "- Email aliases in /etc/aliases"
 echo "- Mail logs in /var/log/mail.log"
 echo "- Logwatch logs in /var/log/syslog"
 EOF
@@ -4387,14 +4454,18 @@ echo "" >> \$REPORT_FILE
 
 echo "SSH ACTIVITY SUMMARY" >> \$REPORT_FILE
 echo "====================" >> \$REPORT_FILE
-echo "Successful logins today: \$(grep "\$(date '+%b %d')" /var/log/auth.log | grep "Accepted publickey" | wc -l)" >> \$REPORT_FILE
-echo "Failed login attempts today: \$(grep "\$(date '+%b %d')" /var/log/auth.log | grep "Failed password" | wc -l)" >> \$REPORT_FILE
-echo "Currently active sessions: \$(who | wc -l)" >> \$REPORT_FILE
+# Match both publickey and password authentication
+SUCCESSFUL_LOGINS=\$(grep "\$(date '+%b %d')" /var/log/auth.log 2>/dev/null | grep -E "Accepted (publickey|password)" | wc -l)
+FAILED_LOGINS=\$(grep "\$(date '+%b %d')" /var/log/auth.log 2>/dev/null | grep -E "Failed (password|publickey)" | wc -l)
+ACTIVE_SESSIONS=\$(who | wc -l)
+echo "Successful logins today: \$SUCCESSFUL_LOGINS" >> \$REPORT_FILE
+echo "Failed login attempts today: \$FAILED_LOGINS" >> \$REPORT_FILE
+echo "Currently active sessions: \$ACTIVE_SESSIONS" >> \$REPORT_FILE
 echo "" >> \$REPORT_FILE
 
 echo "RECENT SUCCESSFUL LOGINS" >> \$REPORT_FILE
 echo "========================" >> \$REPORT_FILE
-if grep "\$(date '+%b %d')" /var/log/auth.log 2>/dev/null | grep "Accepted publickey" | tail -10 >> \$REPORT_FILE; then
+if grep "\$(date '+%b %d')" /var/log/auth.log 2>/dev/null | grep -E "Accepted (publickey|password)" | tail -10 >> \$REPORT_FILE 2>/dev/null; then
     true
 else
     echo "No successful SSH logins found for today" >> \$REPORT_FILE
@@ -4432,13 +4503,29 @@ echo "" >> \$REPORT_FILE
 
 echo "AUDIT SUMMARY" >> \$REPORT_FILE
 echo "=============" >> \$REPORT_FILE
+echo "" >> \$REPORT_FILE
 # Use proper date format for ausearch (MM/DD/YYYY HH:MM:SS)
 START_DATE=\$(date -d "yesterday" "+%m/%d/%Y 00:00:00")
 END_DATE=\$(date -d "today" "+%m/%d/%Y 00:00:00")
-if ausearch --start "\$START_DATE" --end "\$END_DATE" 2>/dev/null | aureport --summary >> \$REPORT_FILE 2>/dev/null; then
-    true
+
+# Check if auditd is running
+if ! systemctl is-active --quiet auditd; then
+    echo "⚠️  auditd service is not running - no audit data available" >> \$REPORT_FILE
+elif ! command -v ausearch >/dev/null 2>&1 || ! command -v aureport >/dev/null 2>&1; then
+    echo "⚠️  Audit tools not installed" >> \$REPORT_FILE
 else
-    echo "No audit events found for yesterday" >> \$REPORT_FILE
+    # Try to get audit summary with better error handling
+    AUDIT_TEMP=\$(mktemp)
+    if ausearch --start "\$START_DATE" --end "\$END_DATE" > "\$AUDIT_TEMP" 2>/dev/null && [ -s "\$AUDIT_TEMP" ]; then
+        aureport --summary -i < "\$AUDIT_TEMP" >> \$REPORT_FILE 2>/dev/null || {
+            echo "Audit events found but report generation failed" >> \$REPORT_FILE
+            echo "Event count: \$(wc -l < "\$AUDIT_TEMP")" >> \$REPORT_FILE
+        }
+    else
+        echo "No audit events found for yesterday (\$START_DATE to \$END_DATE)" >> \$REPORT_FILE
+        echo "Note: Auditd may have been recently installed or logs rotated" >> \$REPORT_FILE
+    fi
+    rm -f "\$AUDIT_TEMP"
 fi
 echo "" >> \$REPORT_FILE
 
