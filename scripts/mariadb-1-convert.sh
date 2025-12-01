@@ -1,5 +1,5 @@
 #!/bin/bash
-# convert-to-mariadb.sh - Convert hardened bastion to dedicated MariaDB server
+# mariadb-1-convert.sh - Convert hardened bastion to dedicated MariaDB server
 # Run AFTER server-setup-bastion.sh to convert the server for database use
 #
 # Prerequisites:
@@ -284,7 +284,7 @@ chmod 700 /var/backups/mysql
 cat > /usr/local/bin/mysql-backup << 'EOF'
 #!/bin/bash
 # Automated MySQL/MariaDB backup script
-# Created by convert-to-mariadb.sh
+# Created by mariadb-1-convert.sh
 
 set -e
 
@@ -422,7 +422,7 @@ chmod +x /usr/local/bin/mysql-health
 
 log_message "✅ Health check script created: /usr/local/bin/mysql-health"
 
-log_message "===== 7. Updating Firewall for MySQL Access ====="
+log_message "===== 7. Updating Firewall for Database Server ====="
 
 # Add MySQL port (restricted to private networks)
 ufw allow from 10.0.0.0/8 to any port 3306 proto tcp comment 'MySQL from private 10.0.0.0/8'
@@ -430,6 +430,27 @@ ufw allow from 172.16.0.0/12 to any port 3306 proto tcp comment 'MySQL from priv
 ufw allow from 192.168.0.0/16 to any port 3306 proto tcp comment 'MySQL from private 192.168.0.0/16'
 
 log_message "✅ Firewall rules added for MySQL (port 3306, private networks only)"
+
+# Ensure essential outgoing ports are allowed for system updates and notifications
+log_message "Configuring outgoing firewall rules for system maintenance..."
+
+# DNS (required for hostname resolution)
+ufw allow out 53 comment 'DNS queries' 2>/dev/null || true
+ufw allow out 53/udp comment 'DNS queries UDP' 2>/dev/null || true
+
+# HTTP/HTTPS (required for package updates and security updates)
+ufw allow out 80/tcp comment 'HTTP for updates' 2>/dev/null || true
+ufw allow out 443/tcp comment 'HTTPS for updates' 2>/dev/null || true
+
+# NTP (required for time synchronization)
+ufw allow out 123/udp comment 'NTP time sync' 2>/dev/null || true
+
+# SMTP (required for email notifications - security alerts, backups, monitoring)
+ufw allow out 25/tcp comment 'SMTP for email delivery' 2>/dev/null || true
+ufw allow out 587/tcp comment 'SMTP submission' 2>/dev/null || true
+ufw allow out 465/tcp comment 'SMTPS secure email' 2>/dev/null || true
+
+log_message "✅ Essential outgoing ports configured (DNS, HTTP/S, NTP, SMTP)"
 
 log_message "===== 8. Removing Bastion-Specific Configurations ====="
 
@@ -568,7 +589,7 @@ cat > /root/MARIADB-SERVER-README.md << EOF
 
 ## Network Configuration
 - Current: Public IP with SSH access
-- Next step: Run mariadb-enable-vrack.sh to switch to private vRack network
+- Next step: Run mariadb-2-enable-vrack.sh to switch to private vRack network
 
 ## Useful Commands
 \`\`\`bash
@@ -598,7 +619,7 @@ tail -f /var/log/mysql/error.log
 1. Create your application databases and users
 2. Configure application connection strings
 3. Test database connectivity from application servers
-4. Run mariadb-enable-vrack.sh to switch to private network
+4. Run mariadb-2-enable-vrack.sh to switch to private network
 5. Remove public IP access
 
 ## Creating Database and User Example
@@ -650,7 +671,7 @@ echo "⚠️  IMPORTANT NEXT STEPS:"
 echo "   1. Read /root/MARIADB-SERVER-README.md"
 echo "   2. Test MySQL connectivity: sudo /usr/local/bin/mysql-health"
 echo "   3. Create your databases and users"
-echo "   4. When ready, run mariadb-enable-vrack.sh to switch to private network"
+echo "   4. When ready, run mariadb-2-enable-vrack.sh to switch to private network"
 echo ""
 echo "Conversion complete at: $(date)"
 echo ""

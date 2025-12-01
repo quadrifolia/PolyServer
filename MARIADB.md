@@ -1,6 +1,6 @@
-# MariaDB Dedicated Server Setup Guide
+# MariaDB Dedicated Server Setup
 
-Complete guide for setting up a security-hardened, performance-optimized MariaDB database server using PolyServer.
+Complete guide for deploying a security-hardened, performance-optimized MariaDB database server using PolyServer.
 
 ## Overview
 
@@ -10,31 +10,6 @@ This setup creates a dedicated MariaDB server with:
 - **Private network support**: vRack integration for OVH infrastructure
 - **Enterprise features**: Automated backups, monitoring, health checks
 - **Production-ready**: Based on battle-tested bastion hardening
-
-## Architecture
-
-### Two-Phase Deployment
-
-#### Phase 1: Initial Setup (Public IP)
-Server starts with public IP for installation:
-1. Deploy hardened base server (bastion)
-2. Convert to MariaDB server
-3. Configure databases and users
-4. Test from application servers
-
-#### Phase 2: Private Network (Optional)
-Switch to vRack private network:
-1. Configure vRack network interface
-2. Update MariaDB to bind to private IP
-3. Restrict SSH access
-4. Remove public IP
-
-## Prerequisites
-
-- Fresh Debian 13 server (bare metal or VM)
-- Root access via SSH
-- Minimum 2GB RAM (4GB+ recommended)
-- For Phase 2: vRack network configured in OVH
 
 ## Quick Start
 
@@ -49,40 +24,24 @@ cd PolyServer
 sudo ./scripts/server-setup-bastion.sh
 ```
 
-This creates a security-hardened base server with:
-- SSH hardening (key-only, custom port)
-- Firewall (UFW) with fail2ban
-- AIDE file integrity monitoring
-- Audit framework
-- Unattended security updates
-- System hardening (sysctl, limits)
+This creates a security-hardened base server with SSH hardening, firewall, AIDE, auditd, and system hardening.
 
 ### Step 2: Convert to MariaDB Server
 
 ```bash
 # Run conversion script
-sudo ./scripts/convert-to-mariadb.sh
+sudo ./scripts/mariadb-1-convert.sh
 ```
 
 **What happens:**
-1. Detects system resources (RAM: 8192MB, CPU: 4 cores)
+1. Detects system resources (RAM, CPU cores)
 2. Installs MariaDB 10.11
-3. Calculates optimal settings:
-   - InnoDB Buffer Pool: 6144MB (75% of RAM)
-   - Max Connections: 200
-   - Thread Pool: 8 threads
+3. Calculates optimal settings (InnoDB buffer pool, max connections, thread pool)
 4. Generates strong root password → `/root/.my.cnf`
 5. Runs automated security hardening
 6. Sets up daily backups at 2 AM
-7. Configures monitoring
-8. Creates documentation
-
-**Output files:**
-- Configuration: `/etc/mysql/mariadb.conf.d/60-performance.cnf`
-- Root password: `/root/.my.cnf` (chmod 600)
-- Documentation: `/root/MARIADB-SERVER-README.md`
-- Backup script: `/usr/local/bin/mysql-backup`
-- Health check: `/usr/local/bin/mysql-health`
+7. Configures monitoring and health checks
+8. Creates documentation in `/root/MARIADB-SERVER-README.md`
 
 ### Step 3: Configure Database Access
 
@@ -99,16 +58,12 @@ CREATE USER 'myapp'@'10.0.%' IDENTIFIED BY 'secure_password_here';
 # Grant privileges
 GRANT ALL PRIVILEGES ON myapp.* TO 'myapp'@'10.0.%';
 FLUSH PRIVILEGES;
-
-# Verify
-SHOW GRANTS FOR 'myapp'@'10.0.%';
 ```
 
 **IP Range Examples:**
 - `'myapp'@'10.0.%'` - All 10.0.x.x network
 - `'myapp'@'10.0.1.%'` - Only 10.0.1.x subnet
 - `'myapp'@'10.0.1.10'` - Specific IP only
-- `'myapp'@'192.168.%'` - All 192.168.x.x network
 
 ### Step 4: Test Connectivity
 
@@ -128,7 +83,7 @@ mysql -h 10.0.1.10 -P 3306 -u myapp -pYourPassword -D myapp
 
 ```bash
 # Run vRack transition script
-sudo ./scripts/mariadb-enable-vrack.sh
+sudo ./scripts/mariadb-2-enable-vrack.sh
 ```
 
 The script will prompt for:
@@ -144,11 +99,58 @@ The script will prompt for:
 4. Creates network verification script
 5. Updates documentation
 
-**After transition:**
-- MariaDB: Listens on vRack IP only
-- SSH: Optionally restricted to vRack
-- Firewall: Allows vRack network for MySQL
-- Public IP: Can be removed manually
+## Architecture
+
+### Two-Phase Deployment Strategy
+
+#### Phase 1: Initial Setup (Public IP)
+Server starts with public IP for installation and configuration:
+1. SSH key-based access on public IP
+2. Install and configure all software
+3. Harden security
+4. Configure MariaDB with optimizations
+5. Set up monitoring
+
+#### Phase 2: Switch to vRack Private Network
+Remove public access, switch to vRack-only:
+1. Configure private network interface via netplan
+2. Test private network connectivity
+3. Update MariaDB to bind to private IP
+4. Optionally remove public IP/interface
+5. Database only accessible from vRack
+
+### What's Included
+
+#### Core Security (from bastion)
+- SSH hardening (key-only, custom port)
+- Firewall (UFW) - only MySQL port 3306 from private IPs
+- fail2ban for MySQL brute force protection
+- Unattended security updates
+- AIDE file integrity monitoring
+- Audit framework (database-specific rules)
+- AppArmor for MariaDB
+- System hardening (sysctl, limits)
+
+#### Monitoring
+- Netdata with MySQL collector
+- Logwatch for database logs
+- Custom database monitoring scripts
+- Resource guardian (database-optimized thresholds)
+
+#### MariaDB Specific
+- MariaDB 10.11 (Debian 13 default)
+- RAM-based optimization (calculate InnoDB buffer pool)
+- CPU-based optimization (thread pool, connections)
+- Security hardening (mysql_secure_installation automated)
+- Backup automation (mysqldump + optional S3)
+- Slow query logging
+- Binary logging for point-in-time recovery
+
+### What's Excluded
+- nginx, PHP, web server components
+- Docker, Node.js, Redis (unless explicitly needed)
+- SSH tunneling/forwarding (not a bastion)
+- Extensive user management (single purpose server)
 
 ## Configuration Details
 
@@ -157,7 +159,7 @@ The script will prompt for:
 Settings are calculated based on your hardware:
 
 ```ini
-# For 8GB RAM, 4 CPU cores server:
+# Example for 8GB RAM, 4 CPU cores server:
 innodb_buffer_pool_size = 6144M      # 75% of RAM
 innodb_log_file_size = 1536M         # 25% of buffer pool
 thread_pool_size = 8                 # 2x CPU cores
@@ -166,12 +168,73 @@ table_open_cache = 800               # 4x connections
 thread_cache_size = 4                # = CPU cores
 ```
 
-### RAM Tiers for max_connections
+### RAM Allocation Formula
 
-- < 2GB RAM: 100 connections
-- 2GB - 8GB: 200 connections
-- 8GB - 16GB: 500 connections
-- 16GB+: 1000 connections
+```bash
+TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
+CPU_CORES=$(nproc)
+
+# InnoDB Buffer Pool: 70-80% of RAM for dedicated DB server
+INNODB_BUFFER_POOL=$((TOTAL_RAM_MB * 75 / 100))
+
+# InnoDB Log File Size: 25% of buffer pool
+INNODB_LOG_FILE_SIZE=$((INNODB_BUFFER_POOL / 4))
+
+# Thread Pool: Based on CPU cores
+THREAD_POOL_SIZE=$((CPU_CORES * 2))
+
+# Max Connections: Scale with RAM
+if [ $TOTAL_RAM_MB -lt 2048 ]; then
+    MAX_CONNECTIONS=100
+elif [ $TOTAL_RAM_MB -lt 8192 ]; then
+    MAX_CONNECTIONS=200
+else
+    MAX_CONNECTIONS=500
+fi
+```
+
+### Key MariaDB Settings
+
+```ini
+[mysqld]
+# Memory
+innodb_buffer_pool_size = ${INNODB_BUFFER_POOL}M
+innodb_log_file_size = ${INNODB_LOG_FILE_SIZE}M
+innodb_log_buffer_size = 16M
+
+# Performance
+thread_cache_size = ${CPU_CORES}
+table_open_cache = 4096
+max_connections = ${MAX_CONNECTIONS}
+
+# Thread Pool (MariaDB-specific)
+thread_handling = pool-of-threads
+thread_pool_size = ${THREAD_POOL_SIZE}
+thread_pool_max_threads = 2000
+
+# InnoDB
+innodb_file_per_table = 1
+innodb_flush_method = O_DIRECT
+innodb_flush_log_at_trx_commit = 2
+innodb_io_capacity = 2000
+
+# Binary Logging
+server_id = 1
+log_bin = /var/log/mysql/mysql-bin.log
+binlog_format = ROW
+expire_logs_days = 7
+max_binlog_size = 100M
+
+# Slow Query Log
+slow_query_log = 1
+slow_query_log_file = /var/log/mysql/slow.log
+long_query_time = 2
+
+# Security
+bind-address = 0.0.0.0  # Phase 1: any, Phase 2: vRack IP only
+skip-name-resolve = 1
+local-infile = 0
+```
 
 ### Security Features
 
@@ -189,13 +252,22 @@ thread_cache_size = 4                # = CPU cores
 ufw allow from 10.0.0.0/8 to any port 3306
 ufw allow from 172.16.0.0/12 to any port 3306
 ufw allow from 192.168.0.0/16 to any port 3306
+
+# Essential outgoing ports
+ufw allow out 53      # DNS queries
+ufw allow out 80      # HTTP for updates
+ufw allow out 443     # HTTPS for updates
+ufw allow out 123     # NTP time sync
+ufw allow out 25      # SMTP for email delivery
+ufw allow out 587     # SMTP submission
+ufw allow out 465     # SMTPS secure email
 ```
 
 **Systemd Hardening:**
 - NoNewPrivileges=true
 - PrivateTmp=true
 - ProtectHome=true
-- ProtectSystem=strict
+- ProtectSystem=full
 - OOMScoreAdjust=-200 (high priority)
 
 ### Backup System
@@ -222,43 +294,35 @@ zcat /var/backups/mysql/full-backup-hostname-20250127-020000.sql.gz | mysql
 zcat /var/backups/mysql/myapp-20250127-020000.sql.gz | mysql myapp
 ```
 
-### Monitoring & Health Checks
+### Monitoring Commands
 
-**Health Check:**
 ```bash
+# Check MariaDB health
 sudo /usr/local/bin/mysql-health
 
-# Output:
-# ✅ MariaDB service: RUNNING
-# ✅ MySQL connectivity: OK
-# Active connections: 5
-# Peak connections: 12
-# Uptime (seconds): 86400
-```
-
-**Server Status:**
-```bash
+# Check server status (includes MySQL)
 sudo /usr/local/bin/dbstatus
 
-# Includes MySQL stats in output
-```
-
-**vRack Network Status:**
-```bash
+# Check vRack network status (after Phase 2)
 sudo /usr/local/bin/mariadb-vrack-status
 
-# Shows network config and connectivity
+# Manual backup
+sudo /usr/local/bin/mysql-backup
+
+# View slow queries
+tail -f /var/log/mysql/slow.log
+
+# View error log
+tail -f /var/log/mysql/error.log
 ```
 
-**Netdata Integration:**
-- MySQL collector enabled automatically
-- Monitors: connections, queries, InnoDB, locks, etc.
-- Access: http://server-ip:19999
+### Configuration Files
 
-**Log Files:**
-- Slow queries: `/var/log/mysql/slow.log` (threshold: 2 seconds)
-- Errors: `/var/log/mysql/error.log`
-- Binary logs: `/var/log/mysql/mysql-bin.*` (7 day retention)
+- **Performance**: `/etc/mysql/mariadb.conf.d/60-performance.cnf` (auto-generated)
+- **Security**: `/etc/mysql/mariadb.conf.d/99-security.cnf`
+- **Root Credentials**: `/root/.my.cnf` (chmod 600)
+- **vRack Network**: `/etc/netplan/60-vrack.yaml` (Phase 2)
+- **Documentation**: `/root/MARIADB-SERVER-README.md`
 
 ## Common Operations
 
@@ -328,7 +392,7 @@ FROM (SELECT variable_value PagesData
       WHERE variable_name='Innodb_page_size') B;
 ```
 
-### Optimization
+### Table Optimization
 
 ```sql
 -- Analyze tables
@@ -545,7 +609,7 @@ EXPLAIN SELECT * FROM large_table WHERE condition;
 2. Run script to recalculate settings:
    ```bash
    # Re-run conversion to update configs
-   sudo ./scripts/convert-to-mariadb.sh
+   sudo ./scripts/mariadb-1-convert.sh
    ```
 
 ### Horizontal Scaling (Replication)
@@ -584,6 +648,66 @@ Use appropriate migration tools:
 - MongoDB: mongodump → custom import script
 - SQLite: sqlite3 .dump | mysql
 
+## Network Configuration (vRack)
+
+### vRack Network Interface Setup
+
+Prompt for during Phase 1 setup:
+- `VRACK_INTERFACE` - Network interface name (e.g., eno2, ens4)
+- `VRACK_IP_ADDRESS` - Private IP address
+- `VRACK_PREFIX` - CIDR prefix (e.g., 24 for /24)
+- `VRACK_GATEWAY` (optional) - Gateway for private network
+
+Configure via `/etc/netplan/60-vrack.yaml`:
+```yaml
+network:
+    ethernets:
+        NETWORK_INTERFACE:
+            dhcp4: false
+            addresses:
+              - IP_ADDRESS/PREFIX
+            # Optional gateway if needed
+            # gateway4: GATEWAY_IP
+```
+
+### Security Considerations by Phase
+
+#### Phase 1 (Public IP Active)
+- SSH key-only on custom port
+- fail2ban active
+- MySQL port NOT exposed publicly
+- Firewall only allows vRack IPs to MySQL
+
+#### Phase 2 (Private Network Only)
+- No public IP (optional)
+- Only accessible via vRack
+- SSH restricted to vRack IPs (optional)
+- MySQL bound to vRack IP only
+
+## Scripts
+
+### mariadb-1-convert.sh (Phase 1)
+Converts hardened bastion server to dedicated MariaDB server:
+1. Environment Setup & Validation
+2. System Updates & Base Packages
+3. MariaDB Installation
+4. MariaDB RAM/CPU Optimization
+5. MariaDB Security Hardening
+6. Backup Configuration
+7. Monitoring Setup (Netdata, health checks)
+8. Firewall Updates
+9. Documentation Creation
+
+### mariadb-2-enable-vrack.sh (Phase 2)
+Transitions server to vRack private network:
+1. Network Configuration Prompts
+2. Netplan Configuration Creation
+3. MariaDB bind-address Update
+4. Firewall Rule Updates
+5. SSH Configuration (optional restriction)
+6. Network Verification Script
+7. Rollback Instructions
+
 ## Additional Resources
 
 - **MariaDB Documentation**: https://mariadb.com/kb/en/documentation/
@@ -609,12 +733,9 @@ Found a bug or have improvements? Please contribute!
 3. Test thoroughly
 4. Submit pull request
 
-## License
-
-Same as PolyServer main project.
-
 ---
 
 **Created:** 2025-01-27
-**Version:** 1.0
+**Updated:** 2025-12-01
+**Version:** 2.0
 **Maintained by:** PolyServer Project

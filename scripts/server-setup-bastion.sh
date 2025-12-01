@@ -2858,7 +2858,7 @@ COPYNEWDB="no"
 EOF
 
 # Create custom AIDE check script that handles mail properly
-cat > /usr/local/bin/aide-check << EOF
+cat > /usr/local/bin/aide-check << 'EOF'
 #!/bin/bash
 # Custom AIDE check script with proper mail handling for bastion host
 
@@ -2867,40 +2867,117 @@ AIDE_LOG="/var/log/aide/aide-check.log"
 mkdir -p /var/log/aide
 
 # Run AIDE check and capture output
-echo "AIDE integrity check started at \$(date)" > \$AIDE_LOG
-echo "=====================================" >> \$AIDE_LOG
+echo "AIDE integrity check started at $(date)" > $AIDE_LOG
+echo "=====================================" >> $AIDE_LOG
 
 # Run AIDE check with explicit config file
 # Debian stores AIDE config at /etc/aide/aide.conf
-if aide --config=/etc/aide/aide.conf --check 2>&1 | tee -a \$AIDE_LOG; then
+if aide --config=/etc/aide/aide.conf --check 2>&1 | tee -a $AIDE_LOG; then
     # AIDE completed successfully
-    echo "AIDE check completed at \$(date)" >> \$AIDE_LOG
-    
+    echo "AIDE check completed at $(date)" >> $AIDE_LOG
+
     # Check if there were any changes detected
-    if grep -q "found differences" \$AIDE_LOG || grep -q "File.*changed" \$AIDE_LOG; then
+    if grep -q "found differences" $AIDE_LOG || grep -q "File.*changed" $AIDE_LOG; then
         # Changes detected - send alert email
-        cat \$AIDE_LOG | mail -s "🚨 BASTION AIDE ALERT: File integrity changes detected on \$HOSTNAME" root
+        echo "" >> $AIDE_LOG
+        echo "NOTE: Database will be updated after you review these changes." >> $AIDE_LOG
+        echo "To update the database and suppress these warnings:" >> $AIDE_LOG
+        echo "  sudo /usr/local/bin/aide-update" >> $AIDE_LOG
+        echo "" >> $AIDE_LOG
+
+        cat $AIDE_LOG | mail -s "🚨 BASTION AIDE ALERT: File integrity changes detected on $(hostname)" root
     else
         # No changes - log success
-        echo "No integrity violations detected" >> \$AIDE_LOG
+        echo "No integrity violations detected" >> $AIDE_LOG
     fi
 else
     # AIDE failed
-    echo "AIDE check failed at \$(date)" >> \$AIDE_LOG
-    echo "AIDE integrity check failed on bastion host \$HOSTNAME" | mail -s "🚨 BASTION AIDE ERROR: Check failed on \$HOSTNAME" root
+    echo "AIDE check failed at $(date)" >> $AIDE_LOG
+    echo "AIDE integrity check failed on bastion host $(hostname)" | mail -s "🚨 BASTION AIDE ERROR: Check failed on $(hostname)" root
     exit 1
 fi
 
 # Rotate old logs
 find /var/log/aide -name "aide-check.log.*" -mtime +30 -delete
-if [ -f \$AIDE_LOG ] && [ \$(stat -c%s \$AIDE_LOG) -gt 10485760 ]; then
+if [ -f $AIDE_LOG ] && [ $(stat -c%s $AIDE_LOG) -gt 10485760 ]; then
     # Rotate if log is larger than 10MB
-    mv \$AIDE_LOG \${AIDE_LOG}.\$(date +%Y%m%d)
-    gzip \${AIDE_LOG}.\$(date +%Y%m%d)
+    mv $AIDE_LOG ${AIDE_LOG}.$(date +%Y%m%d)
+    gzip ${AIDE_LOG}.$(date +%Y%m%d)
 fi
 EOF
 
 chmod 755 /usr/local/bin/aide-check
+
+# Create AIDE database update script (run manually after reviewing changes)
+cat > /usr/local/bin/aide-update << 'EOF'
+#!/bin/bash
+# Update AIDE database after reviewing and accepting changes
+# Run this manually: sudo /usr/local/bin/aide-update
+
+set -e
+
+echo "==================================="
+echo "AIDE Database Update"
+echo "==================================="
+echo ""
+
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then
+    echo "❌ This script must be run as root"
+    echo "   Usage: sudo /usr/local/bin/aide-update"
+    exit 1
+fi
+
+# Check if there are pending changes
+if [ ! -f /var/log/aide/aide-check.log ]; then
+    echo "❌ No AIDE check log found"
+    echo "   Run a check first: sudo /usr/local/bin/aide-check"
+    exit 1
+fi
+
+# Show summary of changes
+echo "Current AIDE status:"
+if grep -q "found differences" /var/log/aide/aide-check.log 2>/dev/null; then
+    echo "⚠️  Changes detected in last check:"
+    grep -E "(Added entries|Removed entries|Changed entries)" /var/log/aide/aide-check.log | tail -3
+    echo ""
+
+    read -p "Have you reviewed these changes and want to update the database? (yes/no): " -r
+    if [[ ! "$REPLY" =~ ^[Yy]es$ ]]; then
+        echo "Update cancelled. Database not changed."
+        exit 0
+    fi
+else
+    echo "✅ No differences detected in last check"
+    echo "Database update not necessary, but will proceed anyway."
+fi
+
+echo ""
+echo "Updating AIDE database..."
+echo "This will take a few minutes..."
+
+# Update the database
+if aide --config=/etc/aide/aide.conf --update 2>&1 | tee /var/log/aide/aide-update.log; then
+    # Move new database to active location
+    if [ -f /var/lib/aide/aide.db.new ]; then
+        cp /var/lib/aide/aide.db /var/lib/aide/aide.db.backup-$(date +%Y%m%d) 2>/dev/null || true
+        mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+        echo ""
+        echo "✅ AIDE database updated successfully"
+        echo "   Backup saved to: /var/lib/aide/aide.db.backup-$(date +%Y%m%d)"
+        echo ""
+        echo "Next check will use the new baseline."
+    else
+        echo "❌ Update failed - new database not found"
+        exit 1
+    fi
+else
+    echo "❌ AIDE update command failed"
+    exit 1
+fi
+EOF
+
+chmod 755 /usr/local/bin/aide-update
 
 # Override the default AIDE systemd service to use our custom script
 mkdir -p /etc/systemd/system/dailyaidecheck.service.d
@@ -2977,15 +3054,16 @@ cat > /etc/aide/aide.conf.d/99-bastion-exclusions << 'EOF'
 # These logs change frequently and cause warnings during AIDE scans
 
 # Exclude Suricata logs (constantly growing during operation)
-!/var/log/suricata/eve.json$
-!/var/log/suricata/fast.log$
-!/var/log/suricata/stats.log$
+# Patterns match both active and rotated logs (eve.json, eve.json.1, eve.json.2.gz, etc.)
+!/var/log/suricata/eve\.json
+!/var/log/suricata/fast\.log
+!/var/log/suricata/stats\.log
 
-# Exclude other frequently changing logs
-!/var/log/auth.log$
-!/var/log/syslog$
-!/var/log/kern.log$
-!/var/log/daemon.log$
+# Exclude other frequently changing logs (including rotated versions)
+!/var/log/auth\.log
+!/var/log/syslog
+!/var/log/kern\.log
+!/var/log/daemon\.log
 EOF
 
 # Update AIDE configuration
@@ -3983,7 +4061,12 @@ cat >> /etc/logcheck/ignore.d.server/bastion-ignore << EOF
 ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ root: (Security configuration backup completed|Suricata rules updated successfully): .*$
 
 # SSH connection attempts and failures (these are expected on a bastion)
-^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sshd\[[0-9]+\]: (error: |Unable to negotiate with|Connection closed by|banner exchange:|drop connection|fatal: |exited MaxStartups|beginning MaxStartups).*$
+# Traditional syslog format (Nov 30 15:00:30)
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd\[[0-9]+\]: (error: |Unable to negotiate with|Connection closed by|banner exchange:|drop connection|fatal: |Timeout before authentication|Received disconnect from|exited MaxStartups|beginning MaxStartups).*$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd-session\[[0-9]+\]: (error: |Unable to negotiate with|Connection closed by|banner exchange:|fatal: |Timeout before authentication|Received disconnect from).*$
+# ISO 8601 format (2025-11-30T15:00:30)
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sshd\[[0-9]+\]: (error: |Unable to negotiate with|Connection closed by|banner exchange:|drop connection|fatal: |Timeout before authentication|Received disconnect from|exited MaxStartups|beginning MaxStartups).*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sshd-session\[[0-9]+\]: (error: |Unable to negotiate with|Connection closed by|banner exchange:|fatal: |Timeout before authentication|Received disconnect from).*$
 
 # Kernel packet filtering messages
 ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ kernel: \[[0-9.]+\] af_packet: .*$
