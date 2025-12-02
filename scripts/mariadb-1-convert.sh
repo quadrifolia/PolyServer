@@ -677,6 +677,6 @@ echo "Conversion complete at: $(date)"
 echo ""
 
 # Mark conversion complete
-echo "$(date)" > /var/lib/mariadb-conversion-complete
+date > /var/lib/mariadb-conversion-complete
 
 log_message "Conversion completed successfully"
