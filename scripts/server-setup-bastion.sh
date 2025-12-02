@@ -1899,22 +1899,25 @@ if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
     postconf -e "smtp_header_checks = regexp:/etc/postfix/smtp_header_checks"
     
     # Create recipient canonical map to redirect all local recipients
+    # Use actual hostname and username variables for dynamic configuration
     cat > /etc/postfix/recipient_canonical << EOF
 # Redirect all local recipients to external email address
-root@bastion    $LOGWATCH_EMAIL
-bastion@bastion $LOGWATCH_EMAIL
-admin@bastion   $LOGWATCH_EMAIL
-security@bastion $LOGWATCH_EMAIL
-postmaster@bastion $LOGWATCH_EMAIL
-webmaster@bastion $LOGWATCH_EMAIL
-logcheck@bastion $LOGWATCH_EMAIL
-root@\$(hostname)    $LOGWATCH_EMAIL
-bastion@\$(hostname) $LOGWATCH_EMAIL
-admin@\$(hostname)   $LOGWATCH_EMAIL
-security@\$(hostname) $LOGWATCH_EMAIL
-postmaster@\$(hostname) $LOGWATCH_EMAIL
-webmaster@\$(hostname) $LOGWATCH_EMAIL
-logcheck@\$(hostname) $LOGWATCH_EMAIL
+# Using hostname: $HOSTNAME and username: $USERNAME
+root@$HOSTNAME    $LOGWATCH_EMAIL
+$USERNAME@$HOSTNAME $LOGWATCH_EMAIL
+admin@$HOSTNAME   $LOGWATCH_EMAIL
+security@$HOSTNAME $LOGWATCH_EMAIL
+postmaster@$HOSTNAME $LOGWATCH_EMAIL
+webmaster@$HOSTNAME $LOGWATCH_EMAIL
+logcheck@$HOSTNAME $LOGWATCH_EMAIL
+# Catch-all for any local user
+root    $LOGWATCH_EMAIL
+$USERNAME $LOGWATCH_EMAIL
+admin   $LOGWATCH_EMAIL
+security $LOGWATCH_EMAIL
+postmaster $LOGWATCH_EMAIL
+webmaster $LOGWATCH_EMAIL
+logcheck $LOGWATCH_EMAIL
 EOF
     
     # Configure recipient canonical mapping
