@@ -158,8 +158,11 @@ polyserver/
 │   │   ├── health_alarm_notify.conf.template
 │   │   └── health.d/
 │   │       └── cgroups.conf.template
-│   ├── mariadb/                         # Database server templates
+│   ├── mariadb/                         # MariaDB/MySQL server templates
 │   │   └── 50-server.cnf.template           # Performance-optimized MariaDB configuration
+│   ├── postgresql/                      # PostgreSQL server templates
+│   │   ├── postgresql.conf.template         # Performance-optimized PostgreSQL configuration
+│   │   └── pg_hba.conf.template             # PostgreSQL authentication configuration
 │   ├── nginx/                           # Traditional web server templates (mode-specific)
 │   │   ├── nginx-baremetal.conf.template    # Nginx config for bare metal mode
 │   │   ├── nginx-docker.conf.template       # Nginx config for Docker mode (reverse proxy)
@@ -1246,9 +1249,13 @@ During server setup, you can choose between two high-performance web server arch
   - **Dedicated server setup**: See [MARIADB.md](./MARIADB.md) for deploying hardened MariaDB servers with vRack support
   
 - **PostgreSQL**: Advanced open-source relational database
-  - Role-based access control
-  - SSL/TLS encryption enabled by default
-  - Performance tuning for production workloads
+  - Role-based access control with scram-sha-256 authentication
+  - SSL/TLS encryption support (configurable)
+  - Performance-optimized configuration templates
+  - SSD-optimized query planner settings
+  - Comprehensive logging and statistics tracking
+  - Optional replication support
+  - **Configuration templates**: See `templates/postgresql/` for optimized configs
 
 ### 📦 **Caching and Storage**
 - **Redis**: In-memory data structure store
