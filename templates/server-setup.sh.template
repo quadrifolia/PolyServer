@@ -1529,18 +1529,23 @@ if [ "$SMTP_ENABLED" = "true" ]; then
     # Create recipient canonical map to redirect all local recipients
     cat > /etc/postfix/recipient_canonical << EOF
 # Redirect all local recipients to external email address
+# Using hostname: $HOSTNAME and username: $USERNAME
 root@$HOSTNAME    $LOGWATCH_EMAIL
 $USERNAME@$HOSTNAME $LOGWATCH_EMAIL
 admin@$HOSTNAME   $LOGWATCH_EMAIL
 security@$HOSTNAME $LOGWATCH_EMAIL
 postmaster@$HOSTNAME $LOGWATCH_EMAIL
 webmaster@$HOSTNAME $LOGWATCH_EMAIL
-root@\$(hostname)    $LOGWATCH_EMAIL
-$USERNAME@\$(hostname) $LOGWATCH_EMAIL
-admin@\$(hostname)   $LOGWATCH_EMAIL
-security@\$(hostname) $LOGWATCH_EMAIL
-postmaster@\$(hostname) $LOGWATCH_EMAIL
-webmaster@\$(hostname) $LOGWATCH_EMAIL
+logcheck@$HOSTNAME $LOGWATCH_EMAIL
+
+# Catch-all for any local user without @hostname
+root    $LOGWATCH_EMAIL
+$USERNAME $LOGWATCH_EMAIL
+admin   $LOGWATCH_EMAIL
+security $LOGWATCH_EMAIL
+postmaster $LOGWATCH_EMAIL
+webmaster $LOGWATCH_EMAIL
+logcheck $LOGWATCH_EMAIL
 EOF
     
     # Configure recipient canonical mapping
@@ -1585,6 +1590,7 @@ security: $LOGWATCH_EMAIL
 postmaster: $LOGWATCH_EMAIL
 MAILER-DAEMON: $LOGWATCH_EMAIL
 webmaster: $LOGWATCH_EMAIL
+logcheck: $LOGWATCH_EMAIL
 EOF
 
     # Build alias database
@@ -4051,9 +4057,11 @@ EOF
     cat > /usr/local/bin/netdata-access << 'EOF'
 #!/bin/bash
 # Quick access to local Netdata dashboard
+HOSTNAME=$(hostname)
+USERNAME=$(whoami)
 echo "🌐 Opening Netdata dashboard..."
 echo "   Local URL: http://127.0.0.1:19999"
-echo "   SSH Tunnel: ssh -L 19999:127.0.0.1:19999 user@server"
+echo "   SSH Tunnel: ssh -L 19999:127.0.0.1:19999 $USERNAME@$HOSTNAME"
 echo "   Netdata Cloud: https://app.netdata.cloud"
 EOF
     chmod +x /usr/local/bin/netdata-access
