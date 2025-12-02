@@ -52,6 +52,7 @@ This repository provides a comprehensive, security-hardened Debian server founda
   - [Malware Protection](#malware-protection)
   - [Rootkit Detection](#rootkit-detection)
   - [File Integrity Monitoring](#file-integrity-monitoring)
+  - [RAID Array Monitoring](#raid-array-monitoring)
   - [Logcheck System Monitoring](#logcheck-system-monitoring)
   - [Logwatch System Monitoring](#logwatch-system-monitoring)
   - [Automatic Security Updates](#automatic-security-updates)
@@ -1995,6 +1996,56 @@ sudo aide.wrapper --check
 # Update AIDE database after legitimate changes
 sudo aide.wrapper --update
 ```
+
+### RAID Array Monitoring
+
+For servers with RAID arrays (software RAID with mdadm), PolyServer includes comprehensive monitoring tools:
+
+**Monitoring Tools Installed:**
+- **nvme-cli**: NVMe-specific health monitoring and diagnostics
+- **smartmontools**: S.M.A.R.T. disk health monitoring for all drive types
+- **mdadm**: Software RAID management with automated health checks
+
+**Automated Monitoring:**
+- **AUTOSCAN**: Daily checks for degraded arrays
+- **AUTOCHECK**: Monthly redundancy verification
+- **Email alerts**: Notifications sent for array degradation or failures
+
+**Check RAID Status:**
+
+```bash
+# View RAID array status
+cat /proc/mdstat
+
+# Detailed array information
+sudo mdadm --detail /dev/md1
+
+# Check all arrays
+sudo mdadm --examine --scan
+
+# NVMe drive health (if applicable)
+sudo nvme smart-log /dev/nvme0n1
+sudo nvme smart-log /dev/nvme1n1
+
+# SMART status for SATA/SAS drives
+sudo smartctl -a /dev/sda
+sudo smartctl -a /dev/sdb
+```
+
+**Understanding mdadm Monitoring Messages:**
+
+The system runs `mdmonitor-oneshot.service` periodically to check array health. You may see messages like:
+```
+mdadm: DeviceDisappeared event detected on md device /dev/md/md1
+mdadm: NewArray event detected on md device /dev/md1
+```
+
+These are **historical event reports** from boot time, not real-time failures. The monitoring service scans the array's event log and reports what it finds. These messages are automatically filtered from logcheck to reduce noise.
+
+**Real failures** will show different symptoms:
+- Array state: `degraded` instead of `clean`
+- Missing devices: `[U_]` instead of `[UU]` in `/proc/mdstat`
+- Email alerts about failed devices
 
 ### Logcheck System Monitoring
 

@@ -2127,6 +2127,9 @@ apt-get install -y iftop nethogs ethtool mtr-tiny
 apt-get install -y arp-scan dnsutils net-tools traceroute whois
 apt-get install -y nmap ncat socat
 
+# Disk and hardware monitoring tools
+apt-get install -y nvme-cli smartmontools
+
 # Pre-configure iperf3 to not start as daemon (security best practice for bastions)
 echo "iperf3 iperf3/start_daemon boolean false" | debconf-set-selections
 apt-get install -y iperf3
@@ -4074,6 +4077,12 @@ cat >> /etc/logcheck/ignore.d.server/bastion-ignore << EOF
 
 # Kernel performance tuning messages (informational)
 ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ kernel: \[[0-9.]+\] perf: interrupt took too long.*lowering kernel\.perf_event_max_sample_rate to [0-9]+$
+
+# mdadm monitoring oneshot service (reports historical boot events, not real-time failures)
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sh\[[0-9]+\]: mdadm: DeviceDisappeared event detected on md device /dev/md
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sh\[[0-9]+\]: mdadm: NewArray event detected on md device /dev/md
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sh\[[0-9]+\]: mdadm: DeviceDisappeared event detected on md device /dev/md
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sh\[[0-9]+\]: mdadm: NewArray event detected on md device /dev/md
 EOF
 
 echo "✅ Logcheck configured for daily server-level reports (less technical than default)"
