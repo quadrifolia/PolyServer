@@ -92,10 +92,30 @@ if [ $UFW_BLOCKS -gt 0 ]; then
         grep -o "SRC=[0-9.]*" | cut -d= -f2 | sort | uniq -c | sort -nr | head -10 | \
         awk '{printf "  %s attempts from %s\n", $1, $2}' >> $REPORT_FILE 2>/dev/null || true
     echo "" >> $REPORT_FILE
-    echo "Top 10 blocked destination ports:" >> $REPORT_FILE
+    echo "Top 10 blocked destination ports (with service identification):" >> $REPORT_FILE
     grep "UFW BLOCK" /var/log/kern.log.1 2>/dev/null | \
         grep -o "DPT=[0-9]*" | cut -d= -f2 | sort | uniq -c | sort -nr | head -10 | \
-        awk '{printf "  %s attempts on port %s\n", $1, $2}' >> $REPORT_FILE 2>/dev/null || true
+        while read count port; do
+            case "$port" in
+                22) service="SSH (default)";;
+                23) service="Telnet";;
+                80) service="HTTP";;
+                443) service="HTTPS";;
+                445) service="SMB";;
+                3306) service="MySQL";;
+                3389) service="RDP";;
+                5060) service="SIP";;
+                5432) service="PostgreSQL";;
+                5555) service="Android Debug";;
+                8000|8080|8081|8088|8443|8728|8888) service="HTTP-alt/Web";;
+                9100) service="Printer/JetDirect";;
+                *) service="Unknown";;
+            esac
+            printf "  %s attempts on port %s (%s)\n" "$count" "$port" "$service" >> $REPORT_FILE
+        done
+    echo "" >> $REPORT_FILE
+    echo "ℹ️  Note: UFW blocks occur at firewall level, before reaching services." >> $REPORT_FILE
+    echo "   Fail2ban only tracks attempts that reach SSH authentication." >> $REPORT_FILE
 fi
 echo "" >> $REPORT_FILE
 
