@@ -1955,7 +1955,7 @@ EOF
     cat > /etc/aliases << EOF
 # All local mail redirected to external email address
 root: $LOGWATCH_EMAIL
-bastion: $LOGWATCH_EMAIL
+$USERNAME: $LOGWATCH_EMAIL
 admin: $LOGWATCH_EMAIL
 security: $LOGWATCH_EMAIL
 postmaster: $LOGWATCH_EMAIL
@@ -5741,12 +5741,14 @@ EOF
 EOF
 
     # Create bastion-specific access script
-    cat > /usr/local/bin/netdata-bastion << EOF
+    cat > /usr/local/bin/netdata-bastion << 'NETDATA_SCRIPT'
 #!/bin/bash
 # Quick access to bastion Netdata dashboard
+HOSTNAME=$(hostname)
+USERNAME=$(whoami)
 echo "🌐 Bastion Netdata Dashboard Access:"
 echo "   Local URL: http://127.0.0.1:19999"
-echo "   SSH Tunnel: ssh -L 19999:127.0.0.1:19999 user@bastion"
+echo "   SSH Tunnel: ssh -L 19999:127.0.0.1:19999 $USERNAME@$HOSTNAME"
 echo "   Netdata Cloud: https://app.netdata.cloud"
 echo ""
 echo "📊 Bastion Monitoring Features:"
@@ -5755,7 +5757,7 @@ echo "   • Failed login attempts"
 echo "   • Resource utilization"
 echo "   • Network traffic analysis"
 echo "   • System performance metrics"
-EOF
+NETDATA_SCRIPT
     chmod +x /usr/local/bin/netdata-bastion
     
     echo "✅ Netdata monitoring installed for bastion host"
