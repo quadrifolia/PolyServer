@@ -3050,20 +3050,10 @@ systemctl daemon-reload
 # Configure AIDE to exclude/handle growing log files
 echo "Configuring AIDE exclusions for growing logs..."
 cat > /etc/aide/aide.conf.d/99-bastion-exclusions << 'EOF'
-# Bastion-specific AIDE exclusions for growing/active log files
-# These logs change frequently and cause warnings during AIDE scans
-
-# Exclude Suricata logs (constantly growing during operation)
-# Patterns match both active and rotated logs (eve.json, eve.json.1, eve.json.2.gz, etc.)
-!/var/log/suricata/eve\.json
-!/var/log/suricata/fast\.log
-!/var/log/suricata/stats\.log
-
-# Exclude other frequently changing logs (including rotated versions)
-!/var/log/auth\.log
-!/var/log/syslog
-!/var/log/kern\.log
-!/var/log/daemon\.log
+# Bastion-specific AIDE exclusions
+# Exclude entire /var/log directory - logs change constantly by design
+# Monitoring log files with AIDE creates excessive noise without security value
+!/var/log
 EOF
 
 # Update AIDE configuration
