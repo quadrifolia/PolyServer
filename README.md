@@ -14,7 +14,9 @@ This repository provides a comprehensive, security-hardened Debian server founda
   - [Step 2: Server Provisioning](#step-2-server-provisioning)
   - [Step 3: Deploy and Run Server Hardening](#step-3-deploy-and-run-server-hardening)
   - [Step 4: Deploy Base Configuration](#step-4-deploy-base-configuration)
+- [Specialized Server Deployments](#specialized-server-deployments)
   - [Bastion Host Setup](#bastion-host-setup)
+  - [MariaDB Dedicated Server](#mariadb-dedicated-server)
 - [Application Deployment](#application-deployment)
   - [Deployment Modes](#deployment-modes)
   - [Supported Applications](#supported-applications)
@@ -461,7 +463,11 @@ Deploy the generated configuration to your hardened server:
 
 **Note:** After step 3, SSH access will be on port 2222, and you'll connect as the `deploy` user, not root.
 
-## Bastion Host Setup
+## Specialized Server Deployments
+
+PolyServer includes specialized setup scripts for specific server roles beyond the standard application server deployment.
+
+### Bastion Host Setup
 
 For environments requiring secure access to internal networks, PolyServer includes a specialized bastion host hardening script. Bastion hosts provide a secure gateway for administrative access to internal infrastructure.
 
@@ -964,6 +970,35 @@ ALLOWED_INTERNAL_PORTS="22,80,443,3306,5432"                # Ports accessible o
 
 For more advanced configurations, review the comprehensive audit rules and monitoring settings in the script.
 
+### MariaDB Dedicated Server
+
+For dedicated database server deployments, PolyServer provides a two-phase conversion process that transforms a hardened bastion server into a production-ready MariaDB server with optional private network (vRack) support.
+
+**📖 Complete Guide:** See [MARIADB.md](./MARIADB.md) for full documentation including:
+- Step-by-step setup instructions
+- vRack private network configuration
+- Performance tuning and optimization
+- Troubleshooting common issues (including email delivery after vRack transition)
+- Security best practices
+- Backup and monitoring configuration
+
+**Quick Start:**
+
+```bash
+# Phase 1: Convert bastion to MariaDB server
+sudo ./scripts/mariadb-1-convert.sh
+
+# Phase 2: Optional - Enable vRack private networking
+sudo ./scripts/mariadb-2-enable-vrack.sh
+```
+
+**Key Features:**
+- **Auto-tuned performance**: Settings optimized based on available RAM and CPU
+- **Security hardening**: Root access restricted, strong password generation, firewall configured
+- **Private network support**: Optional vRack integration with interface-specific firewall rules
+- **Production ready**: Automated backups, health monitoring, and comprehensive documentation
+- **Email notifications**: Properly configured to work even with isolated network setup
+
 ## Application Deployment
 
 After setting up the hardened base server, you can deploy various applications using either deployment mode. Your choice of `DEPLOYMENT_MODE` in `defaults.env` determines how applications are deployed and managed.
@@ -1207,6 +1242,7 @@ During server setup, you can choose between two high-performance web server arch
   - Secure installation with disabled remote root access
   - Performance optimization for server environments
   - Automatic security hardening configuration
+  - **Dedicated server setup**: See [MARIADB.md](./MARIADB.md) for deploying hardened MariaDB servers with vRack support
   
 - **PostgreSQL**: Advanced open-source relational database
   - Role-based access control

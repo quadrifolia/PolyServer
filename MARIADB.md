@@ -488,6 +488,50 @@ df -h /var/backups/mysql
 /usr/local/bin/mysql-backup
 ```
 
+### Email Notifications Not Being Delivered
+
+**Symptoms:** System emails (backup reports, security alerts, monitoring) not arriving.
+
+**Common cause after vRack transition:** UFW interface-specific deny rules blocking outbound SMTP.
+
+```bash
+# 1. Check if emails are stuck in queue
+mailq
+
+# 2. Check mail log for connection timeouts
+tail -50 /var/log/mail.log | grep -E "timeout|refused"
+
+# 3. Test SMTP connectivity
+timeout 5 bash -c 'cat < /dev/null > /dev/tcp/smtp.gmail.com/587' && echo "✅ Port 587: Connected" || echo "❌ Port 587: Blocked"
+
+# 4. Check UFW rules - look for interface-specific deny rules
+ufw status numbered | grep -E "DENY OUT|ALLOW OUT"
+```
+
+**Fix:** When using interface-specific deny rules (common after vRack setup), you must add interface-specific allow rules for SMTP ports **before** the deny rule:
+
+```bash
+# Identify your public interface
+PUBLIC_INTERFACE=$(ip -o link show | awk -F': ' '{print $2}' | grep -E "enp.*f0$|ens.*0$" | head -1)
+
+# Find the deny-out rule number
+DENY_RULE=$(ufw status numbered | grep "DENY OUT.*$PUBLIC_INTERFACE" | head -1 | sed 's/\[//' | sed 's/\].*//' | xargs)
+
+# Insert SMTP allow rules BEFORE the deny rule
+ufw insert $DENY_RULE allow out on "$PUBLIC_INTERFACE" to any port 25 proto tcp comment "SMTP on public"
+ufw insert $((DENY_RULE + 1)) allow out on "$PUBLIC_INTERFACE" to any port 587 proto tcp comment "SMTP submission on public"
+ufw insert $((DENY_RULE + 2)) allow out on "$PUBLIC_INTERFACE" to any port 465 proto tcp comment "SMTPS on public"
+
+# Reload and test
+ufw reload
+postqueue -f  # Flush mail queue
+mailq         # Should be empty or reducing
+```
+
+**Why this happens:** UFW evaluates rules in order. Interface-specific deny rules (`deny out on enp97s0f0`) override generic port allows (`allow out 587/tcp`). You need interface-specific allows that match the deny rule's specificity.
+
+**Prevention:** The `mariadb-2-enable-vrack.sh` script now includes these rules in the correct order during vRack setup.
+
 ## Security Best Practices
 
 ### 1. Password Management
