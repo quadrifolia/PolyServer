@@ -276,12 +276,27 @@ if [[ "$REPLY" =~ ^[Yy]es$ ]]; then
         ufw allow in on "$VRACK_INTERFACE" comment "Allow all on vRack" 2>/dev/null || true
         ufw allow out on "$VRACK_INTERFACE" comment "Allow all on vRack" 2>/dev/null || true
 
-        # Block all traffic on public interface
-        ufw deny in on "$PUBLIC_INTERFACE" comment "Block public interface" 2>/dev/null || true
-        ufw deny out on "$PUBLIC_INTERFACE" comment "Block public interface" 2>/dev/null || true
+        # Block incoming on public interface
+        ufw deny in on "$PUBLIC_INTERFACE" comment "Block public interface incoming" 2>/dev/null || true
 
-        log_message "✅ Public interface $PUBLIC_INTERFACE completely blocked"
-        echo "✅ Public interface $PUBLIC_INTERFACE completely blocked"
+        # CRITICAL: Allow specific outgoing ports on public interface BEFORE blocking
+        # These must be added BEFORE the deny rule so they take precedence
+        log_message "Adding specific port allows on public interface..."
+        ufw allow out on "$PUBLIC_INTERFACE" to any port 25 proto tcp comment "SMTP on public" 2>/dev/null || true
+        ufw allow out on "$PUBLIC_INTERFACE" to any port 587 proto tcp comment "SMTP submission on public" 2>/dev/null || true
+        ufw allow out on "$PUBLIC_INTERFACE" to any port 465 proto tcp comment "SMTPS on public" 2>/dev/null || true
+        ufw allow out on "$PUBLIC_INTERFACE" to any port 53 comment "DNS on public" 2>/dev/null || true
+        ufw allow out on "$PUBLIC_INTERFACE" to any port 80 proto tcp comment "HTTP on public" 2>/dev/null || true
+        ufw allow out on "$PUBLIC_INTERFACE" to any port 443 proto tcp comment "HTTPS on public" 2>/dev/null || true
+        ufw allow out on "$PUBLIC_INTERFACE" to any port 123 proto udp comment "NTP on public" 2>/dev/null || true
+
+        # Now block all other outgoing traffic on public interface
+        ufw deny out on "$PUBLIC_INTERFACE" comment "Block public interface outgoing" 2>/dev/null || true
+
+        log_message "✅ Public interface $PUBLIC_INTERFACE: incoming blocked, outgoing limited to essential ports"
+        echo "✅ Public interface $PUBLIC_INTERFACE configuration:"
+        echo "   • Incoming: BLOCKED"
+        echo "   • Outgoing: Only SMTP, DNS, HTTP/S, NTP allowed"
         echo "✅ vRack interface $VRACK_INTERFACE allows all traffic"
     else
         echo "⚠️  Could not detect public interface - skipping"
