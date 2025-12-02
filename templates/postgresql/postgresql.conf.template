@@ -1,0 +1,225 @@
+# PostgreSQL Configuration for PolyServer
+# Performance-optimized and security-hardened
+# This file should be placed in /etc/postgresql/{version}/main/conf.d/
+
+####################
+# Connection Settings
+####################
+
+# Maximum number of concurrent connections
+max_connections = {{PGSQL_MAX_CONNECTIONS}}
+
+# Reserved connections for superuser
+superuser_reserved_connections = {{PGSQL_SUPERUSER_RESERVED_CONNECTIONS}}
+
+####################
+# Resource Usage (Memory)
+####################
+
+# Memory for shared buffers (typically 25% of RAM)
+shared_buffers = {{PGSQL_SHARED_BUFFERS}}MB
+
+# Memory for complex queries
+work_mem = {{PGSQL_WORK_MEM}}MB
+
+# Memory for maintenance operations (VACUUM, CREATE INDEX, etc.)
+maintenance_work_mem = {{PGSQL_MAINTENANCE_WORK_MEM}}MB
+
+# Maximum memory for autovacuum workers
+autovacuum_work_mem = {{PGSQL_AUTOVACUUM_WORK_MEM}}MB
+
+# Effective cache size (OS + PostgreSQL cache, typically 50-75% of RAM)
+effective_cache_size = {{PGSQL_EFFECTIVE_CACHE_SIZE}}MB
+
+# Temporary buffers per session
+temp_buffers = {{PGSQL_TEMP_BUFFERS}}MB
+
+####################
+# Write Ahead Log (WAL)
+####################
+
+# WAL buffer size
+wal_buffers = {{PGSQL_WAL_BUFFERS}}MB
+
+# Minimum size of WAL segments
+min_wal_size = {{PGSQL_MIN_WAL_SIZE}}MB
+
+# Maximum size of WAL segments
+max_wal_size = {{PGSQL_MAX_WAL_SIZE}}MB
+
+# WAL write mode (for durability vs performance trade-off)
+# fsync: safest, replica: for replication, open_sync: alternative safe mode
+wal_sync_method = fsync
+
+# WAL level (minimal, replica, or logical)
+wal_level = {{PGSQL_WAL_LEVEL}}
+
+####################
+# Query Planner
+####################
+
+# Cost of random page fetch
+random_page_cost = {{PGSQL_RANDOM_PAGE_COST}}
+
+# Cost of sequential page fetch
+seq_page_cost = 1.0
+
+# Effective I/O concurrency (for SSDs: 200, HDDs: 2)
+effective_io_concurrency = {{PGSQL_EFFECTIVE_IO_CONCURRENCY}}
+
+####################
+# Parallel Queries
+####################
+
+# Maximum number of parallel workers per gather node
+max_parallel_workers_per_gather = {{PGSQL_MAX_PARALLEL_WORKERS_PER_GATHER}}
+
+# Maximum number of parallel workers system-wide
+max_parallel_workers = {{PGSQL_MAX_PARALLEL_WORKERS}}
+
+# Maximum parallel workers for maintenance operations
+max_parallel_maintenance_workers = {{PGSQL_MAX_PARALLEL_MAINTENANCE_WORKERS}}
+
+####################
+# Logging
+####################
+
+# Log destination
+log_destination = 'stderr'
+
+# Logging collector
+logging_collector = on
+
+# Log directory
+log_directory = 'log'
+
+# Log filename pattern
+log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'
+
+# Log file mode
+log_file_mode = 0600
+
+# Log rotation
+log_truncate_on_rotation = off
+log_rotation_age = 1d
+log_rotation_size = 100MB
+
+# What to log
+log_min_duration_statement = {{PGSQL_LOG_MIN_DURATION}}
+log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+log_checkpoints = on
+log_connections = {{PGSQL_LOG_CONNECTIONS}}
+log_disconnections = {{PGSQL_LOG_DISCONNECTIONS}}
+log_duration = off
+log_lock_waits = on
+log_statement = '{{PGSQL_LOG_STATEMENT}}'
+log_temp_files = 0
+
+####################
+# Autovacuum
+####################
+
+# Enable autovacuum
+autovacuum = on
+
+# Maximum autovacuum workers
+autovacuum_max_workers = {{PGSQL_AUTOVACUUM_MAX_WORKERS}}
+
+# Naptime between autovacuum runs
+autovacuum_naptime = 1min
+
+# Vacuum threshold
+autovacuum_vacuum_threshold = 50
+
+# Analyze threshold
+autovacuum_analyze_threshold = 50
+
+# Scale factor for vacuum
+autovacuum_vacuum_scale_factor = 0.2
+
+# Scale factor for analyze
+autovacuum_analyze_scale_factor = 0.1
+
+####################
+# Statistics
+####################
+
+# Track activity
+track_activities = on
+
+# Track counts
+track_counts = on
+
+# Track I/O timing (slight overhead, but useful)
+track_io_timing = {{PGSQL_TRACK_IO_TIMING}}
+
+# Track function calls
+track_functions = {{PGSQL_TRACK_FUNCTIONS}}
+
+# Statistics target (default 100, higher = better stats but slower ANALYZE)
+default_statistics_target = {{PGSQL_DEFAULT_STATISTICS_TARGET}}
+
+####################
+# Security & Authentication
+####################
+
+# SSL (if certificates are configured)
+ssl = {{PGSQL_SSL_ENABLED}}
+
+# Password encryption
+password_encryption = scram-sha-256
+
+# Timezone
+timezone = '{{TIMEZONE}}'
+
+# Locale
+lc_messages = 'en_US.UTF-8'
+lc_monetary = 'en_US.UTF-8'
+lc_numeric = 'en_US.UTF-8'
+lc_time = 'en_US.UTF-8'
+
+# Default text search configuration
+default_text_search_config = 'pg_catalog.english'
+
+####################
+# Replication (if enabled)
+####################
+
+{{#PGSQL_REPLICATION_ENABLED}}
+# Maximum WAL senders
+max_wal_senders = {{PGSQL_MAX_WAL_SENDERS}}
+
+# WAL keep segments (for replication lag tolerance)
+wal_keep_size = {{PGSQL_WAL_KEEP_SIZE}}MB
+
+# Replication timeout
+wal_sender_timeout = 60s
+
+# Hot standby (for read replicas)
+hot_standby = on
+hot_standby_feedback = on
+{{/PGSQL_REPLICATION_ENABLED}}
+
+####################
+# Performance Tuning
+####################
+
+# Checkpoint completion target (spread checkpoints over time)
+checkpoint_completion_target = 0.9
+
+# Checkpoint timeout
+checkpoint_timeout = 15min
+
+# Maximum time between automatic WAL checkpoints
+max_wal_size = {{PGSQL_MAX_WAL_SIZE}}MB
+
+# Enable JIT compilation (PostgreSQL 11+, requires LLVM)
+jit = {{PGSQL_JIT_ENABLED}}
+
+# Huge pages (try to use if available)
+huge_pages = try
+
+# Shared preload libraries (for extensions)
+{{#PGSQL_SHARED_PRELOAD_LIBRARIES}}
+shared_preload_libraries = '{{PGSQL_SHARED_PRELOAD_LIBRARIES}}'
+{{/PGSQL_SHARED_PRELOAD_LIBRARIES}}
