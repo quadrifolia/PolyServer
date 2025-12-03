@@ -99,9 +99,38 @@ The script will prompt for:
 4. Creates network verification script
 5. Updates documentation
 
+### Step 6: Add PostgreSQL for Metabase (Optional)
+
+If you need PostgreSQL for analytics tools like Metabase:
+
+```bash
+# Run PostgreSQL addition script
+sudo ./scripts/mariadb-3-add-postgresql.sh
+```
+
+**What happens:**
+1. Validates MariaDB installation
+2. Installs PostgreSQL (latest stable)
+3. Calculates optimal resource allocation (~20-30% of resources)
+4. Creates optimized PostgreSQL configuration (SSD-optimized)
+5. Sets up `metabase` database and user with secure password
+6. Configures automated daily backups (7-day retention)
+7. Enables Netdata PostgreSQL monitoring
+8. Updates security monitoring (AIDE exclusions)
+9. Creates documentation → `/root/POSTGRESQL-README.md`
+
+**Use Case:** Internal analytics tools on the same server as MariaDB. PostgreSQL runs localhost-only with no external access.
+
+**Resource Allocation:**
+- MariaDB: Primary database (~70-75% of resources)
+- PostgreSQL: Secondary for analytics (~20-30% of resources)
+- Plenty of headroom on high-spec servers (256GB RAM / 32 cores)
+
+See the [Phase 3 script documentation](#mariadb-3-add-postgresqlsh-phase-3---optional) below for detailed information.
+
 ## Architecture
 
-### Two-Phase Deployment Strategy
+### Three-Phase Deployment Strategy
 
 #### Phase 1: Initial Setup (Public IP)
 Server starts with public IP for installation and configuration:
@@ -111,13 +140,21 @@ Server starts with public IP for installation and configuration:
 4. Configure MariaDB with optimizations
 5. Set up monitoring
 
-#### Phase 2: Switch to vRack Private Network
+#### Phase 2: Switch to vRack Private Network (Optional)
 Remove public access, switch to vRack-only:
 1. Configure private network interface via netplan
 2. Test private network connectivity
 3. Update MariaDB to bind to private IP
 4. Optionally remove public IP/interface
 5. Database only accessible from vRack
+
+#### Phase 3: Add PostgreSQL (Optional)
+Add PostgreSQL for analytics tools on the same server:
+1. Install and configure PostgreSQL with resource allocation
+2. Create application database and user (e.g., Metabase)
+3. Configure automated backups and monitoring
+4. Localhost-only access (no external connections)
+5. Both databases coexist efficiently
 
 ### What's Included
 
@@ -751,6 +788,29 @@ Transitions server to vRack private network:
 5. SSH Configuration (optional restriction)
 6. Network Verification Script
 7. Rollback Instructions
+
+### mariadb-3-add-postgresql.sh (Phase 3 - Optional)
+Adds PostgreSQL to MariaDB server for Metabase analytics:
+1. Validates MariaDB installation
+2. Installs PostgreSQL (latest stable)
+3. Calculates resource allocation (~20-30% of resources)
+4. Creates optimized PostgreSQL configuration
+5. Sets up metabase database and user
+6. Configures automated backups (daily)
+7. Enables Netdata PostgreSQL monitoring
+8. Updates security monitoring (AIDE exclusions)
+9. Creates documentation (/root/POSTGRESQL-README.md)
+
+**Use Case**: Internal analytics tool (Metabase) on same server as MariaDB
+
+**Resource Allocation**:
+- MariaDB: Primary database (majority of resources)
+- PostgreSQL: Secondary for Metabase (~20-30% resources)
+- Example: 256GB RAM server → PostgreSQL gets ~50GB shared buffers
+
+**Security**: Localhost-only access, no external connections
+
+**Monitoring**: Integrated with Netdata, daily backups, security reports
 
 ## Additional Resources
 
