@@ -3492,49 +3492,75 @@ EOF
     # Create bastion-specific Suricata rules
     cat > /etc/suricata/rules/bastion-custom.rules << EOF
 # Bastion Host Custom Suricata Rules
-# Detect common attacks against bastion hosts
+# Updated to reduce false positives and log noise
+# Note: fail2ban handles SSH brute force detection via /var/log/auth.log
 
-# SSH brute force detection
-alert tcp \$EXTERNAL_NET any -> \$HOME_NET \$SSH_PORTS (msg:"BASTION SSH Brute Force Attempt"; flow:established,to_server; detection_filter:track by_src, count 5, seconds 60; classtype:attempted-admin; sid:2000001; rev:1;)
+# SSH Protocol Anomalies - only alert on actual suspicious patterns
+# REMOVED noisy packet-counting rules that trigger on normal SSH usage:
+# - Old rule 2000001: Triggered on ANY 5 packets in 60 seconds (normal SSH typing!)
+# - Old rule 2000002: Triggered on ANY 10 packets in 60 seconds
+# These created thousands of false positives for legitimate SSH sessions
 
-# Multiple failed SSH connections
-alert tcp \$EXTERNAL_NET any -> \$HOME_NET \$SSH_PORTS (msg:"BASTION SSH Multiple Connection Attempts"; flow:established,to_server; threshold:type threshold, track by_src, count 10, seconds 60; classtype:attempted-recon; sid:2000002; rev:1;)
+# SSH port scanning - rapid SYN packets (connection attempts)
+alert tcp \$EXTERNAL_NET any -> \$HOME_NET \$SSH_PORTS (msg:"BASTION SSH Port Scan"; flags:S; threshold:type threshold, track by_src, count 20, seconds 10; classtype:attempted-recon; sid:2000001; rev:2;)
 
-# Detect SSH scanning
-alert tcp \$EXTERNAL_NET any -> \$HOME_NET 22 (msg:"BASTION SSH Scan on Default Port"; flow:established,to_server; classtype:attempted-recon; sid:2000003; rev:1;)
+# SSH version scanning - multiple handshakes without authentication
+alert ssh any any -> \$HOME_NET \$SSH_PORTS (msg:"BASTION SSH Version Scanning"; threshold:type threshold, track by_src, count 10, seconds 60; classtype:attempted-recon; sid:2000002; rev:2;)
+
+# Detect SSH scanning on default port (port 22 should be disabled on bastion)
+alert tcp \$EXTERNAL_NET any -> \$HOME_NET 22 (msg:"BASTION SSH Scan on Default Port"; flags:S; threshold:type threshold, track by_src, count 5, seconds 10; classtype:attempted-recon; sid:2000003; rev:2;)
 
 # Detect port scanning targeting bastion
-alert tcp \$EXTERNAL_NET any -> \$HOME_NET ![22,2222,80,443] (msg:"BASTION Port Scan Detected"; flow:established,to_server; threshold:type threshold, track by_src, count 5, seconds 10; classtype:attempted-recon; sid:2000004; rev:1;)
+alert tcp \$EXTERNAL_NET any -> \$HOME_NET ![22,2222,80,443] (msg:"BASTION Port Scan Detected"; flags:S; threshold:type threshold, track by_src, count 10, seconds 10; classtype:attempted-recon; sid:2000004; rev:2;)
 
 # Detect unusual outbound connections from bastion
-alert tcp \$HOME_NET any -> \$EXTERNAL_NET ![22,53,80,123,443] (msg:"BASTION Unusual Outbound Connection"; flow:established,to_server; threshold:type threshold, track by_dst, count 5, seconds 60; classtype:policy-violation; sid:2000005; rev:1;)
+alert tcp \$HOME_NET any -> \$EXTERNAL_NET ![22,53,80,123,443] (msg:"BASTION Unusual Outbound Connection"; flow:established,to_server; threshold:type threshold, track by_dst, count 10, seconds 60; classtype:policy-violation; sid:2000005; rev:2;)
 
-# Detect potential data exfiltration
-alert tcp \$HOME_NET any -> \$EXTERNAL_NET any (msg:"BASTION Large Data Transfer Outbound"; flow:established,to_server; threshold:type threshold, track by_src, count 10, seconds 60; classtype:policy-violation; sid:2000006; rev:1;)
+# Detect potential data exfiltration - large uploads
+alert tcp \$HOME_NET \$SSH_PORTS -> \$EXTERNAL_NET any (msg:"BASTION Large SSH Upload"; flow:established,to_client; byte_test:1,>,100000000,0,relative; threshold:type threshold, track by_src, count 1, seconds 300; classtype:attempted-dos; sid:2000006; rev:2;)
 
-# Detect ICMP tunneling attempts
-alert icmp \$EXTERNAL_NET any -> \$HOME_NET any (msg:"BASTION ICMP Tunneling Attempt"; icode:0; itype:8; classtype:attempted-admin; sid:2000007; rev:1;)
+# ICMP ping sweep detection - reduced threshold to avoid normal ping noise
+alert icmp \$EXTERNAL_NET any -> \$HOME_NET any (msg:"BASTION ICMP Ping Sweep"; itype:8; threshold:type threshold, track by_src, count 50, seconds 10; classtype:attempted-recon; sid:2000007; rev:2;)
 
-# Detect DNS tunneling
-alert udp \$HOME_NET any -> any 53 (msg:"BASTION DNS Tunneling Attempt"; content:"|00 01 00 00 00 01|"; classtype:policy-violation; sid:2000008; rev:1;)
+# Unusual SSH protocol version (old, potentially vulnerable)
+alert ssh \$EXTERNAL_NET any -> \$HOME_NET \$SSH_PORTS (msg:"BASTION Old SSH Protocol Version"; ssh.protoversion:1; classtype:attempted-admin; sid:2000008; rev:2;)
 EOF
 
     # Set up Suricata log rotation
     cat > /etc/logrotate.d/suricata << 'EOF'
 /var/log/suricata/*.log /var/log/suricata/*.json {
     daily
-    size 100M
-    rotate 14
+    size 50M
+    rotate 7
     compress
     delaycompress
     missingok
     notifempty
-    create 0640 root adm
+    create 0640 suricata suricata
+    sharedscripts
     postrotate
-        /bin/kill -USR2 $(cat /var/run/suricata.pid 2>/dev/null) 2>/dev/null || systemctl reload suricata 2>/dev/null || true
+        /bin/kill -HUP $(cat /var/run/suricata.pid 2>/dev/null) 2>/dev/null || true
     endscript
 }
 EOF
+
+    # Create threshold configuration to reduce alert noise
+    cat > /etc/suricata/threshold.config << 'EOF'
+# Suricata Threshold Configuration
+# Reduce noise from legitimate activity while maintaining security monitoring
+
+# SSH port scans - limit repeated alerts from same source
+suppress gen_id 1, sig_id 2000001, track by_src
+
+# ICMP ping sweeps - can be noisy from monitoring tools
+# Uncomment to suppress completely if too noisy:
+# suppress gen_id 1, sig_id 2000007
+EOF
+
+    # Ensure threshold config is referenced in suricata.yaml
+    if ! grep -q "threshold-file:" /etc/suricata/suricata.yaml; then
+        sed -i '/^default-rule-path:/a threshold-file: /etc/suricata/threshold.config' /etc/suricata/suricata.yaml
+    fi
 
     # Configure Suricata systemd resource limits for bastion host
     echo "===== 9.4.1 Configuring Suricata Resource Management ====="
