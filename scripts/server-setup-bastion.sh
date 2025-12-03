@@ -3743,15 +3743,36 @@ if [ "$INSTALL_RKHUNTER" = true ]; then
     # Configure chkrootkit
     echo "===== 10.1 Configuring chkrootkit ====="
 
-    # Create chkrootkit scan script with proper log handling
-    cat > /etc/cron.daily/chkrootkit-scan << EOF
+    # Create chkrootkit whitelist configuration for known false positives
+    cat > /etc/chkrootkit/whitelist.conf << 'WHITELIST_EOF'
+# chkrootkit whitelist for known false positives
+# These are legitimate files and processes that should be ignored
+
+# Ruby gems documentation files (from Debian packages)
+/usr/lib/ruby/vendor_ruby/rubygems/ssl_certs/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/timeout/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/uri/.document
+
+# fail2ban test fixture files (from Debian package)
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest/.htpasswd
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/noentry/.htaccess
+
+# Legitimate packet sniffers (IDS/monitoring tools)
+# Format: process_name:interface_pattern
+WHITELIST_SNIFFERS="suricata:.*|systemd-networkd:.*|dhclient:.*|dhcpd:.*|dhcpcd:.*|wpa_supplicant:.*|NetworkManager:.*"
+WHITELIST_EOF
+
+    # Create chkrootkit scan script with proper log handling and whitelist filtering
+    cat > /etc/cron.daily/chkrootkit-scan << 'EOF'
 #!/bin/bash
-# Run a daily chkrootkit scan
+# Run a daily chkrootkit scan with intelligent whitelist filtering
 
 # Log file
 LOGFILE="/var/log/chkrootkit/daily_scan.log"
 EXPECTED_LOG="/var/log/chkrootkit/log.expected"
 TODAY_LOG="/var/log/chkrootkit/log.today"
+RAW_LOG="/var/log/chkrootkit/log.raw"
+WHITELIST_CONF="/etc/chkrootkit/whitelist.conf"
 
 # Create log directory if it doesn't exist
 mkdir -p /var/log/chkrootkit
@@ -3759,8 +3780,45 @@ mkdir -p /var/log/chkrootkit
 # Clear previous log
 echo "chkrootkit daily scan started at \$(date)" > \$LOGFILE
 
-# Run the scan
-chkrootkit -q > \$TODAY_LOG 2>&1
+# Run the scan (raw output)
+chkrootkit -q > \$RAW_LOG 2>&1
+
+# Filter out whitelisted entries
+if [ -f "\$WHITELIST_CONF" ]; then
+    # Load whitelist configuration
+    source "\$WHITELIST_CONF"
+
+    # Start with raw output
+    cp "\$RAW_LOG" "\$TODAY_LOG"
+
+    # Filter out whitelisted file paths (suspicious files warnings)
+    while IFS= read -r line; do
+        # Skip comments and empty lines
+        [[ "\$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "\$line" ]] && continue
+
+        # Check if line is a whitelist entry (starts with /)
+        if [[ "\$line" =~ ^/ ]]; then
+            # Escape special regex characters in the path
+            escaped_path=\$(echo "\$line" | sed 's/[]\/$*.^[]/\\\\&/g')
+            # Remove lines containing this path from the output
+            sed -i "/\${escaped_path}/d" "\$TODAY_LOG"
+        fi
+    done < "\$WHITELIST_CONF"
+
+    # Filter out whitelisted packet sniffers
+    if [ -n "\$WHITELIST_SNIFFERS" ]; then
+        # Remove packet sniffer warnings for whitelisted processes
+        # This filters lines like: "eno1np0: PACKET SNIFFER(/usr/bin/suricata[208664], ...)"
+        sed -i -E "/PACKET SNIFFER.*(\${WHITELIST_SNIFFERS})/d" "\$TODAY_LOG"
+    fi
+
+    echo "Whitelist filtering applied" >> \$LOGFILE
+else
+    # No whitelist - use raw output
+    cp "\$RAW_LOG" "\$TODAY_LOG"
+    echo "No whitelist configuration found - using raw output" >> \$LOGFILE
+fi
 
 # Add completion time
 echo "chkrootkit daily scan completed at \$(date)" >> \$LOGFILE
@@ -3814,18 +3872,26 @@ EOF
 
     # Run initial chkrootkit scan to create baseline
     echo "Running initial chkrootkit scan to create baseline..."
-    mkdir -p /var/log/chkrootkit
+    mkdir -p /var/log/chkrootkit /etc/chkrootkit
     /etc/cron.daily/chkrootkit-scan
 
     echo ""
-    echo "📝 IMPORTANT: chkrootkit baseline setup"
-    echo "The initial chkrootkit baseline was created, but you should update it after"
-    echo "all services are running and the system is in its final state."
+    echo "📝 IMPORTANT: chkrootkit configuration"
     echo ""
-    echo "After 24-48 hours of operation, run this command to update the baseline:"
+    echo "✅ Whitelist created: /etc/chkrootkit/whitelist.conf"
+    echo "   - Filters known false positives (Ruby gems, fail2ban test files)"
+    echo "   - Whitelists legitimate packet sniffers (Suricata, systemd-networkd)"
+    echo "   - Raw scan output saved to: /var/log/chkrootkit/log.raw"
+    echo "   - Filtered output saved to: /var/log/chkrootkit/log.today"
+    echo ""
+    echo "To add custom whitelist entries, edit: /etc/chkrootkit/whitelist.conf"
+    echo "  - File paths: Add full path on a new line (e.g., /path/to/file)"
+    echo "  - Packet sniffers: Add to WHITELIST_SNIFFERS variable (regex pattern)"
+    echo ""
+    echo "After 24-48 hours of operation, update the baseline to your system's normal state:"
     echo "  sudo cp -a -f /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected"
     echo ""
-    echo "This will eliminate false positives from legitimate security tools like Suricata."
+    echo "Note: The whitelist already filters Suricata and other legitimate security tools."
     echo ""
 else
     echo "⏭️ Rootkit detection tools not selected - skipping chkrootkit configuration"

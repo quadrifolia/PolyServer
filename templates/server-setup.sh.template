@@ -3831,13 +3831,40 @@ else
     echo "🐳 Skipping RKHunter configuration in Docker mode"
 fi
 
-# Configure chkrootkit daily scan
+# Configure chkrootkit with whitelist for known false positives
+echo "Configuring chkrootkit with whitelist filtering..."
+
+# Create chkrootkit configuration directory and whitelist
+mkdir -p /etc/chkrootkit /var/log/chkrootkit
+
+cat > /etc/chkrootkit/whitelist.conf << 'WHITELIST_EOF'
+# chkrootkit whitelist for known false positives
+# These are legitimate files and processes that should be ignored
+
+# Ruby gems documentation files (from Debian packages)
+/usr/lib/ruby/vendor_ruby/rubygems/ssl_certs/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/timeout/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/uri/.document
+
+# fail2ban test fixture files (from Debian package)
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest/.htpasswd
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/noentry/.htaccess
+
+# Legitimate packet sniffers (IDS/monitoring tools)
+# Format: process_name:interface_pattern
+WHITELIST_SNIFFERS="suricata:.*|systemd-networkd:.*|dhclient:.*|dhcpd:.*|dhcpcd:.*|wpa_supplicant:.*|NetworkManager:.*"
+WHITELIST_EOF
+
 cat > /etc/cron.daily/chkrootkit-scan << 'EOF'
 #!/bin/bash
-# Run a daily chkrootkit scan
+# Run a daily chkrootkit scan with intelligent whitelist filtering
 
 # Log file
 LOGFILE="/var/log/chkrootkit/daily_scan.log"
+EXPECTED_LOG="/var/log/chkrootkit/log.expected"
+TODAY_LOG="/var/log/chkrootkit/log.today"
+RAW_LOG="/var/log/chkrootkit/log.raw"
+WHITELIST_CONF="/etc/chkrootkit/whitelist.conf"
 
 # Create log directory if it doesn't exist
 mkdir -p /var/log/chkrootkit
@@ -3845,25 +3872,91 @@ mkdir -p /var/log/chkrootkit
 # Clear previous log
 echo "chkrootkit daily scan started at $(date)" > $LOGFILE
 
-# Run the scan
-chkrootkit -q >> $LOGFILE 2>&1
+# Run the scan (raw output)
+chkrootkit -q > $RAW_LOG 2>&1
+
+# Filter out whitelisted entries
+if [ -f "$WHITELIST_CONF" ]; then
+    # Load whitelist configuration
+    source "$WHITELIST_CONF"
+
+    # Start with raw output
+    cp "$RAW_LOG" "$TODAY_LOG"
+
+    # Filter out whitelisted file paths (suspicious files warnings)
+    while IFS= read -r line; do
+        # Skip comments and empty lines
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "$line" ]] && continue
+
+        # Check if line is a whitelist entry (starts with /)
+        if [[ "$line" =~ ^/ ]]; then
+            # Escape special regex characters in the path
+            escaped_path=$(echo "$line" | sed 's/[]\/$*.^[]/\\&/g')
+            # Remove lines containing this path from the output
+            sed -i "/${escaped_path}/d" "$TODAY_LOG"
+        fi
+    done < "$WHITELIST_CONF"
+
+    # Filter out whitelisted packet sniffers
+    if [ -n "$WHITELIST_SNIFFERS" ]; then
+        # Remove packet sniffer warnings for whitelisted processes
+        sed -i -E "/PACKET SNIFFER.*(${WHITELIST_SNIFFERS})/d" "$TODAY_LOG"
+    fi
+
+    echo "Whitelist filtering applied" >> $LOGFILE
+else
+    # No whitelist - use raw output
+    cp "$RAW_LOG" "$TODAY_LOG"
+    echo "No whitelist configuration found - using raw output" >> $LOGFILE
+fi
 
 # Add completion time
 echo "chkrootkit daily scan completed at $(date)" >> $LOGFILE
 
-# Check for warnings and alert if found (chkrootkit outputs "INFECTED" when it finds something)
-if grep -q "INFECTED" $LOGFILE; then
-    ADMIN_EMAIL=$(grep "^MAIL-ON-WARNING=" /etc/rkhunter.conf.local | cut -d= -f2)
-    # If no email is set, use root
-    if [ -z "$ADMIN_EMAIL" ]; then
-        ADMIN_EMAIL="root"
-    fi
-    
-    # Send email alert
-    cat $LOGFILE | mail -s "⚠️ ROOTKIT WARNING: Possible rootkit found on $(hostname)" "$ADMIN_EMAIL"
+# Create expected log file if it doesn't exist (first run)
+if [ ! -f "$EXPECTED_LOG" ]; then
+    cp "$TODAY_LOG" "$EXPECTED_LOG"
+    echo "Initial chkrootkit expected output created" >> $LOGFILE
+fi
+
+# Check for differences from expected output
+if ! diff -q "$EXPECTED_LOG" "$TODAY_LOG" >/dev/null 2>&1; then
+    # Get admin email
+    ADMIN_EMAIL=$(grep "^MAIL-ON-WARNING=" /etc/rkhunter.conf.local 2>/dev/null | cut -d= -f2)
+    [ -z "$ADMIN_EMAIL" ] && ADMIN_EMAIL="root"
+
+    # Create diff report
+    {
+        echo "chkrootkit output differs from expected baseline"
+        echo "Scan date: $(date)"
+        echo ""
+        echo "=== TODAY'S OUTPUT ==="
+        cat "$TODAY_LOG"
+        echo ""
+        echo "=== EXPECTED OUTPUT ==="
+        cat "$EXPECTED_LOG"
+        echo ""
+        echo "=== DIFFERENCES ==="
+        diff "$EXPECTED_LOG" "$TODAY_LOG" || true
+    } | mail -s "⚠️ CHKROOTKIT ALERT: Output changed on $(hostname)" "$ADMIN_EMAIL"
+
+    echo "chkrootkit output changed - alert sent" >> $LOGFILE
+else
+    echo "chkrootkit output matches expected baseline" >> $LOGFILE
+fi
+
+# Check for INFECTED results specifically
+if grep -q "INFECTED" "$TODAY_LOG"; then
+    ADMIN_EMAIL=$(grep "^MAIL-ON-WARNING=" /etc/rkhunter.conf.local 2>/dev/null | cut -d= -f2)
+    [ -z "$ADMIN_EMAIL" ] && ADMIN_EMAIL="root"
+    cat "$TODAY_LOG" | mail -s "🚨 ROOTKIT WARNING: Possible rootkit found on $(hostname)" "$ADMIN_EMAIL"
+    echo "INFECTED results found - alert sent" >> $LOGFILE
 fi
 EOF
 chmod 755 /etc/cron.daily/chkrootkit-scan
+
+echo "✅ chkrootkit whitelist configured: /etc/chkrootkit/whitelist.conf"
 
 # ========= Block Storage Setup =========
 echo "===== 7. Setting up block storage for backups ====="

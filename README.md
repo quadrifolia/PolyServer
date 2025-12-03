@@ -1964,11 +1964,24 @@ The combination of ClamAV and maldet provides comprehensive protection against b
 
 The server uses both RKHunter and chkrootkit for enhanced security:
 
-- **Daily automated scans**: Both tools scan each night
+- **Daily automated scans**: Both tools scan each night with intelligent filtering
 - **Email alerts**: Notifications sent if suspicious activity is detected
-- **Baseline updates**: Regular updates to maintain accuracy
+- **Baseline comparison**: Alerts on changes from expected output
+- **Whitelist filtering**: Automatic filtering of known false positives
 
-To manually check for rootkits:
+**chkrootkit Smart Whitelist:**
+
+The setup automatically filters out common false positives:
+- Ruby gems `.document` files (from Debian packages)
+- fail2ban test fixture files
+- Legitimate packet sniffers (Suricata IDS, systemd-networkd, etc.)
+
+**Log Files:**
+- `/var/log/chkrootkit/log.raw` - Unfiltered scan output
+- `/var/log/chkrootkit/log.today` - Filtered output (whitelist applied)
+- `/var/log/chkrootkit/log.expected` - Baseline for comparison
+
+**Manual Commands:**
 
 ```bash
 # Using RKHunter
@@ -1977,6 +1990,27 @@ sudo rkhunter --check --sk
 # Using chkrootkit
 sudo chkrootkit
 
+# View filtered output
+cat /var/log/chkrootkit/log.today
+
+# View raw output (before filtering)
+cat /var/log/chkrootkit/log.raw
+
+# Update chkrootkit baseline after verifying system state
+sudo cp /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected
+
+# Edit whitelist for custom exclusions
+sudo nano /etc/chkrootkit/whitelist.conf
+```
+
+**Customizing the Whitelist:**
+
+Edit `/etc/chkrootkit/whitelist.conf` to add:
+- **File paths**: Add full paths on new lines (e.g., `/path/to/legitimate/file`)
+- **Packet sniffers**: Add process names to `WHITELIST_SNIFFERS` variable
+
+**Update RKHunter:**
+```bash
 # Update RKHunter database
 sudo rkhunter --update
 
@@ -1984,7 +2018,29 @@ sudo rkhunter --update
 sudo rkhunter --propupd
 ```
 
-RKHunter is configured to do minimal whitelisting to provide high security with low false positives.
+**For Existing Servers:**
+
+If you have an existing server without the whitelist feature, run the upgrade script:
+
+```bash
+# Download and run the whitelist upgrade script
+sudo ./scripts/add-chkrootkit-whitelist.sh
+```
+
+This script will:
+- Create the whitelist configuration
+- Update the chkrootkit scan script
+- Run a test scan with filtering
+- Preserve your existing baseline (if any)
+
+**Security Note:**
+
+While the whitelist filters known false positives, you're right to be cautious - if you were compromised, malware could hide in whitelisted locations. Therefore:
+
+1. **Review raw output periodically**: `cat /var/log/chkrootkit/log.raw`
+2. **Update baseline carefully**: Only after verifying system state
+3. **Monitor whitelist changes**: The whitelist file itself should be monitored by AIDE
+4. **Cross-verify with other tools**: Use RKHunter, AIDE, and system audits together
 
 ### File Integrity Monitoring
 
@@ -2605,7 +2661,9 @@ In case of a suspected security incident:
 | Check disk space | Weekly | `df -h` to ensure sufficient space |
 | Verify auto-updates | Weekly | `cat /var/log/unattended-upgrades/unattended-upgrades.log` |
 | Check virus scan logs | Weekly | `cat /var/log/clamav/daily_scan.log` |
-| Review rootkit scans | Weekly | `cat /var/log/rkhunter/daily_scan.log /var/log/chkrootkit/daily_scan.log` |
+| Review rootkit scans | Weekly | `cat /var/log/rkhunter/daily_scan.log /var/log/chkrootkit/log.today` |
+| Review raw chkrootkit output | Monthly | `cat /var/log/chkrootkit/log.raw` (bypasses whitelist) |
+| Update chkrootkit baseline | After system changes | `sudo cp /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected` |
 | Check file integrity | Weekly | `sudo aide.wrapper --check` |
 | Update virus signatures | Monthly | `sudo freshclam` |
 | Update rootkit database | Monthly | `sudo rkhunter --update` |
