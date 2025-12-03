@@ -1,0 +1,11 @@
+# Suricata Threshold Configuration for Application Servers
+# Reduces alert noise while maintaining security monitoring
+
+# Port scans - limit repeated alerts from same source
+suppress gen_id 1, sig_id 3000006, track by_src
+
+# Authentication attempts - don't suppress, but could limit if too noisy
+# suppress gen_id 1, sig_id 3000002, track by_src
+
+# Unauthorized API access - don't suppress, useful for monitoring
+# suppress gen_id 1, sig_id 3000003, track by_src
