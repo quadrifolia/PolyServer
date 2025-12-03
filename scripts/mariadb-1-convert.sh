@@ -263,6 +263,10 @@ cat > /root/.my.cnf << EOF
 [client]
 user=root
 password=${MYSQL_ROOT_PASSWORD}
+
+[mysql]
+user=root
+password=${MYSQL_ROOT_PASSWORD}
 EOF
 chmod 600 /root/.my.cnf
 
