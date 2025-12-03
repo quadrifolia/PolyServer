@@ -270,11 +270,62 @@ log_message "✅ PostgreSQL configuration created"
 # Configure pg_hba.conf for secure access
 log_message "===== 4. Configuring PostgreSQL Authentication ====="
 
+# Detect vRack interface and IP
+VRACK_INTERFACE=$(ip -o link show | awk -F': ' '$2 ~ /^enp.*s0f1$/ {print $2}' | head -1)
+if [ -n "$VRACK_INTERFACE" ]; then
+    VRACK_IP=$(ip -4 addr show "$VRACK_INTERFACE" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "")
+    if [ -n "$VRACK_IP" ]; then
+        log_message "Detected vRack interface: $VRACK_INTERFACE with IP: $VRACK_IP"
+        VRACK_ENABLED=true
+    else
+        log_message "vRack interface found but no IP detected - using localhost only"
+        VRACK_ENABLED=false
+    fi
+else
+    log_message "No vRack interface detected - using localhost only"
+    VRACK_ENABLED=false
+fi
+
+# Configure listen_addresses
+if [ "$VRACK_ENABLED" = true ]; then
+    log_message "Configuring PostgreSQL to listen on localhost and vRack ($VRACK_IP)"
+    echo "listen_addresses = 'localhost,${VRACK_IP}'" >> "${PG_CONF_DIR}/postgresql.conf"
+else
+    log_message "Configuring PostgreSQL for localhost-only access"
+    echo "listen_addresses = 'localhost'" >> "${PG_CONF_DIR}/postgresql.conf"
+fi
+
 # Backup original pg_hba.conf
 cp "${PG_CONF_DIR}/pg_hba.conf" "${PG_CONF_DIR}/pg_hba.conf.backup"
 
-# Create secure pg_hba.conf (localhost-only for Metabase)
-cat > "${PG_CONF_DIR}/pg_hba.conf" << 'EOF'
+# Create pg_hba.conf with vRack support if available
+if [ "$VRACK_ENABLED" = true ]; then
+    cat > "${PG_CONF_DIR}/pg_hba.conf" << 'EOF'
+# PostgreSQL Client Authentication Configuration
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+
+# Local connections
+local   all             postgres                                peer
+local   all             all                                     scram-sha-256
+
+# IPv4 localhost connections
+host    all             all             127.0.0.1/32            scram-sha-256
+
+# IPv6 localhost connections
+host    all             all             ::1/128                 scram-sha-256
+
+# vRack private network access (192.168.0.0/16)
+host    all             all             192.168.0.0/16          scram-sha-256
+
+# Replication connections
+local   replication     all                                     peer
+host    replication     all             127.0.0.1/32            scram-sha-256
+host    replication     all             ::1/128                 scram-sha-256
+host    replication     all             192.168.0.0/16          scram-sha-256
+EOF
+    log_message "✅ PostgreSQL authentication configured (localhost + vRack access)"
+else
+    cat > "${PG_CONF_DIR}/pg_hba.conf" << 'EOF'
 # PostgreSQL Client Authentication Configuration
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
 
@@ -293,50 +344,85 @@ local   replication     all                                     peer
 host    replication     all             127.0.0.1/32            scram-sha-256
 host    replication     all             ::1/128                 scram-sha-256
 EOF
-
-log_message "✅ PostgreSQL authentication configured (localhost-only)"
+    log_message "✅ PostgreSQL authentication configured (localhost-only)"
+fi
 
 # Start PostgreSQL
 systemctl start postgresql
 systemctl enable postgresql
 
-log_message "===== 5. Creating Metabase Database and User ====="
+log_message "===== 5. Creating Admin User and Metabase Database ====="
 
-# Generate secure password for metabase user
+# Generate secure passwords
+ADMIN_PASSWORD=$(openssl rand -base64 32)
 METABASE_PASSWORD=$(openssl rand -base64 32)
 
-# Create metabase database and user
+# Create admin superuser and metabase database
 sudo -u postgres psql << EOF
+-- Create admin superuser for database administration and imports
+CREATE USER admin WITH PASSWORD '${ADMIN_PASSWORD}' SUPERUSER CREATEDB CREATEROLE;
+
 -- Create metabase user with secure password
 CREATE USER metabase WITH PASSWORD '${METABASE_PASSWORD}';
 
 -- Create metabase database
 CREATE DATABASE metabase OWNER metabase;
 
--- Grant privileges
+-- Grant privileges to metabase user
 GRANT ALL PRIVILEGES ON DATABASE metabase TO metabase;
+
+-- Allow admin to operate on metabase database
+GRANT ALL PRIVILEGES ON DATABASE metabase TO admin;
 
 -- Show created objects
 \l metabase
+\du admin
 \du metabase
 EOF
 
-log_message "✅ Metabase database and user created"
+log_message "✅ Admin superuser and Metabase database created"
 
 # Save credentials securely
 METABASE_CREDS="/root/.metabase-postgresql"
-cat > "$METABASE_CREDS" << EOF
-# Metabase PostgreSQL Credentials
-# Generated: $(date)
 
-Host: localhost
+# Determine the host to use in connection strings
+if [ "$VRACK_ENABLED" = true ]; then
+    CONNECT_HOST="$VRACK_IP"
+else
+    CONNECT_HOST="localhost"
+fi
+
+cat > "$METABASE_CREDS" << EOF
+# PostgreSQL Credentials for Metabase
+# Generated: $(date)
+# Connection Host: ${CONNECT_HOST}
+
+# === ADMIN USER (for database imports and administration) ===
+Host: ${CONNECT_HOST}
+Port: 5432
+User: admin
+Password: ${ADMIN_PASSWORD}
+Database: metabase (or any database)
+
+# Admin connection string (for imports):
+# postgresql://admin:${ADMIN_PASSWORD}@${CONNECT_HOST}:5432/metabase
+
+# Import command examples:
+# psql -h ${CONNECT_HOST} -U admin -d metabase < metabase_dump.sql
+# PGPASSWORD='${ADMIN_PASSWORD}' psql -h ${CONNECT_HOST} -U admin -d metabase < metabase_dump.sql
+
+# === METABASE APPLICATION USER (for Metabase application) ===
+Host: ${CONNECT_HOST}
 Port: 5432
 Database: metabase
 User: metabase
 Password: ${METABASE_PASSWORD}
 
-# Connection string:
-# postgresql://metabase:${METABASE_PASSWORD}@localhost:5432/metabase
+# Application connection string (for Metabase config):
+# postgresql://metabase:${METABASE_PASSWORD}@${CONNECT_HOST}:5432/metabase
+
+# Test connection:
+# psql -h ${CONNECT_HOST} -U metabase -d metabase
 EOF
 
 chmod 600 "$METABASE_CREDS"
@@ -405,28 +491,28 @@ GRANT pg_monitor TO netdata;
 GRANT CONNECT ON DATABASE metabase TO netdata;
 EOF
 
-    # Configure Netdata PostgreSQL plugin
-    mkdir -p /etc/netdata/python.d
+    # Configure Netdata PostgreSQL plugin (using go.d collector)
+    # Note: Python postgres collector was removed, replaced with go.d/postgres
+    mkdir -p /etc/netdata/go.d
 
-    cat > /etc/netdata/python.d/postgres.conf << 'EOF'
-# Netdata PostgreSQL monitoring configuration
+    cat > /etc/netdata/go.d/postgres.conf << 'EOF'
+# Netdata go.d PostgreSQL monitoring
+# https://learn.netdata.cloud/docs/data-collection/databases/postgresql
 
-localhost:
-  name: 'metabase_db'
-  database: 'metabase'
-  user: 'netdata'
-  password: 'netdata_monitor_readonly'
-  host: 'localhost'
-  port: 5432
+jobs:
+  - name: metabase_db
+    dsn: 'postgres://netdata:netdata_monitor_readonly@localhost:5432/metabase'
+    timeout: 5
+    collect_databases_metrics: yes
 EOF
 
-    chmod 640 /etc/netdata/python.d/postgres.conf
-    chown root:netdata /etc/netdata/python.d/postgres.conf 2>/dev/null || true
+    chmod 640 /etc/netdata/go.d/postgres.conf
+    chown root:netdata /etc/netdata/go.d/postgres.conf 2>/dev/null || true
 
     # Restart Netdata to pick up PostgreSQL monitoring
     systemctl restart netdata
 
-    log_message "✅ Netdata PostgreSQL monitoring configured"
+    log_message "✅ Netdata PostgreSQL monitoring configured (using go.d collector)"
 else
     log_message "⚠️  Netdata not found - skipping monitoring setup"
 fi
