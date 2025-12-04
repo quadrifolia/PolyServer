@@ -2484,8 +2484,75 @@ EOF
         fi
     fi
 
+    # Setup zsh for root user
+    echo "===== 6.2.2 Setting up Zsh for Root User ====="
+
+    echo "Installing Oh My Zsh for root user..."
+
+    # Backup existing root .zshrc if present
+    if [ -f /root/.zshrc ]; then
+        cp /root/.zshrc /root/.zshrc.backup-$(date +%Y%m%d-%H%M%S)
+        echo "Backed up existing /root/.zshrc"
+    fi
+
+    # Remove existing Oh My Zsh installation if present
+    if [ -d /root/.oh-my-zsh ]; then
+        echo "Removing existing Oh My Zsh installation for root..."
+        rm -rf /root/.oh-my-zsh /root/.zshrc
+    fi
+
+    # Download and install Oh My Zsh for root
+    curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh -o /tmp/omz-install-root.sh
+    chmod +x /tmp/omz-install-root.sh
+
+    # Install Oh My Zsh (unattended)
+    RUNZSH=no CHSH=no sh /tmp/omz-install-root.sh || true
+    rm -f /tmp/omz-install-root.sh
+
+    if [ -f /root/.zshrc ]; then
+        # Configure plugins for root
+        sed -i 's/plugins=(git)/plugins=(git sudo systemd colored-man-pages history-substring-search ssh-agent)/' /root/.zshrc
+
+        # Add bastion-specific aliases and functions for root
+        cat >> /root/.zshrc << 'ROOTZSH'
+
+# Bastion host specific aliases and functions for root
+alias auth-log='tail -f /var/log/auth.log'
+alias audit-log='tail -f /var/log/audit/audit.log'
+alias connections='netstat -tulpn'
+alias banned='fail2ban-client status sshd'
+alias security-report='bash /usr/local/bin/security-report.sh'
+
+# Quick access to important logs
+alias logs-auth='journalctl -u ssh -f'
+alias logs-fail2ban='journalctl -u fail2ban -f'
+alias logs-suricata='tail -f /var/log/suricata/fast.log'
+
+# System monitoring shortcuts
+alias top-cpu='ps aux --sort=-%cpu | head -11'
+alias top-mem='ps aux --sort=-%mem | head -11'
+
+# SSH connection helper
+sshjump() {
+    if [ -z "$1" ]; then
+        echo "Usage: sshjump <internal-host>"
+        echo "Example: sshjump db-1"
+        return 1
+    fi
+    ssh "$1"
+}
+ROOTZSH
+
+        # Change root's default shell to zsh
+        chsh -s $(which zsh) root
+
+        echo "✅ Oh My Zsh configured for root user"
+    else
+        echo "⚠️  Oh My Zsh installation for root may have failed"
+    fi
+
     # Create global executable commands for bastion functions
-    echo "===== 6.2.2 Creating global bastion commands ====="
+    echo "===== 6.2.3 Creating global bastion commands ====="
 
     # Create bastionstat command
     cat > /usr/local/bin/bastionstat << EOF
