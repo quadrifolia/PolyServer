@@ -449,11 +449,15 @@ PolyServer provides flexible SSH authentication configuration:
 
 **Run from your local machine:**
 
-1. **Upload the generated hardening script to your server:**
+1. **Upload the generated hardening script and configuration to your server:**
 
    ```bash
    # Copy the customized script to your server
    scp config/server-setup.sh root@your-server-ip:/root/
+
+   # Copy the environment configuration (for advanced settings during setup)
+   ssh root@your-server-ip "mkdir -p /opt/polyserver/config"
+   scp templates/defaults.env root@your-server-ip:/opt/polyserver/config/
    ```
 
 2. **SSH to your server and run the hardening script:**
