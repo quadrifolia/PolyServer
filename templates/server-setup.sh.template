@@ -907,8 +907,8 @@ echo ""
 
 echo "===== 6.2 Installing core packages and web server ====="
 
-# Core security packages (always installed)
-CORE_PACKAGES="fail2ban unattended-upgrades apt-listchanges gnupg-agent logwatch apparmor apparmor-utils awscli"
+# Core security and monitoring packages (always installed)
+CORE_PACKAGES="fail2ban unattended-upgrades apt-listchanges gnupg-agent logwatch apparmor apparmor-utils awscli smartmontools"
 
 # Build component-based package list
 COMPONENT_PACKAGES=""
@@ -943,11 +943,12 @@ echo "Security components:"
 [ "$INSTALL_SURICATA" = "true" ] && echo "  • Suricata IDS (MEDIUM resource usage)"
 
 if [ "$DOCKER_MODE" = "true" ]; then
-    # Docker-compatible package list (no hddtemp, no unbound)
+    # Docker-compatible package list (no unbound needed in containers)
     apt-get install -y $CORE_PACKAGES $COMPONENT_PACKAGES $SECURITY_PACKAGES lm-sensors
 else
     # Full package list for production servers
-    apt-get install -y $CORE_PACKAGES $COMPONENT_PACKAGES $SECURITY_PACKAGES lm-sensors hddtemp unbound
+    # Note: hddtemp removed from Debian 13, using lm-sensors only for hardware monitoring
+    apt-get install -y $CORE_PACKAGES $COMPONENT_PACKAGES $SECURITY_PACKAGES lm-sensors unbound
 fi
 
 # Display installed optional security components
@@ -3786,7 +3787,19 @@ sensors | grep -v "Adapter:" | grep -v "^$" | sed -e 's/^/   /'
 echo ""
 echo "Disk Temperature:"
 echo ""
-hddtemp /dev/sd? 2>/dev/null | sed -e 's/^/   /' || echo "   No disk temperature data available"
+# Note: hddtemp removed from Debian 13, using smartctl from smartmontools as alternative
+if command -v smartctl &> /dev/null; then
+    for disk in /dev/sd?; do
+        if [ -b "$disk" ]; then
+            temp=$(smartctl -A "$disk" 2>/dev/null | grep -i temperature | awk '{print $10}')
+            if [ -n "$temp" ]; then
+                echo "   $disk: ${temp}°C"
+            fi
+        fi
+    done
+else
+    echo "   Disk temperature monitoring not available (install smartmontools)"
+fi
 EOF
 chmod 755 /etc/logwatch/scripts/services/zz-lm_sensors
 
