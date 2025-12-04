@@ -1253,25 +1253,48 @@ The PolyServer foundation includes:
 
 ## Optional Application Components
 
-During server setup, you can optionally install additional application components for your specific use case. These components are installed with secure configurations and production-ready defaults.
+PolyServer uses a configuration-based approach for component installation. You choose which components to install by setting flags in `templates/defaults.env` before running the server setup.
+
+### Component Configuration
+
+Edit `templates/defaults.env` to enable/disable components (all are false by default except nginx, Docker, and Git):
+
+```bash
+# Web server (required for web applications)
+INSTALL_NGINX=true              # Nginx web server
+
+# Application runtimes (install only what you need)
+INSTALL_PHP=false               # PHP 8.4 with php-fpm (disable for Docker-only setups)
+INSTALL_NODEJS=false            # Node.js LTS with npm
+
+# Databases (install only what you need)
+INSTALL_MARIADB=false           # MariaDB/MySQL database server
+INSTALL_POSTGRESQL=false        # PostgreSQL database server
+INSTALL_REDIS=false             # Redis in-memory data store
+
+# Container platform
+INSTALL_DOCKER=true             # Docker CE with docker-compose
+
+# Development tools
+INSTALL_GIT=true                # Git version control
+```
 
 ### 🐳 **Container Platform**
-- **Docker with Security Optimizations**: Container runtime with hardened daemon configuration
+- **Docker with Security Optimizations** (INSTALL_DOCKER=true)
+  - Container runtime with hardened daemon configuration
   - Secure daemon configuration with logging restrictions
   - User namespace remapping for enhanced security
   - Storage driver optimization (overlay2)
   - Resource limits and security profiles
 
-### 🌐 **Web Application Server Choice**
-
-During server setup, you can choose between two high-performance web server architectures:
-
-#### **Traditional nginx + PHP-FPM** (Default)
-- **Industry Standard**: Battle-tested architecture used by millions of websites
-- **Separate Processes**: nginx handles HTTP, PHP-FPM processes PHP requests
-- **Extensive Documentation**: Large community, abundant resources and tutorials
-- **Resource Usage**: Moderate memory usage, predictable performance
-- **Best For**: Established workflows, large teams, complex nginx configurations
+### 🌐 **Web Server**
+- **Nginx** (INSTALL_NGINX=true)
+  - High-performance HTTP server and reverse proxy
+  - ModSecurity WAF integration with OWASP Core Rule Set
+  - Security hardening configuration included
+  - Rate limiting and DDoS protection
+  - SSL/TLS optimization
+  - Perfect for Docker reverse proxy setups or traditional PHP hosting
 
 ### 🐘 **Database Systems**
 - **MariaDB**: High-performance MySQL-compatible database
@@ -1297,27 +1320,20 @@ During server setup, you can choose between two high-performance web server arch
 
 ### 🔧 **Development Platforms**
 
-#### **PHP Development Stack**
+#### **PHP Development Stack** (INSTALL_PHP=false by default)
 - **PHP 8.4 with php-fpm**: Latest PHP with FastCGI Process Manager
-  - Common extensions: mysqli, pdo, curl, gd, mbstring, xml, zip
+  - Common extensions: mysqli, pdo, curl, gd, mbstring, xml, zip, pgsql, redis
   - OPcache enabled for performance
   - Security hardening (disabled dangerous functions)
+  - **Note**: Not needed for Docker-only setups where applications run in containers
 
-- **PHP Development Tools** (optional):
-  - **Composer**: Dependency management
-  - **Xdebug**: Debugging and profiling extension
+#### **Node.js Development Stack** (INSTALL_NODEJS=false by default)
+- **Node.js LTS**: JavaScript runtime
+  - Latest LTS version from official NodeSource repository
+  - NPM package manager included
+  - **Note**: Consider PM2 for production process management (separate installation)
 
-#### **Node.js Development Stack**
-- **Node.js with PM2**: JavaScript runtime with process manager
-  - Latest LTS version (v22.x) from NodeSource repository
-  - PM2 process manager for production deployments
-  - Cluster mode support for scalability
-
-- **Node.js Development Tools** (optional):
-  - **Yarn**: Fast, reliable package manager
-  - **TypeScript**: Static type checking
-
-### 🔧 **Development Tools**
+### 🔧 **Development Tools** (INSTALL_GIT=true by default)
 - **Git**: Version control with optimized configuration
   - Security-focused default configurations
   - Performance optimizations for large repositories
@@ -1328,29 +1344,43 @@ During server setup, you can choose between two high-performance web server arch
 - **logmon**: Real-time log monitoring for different log types (auth, security, system, nginx)
 - **servermail**: Local system mail and notification reader
 
-### Installation Process
+### Component Installation
 
-Optional components are presented during the interactive server setup process:
+All components are configured via `templates/defaults.env` before running the setup script. Each component is installed with:
 
-```bash
-# During server setup, you'll be prompted:
-Install/Configure Docker with security optimizations? (y/N):
-Install PHP 8.4 with php-fpm and common extensions? (y/N): 
-  Include PHP development tools (Composer, Xdebug)? (y/N): 
-Install MariaDB with secure configuration? (y/N): 
-Install PostgreSQL with secure configuration? (y/N): 
-Install Node.js with PM2 process manager? (y/N): 
-  Include development tools (Yarn, TypeScript)? (y/N): 
-Install Redis with secure configuration? (y/N): 
-Install Git with optimized configuration? (y/N): 
-Install advanced server monitoring commands? (y/N): 
-```
-
-Each component is installed with:
 - **Security-first configuration**: All services configured with security best practices
 - **Performance optimization**: Tuned for production server environments
 - **Integration with monitoring**: Automatic integration with system monitoring and logging
 - **DSGVO compliance**: Data handling procedures documented where applicable
+
+**Example configurations:**
+
+**Docker-only reverse proxy** (minimal setup):
+```bash
+INSTALL_NGINX=true
+INSTALL_DOCKER=true
+INSTALL_GIT=true
+# All others false
+```
+
+**Traditional PHP hosting**:
+```bash
+INSTALL_NGINX=true
+INSTALL_PHP=true
+INSTALL_MARIADB=true
+INSTALL_REDIS=true
+INSTALL_GIT=true
+```
+
+**Full stack Node.js development**:
+```bash
+INSTALL_NGINX=true
+INSTALL_NODEJS=true
+INSTALL_POSTGRESQL=true
+INSTALL_REDIS=true
+INSTALL_DOCKER=true
+INSTALL_GIT=true
+```
 
 ## Updating and Maintenance
 

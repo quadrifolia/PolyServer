@@ -68,7 +68,6 @@ DEPLOYMENT_MODE="{{DEPLOYMENT_MODE}}"     # Deployment mode (docker/baremetal)
 
 # Component Installation Flags (configurable via defaults.env)
 : "${INSTALL_NGINX:={{INSTALL_NGINX}}}"              # Install Nginx web server
-: "${INSTALL_NGINX_UNIT:={{INSTALL_NGINX_UNIT}}}"    # Install Nginx Unit application server
 : "${INSTALL_PHP:={{INSTALL_PHP}}}"                  # Install PHP 8.4 with php-fpm
 : "${INSTALL_NODEJS:={{INSTALL_NODEJS}}}"            # Install Node.js LTS
 : "${INSTALL_MARIADB:={{INSTALL_MARIADB}}}"          # Install MariaDB database
