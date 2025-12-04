@@ -66,11 +66,22 @@ LOGWATCH_EMAIL="{{LOGWATCH_EMAIL}}"       # Logwatch notification email
 NETDATA_ENABLED="{{NETDATA_ENABLED}}"     # Enable Netdata monitoring
 DEPLOYMENT_MODE="{{DEPLOYMENT_MODE}}"     # Deployment mode (docker/baremetal)
 
+# Component Installation Flags (configurable via defaults.env)
+: "${INSTALL_NGINX:={{INSTALL_NGINX}}}"              # Install Nginx web server
+: "${INSTALL_NGINX_UNIT:={{INSTALL_NGINX_UNIT}}}"    # Install Nginx Unit application server
+: "${INSTALL_PHP:={{INSTALL_PHP}}}"                  # Install PHP 8.4 with php-fpm
+: "${INSTALL_NODEJS:={{INSTALL_NODEJS}}}"            # Install Node.js LTS
+: "${INSTALL_MARIADB:={{INSTALL_MARIADB}}}"          # Install MariaDB database
+: "${INSTALL_POSTGRESQL:={{INSTALL_POSTGRESQL}}}"    # Install PostgreSQL database
+: "${INSTALL_REDIS:={{INSTALL_REDIS}}}"              # Install Redis
+: "${INSTALL_DOCKER:={{INSTALL_DOCKER}}}"            # Install Docker CE
+: "${INSTALL_GIT:={{INSTALL_GIT}}}"                  # Install Git
+
 # Optional Security Components (resource-conscious defaults)
-: "${INSTALL_CLAMAV:=false}"              # Install ClamAV antivirus (high resource usage) - optional
-: "${INSTALL_MALDET:=false}"              # Install Linux Malware Detect (medium resource usage) - optional
-: "${INSTALL_RKHUNTER:=true}"             # Install rootkit detection tools (low resource usage) - ENABLED BY DEFAULT
-: "${INSTALL_SURICATA:=true}"             # Install Suricata IDS (medium resource usage) - ENABLED BY DEFAULT
+: "${INSTALL_CLAMAV:={{INSTALL_CLAMAV}}}"            # Install ClamAV antivirus (high resource usage)
+: "${INSTALL_MALDET:={{INSTALL_MALDET}}}"            # Install Linux Malware Detect (medium resource usage)
+: "${INSTALL_RKHUNTER:={{INSTALL_RKHUNTER}}}"        # Install rootkit detection tools (low resource usage)
+: "${INSTALL_SURICATA:={{INSTALL_SURICATA}}}"        # Install Suricata IDS (medium resource usage)
 
 # SMTP Configuration from defaults.env
 SMTP_ENABLED="{{SMTP_ENABLED}}"
@@ -898,25 +909,46 @@ echo ""
 echo "===== 6.2 Installing core packages and web server ====="
 
 # Core security packages (always installed)
-CORE_PACKAGES="fail2ban unattended-upgrades apt-listchanges gnupg-agent logwatch apparmor apparmor-utils git awscli"
+CORE_PACKAGES="fail2ban unattended-upgrades apt-listchanges gnupg-agent logwatch apparmor apparmor-utils awscli"
 
-# Add optional security packages based on environment variables
-OPTIONAL_PACKAGES=""
-[ "$INSTALL_CLAMAV" = true ] && OPTIONAL_PACKAGES="$OPTIONAL_PACKAGES clamav clamav-daemon"
-[ "$INSTALL_RKHUNTER" = true ] && OPTIONAL_PACKAGES="$OPTIONAL_PACKAGES rkhunter chkrootkit"
-[ "$INSTALL_SURICATA" = true ] && OPTIONAL_PACKAGES="$OPTIONAL_PACKAGES suricata"
+# Build component-based package list
+COMPONENT_PACKAGES=""
 
-# Web server packages - nginx + PHP-FPM
-WEB_SERVER_PACKAGES="nginx-extras php8.4 php8.4-fpm php8.4-mysql php8.4-xml php8.4-mbstring php8.4-curl php8.4-zip php8.4-gd php8.4-intl php8.4-bcmath php8.4-opcache php8.4-readline"
+# Add Git if requested
+[ "$INSTALL_GIT" = "true" ] && COMPONENT_PACKAGES="$COMPONENT_PACKAGES git"
 
-echo "Installing nginx + PHP-FPM..."
+# Add web servers
+[ "$INSTALL_NGINX" = "true" ] && COMPONENT_PACKAGES="$COMPONENT_PACKAGES nginx-extras"
+
+# Add PHP if requested (not needed for Docker-only setups)
+if [ "$INSTALL_PHP" = "true" ]; then
+    COMPONENT_PACKAGES="$COMPONENT_PACKAGES php8.4 php8.4-fpm php8.4-mysql php8.4-pgsql php8.4-redis"
+    COMPONENT_PACKAGES="$COMPONENT_PACKAGES php8.4-xml php8.4-mbstring php8.4-curl php8.4-zip php8.4-gd"
+    COMPONENT_PACKAGES="$COMPONENT_PACKAGES php8.4-intl php8.4-bcmath php8.4-opcache php8.4-readline"
+fi
+
+# Add optional security packages based on configuration
+SECURITY_PACKAGES=""
+[ "$INSTALL_CLAMAV" = "true" ] && SECURITY_PACKAGES="$SECURITY_PACKAGES clamav clamav-daemon"
+[ "$INSTALL_RKHUNTER" = "true" ] && SECURITY_PACKAGES="$SECURITY_PACKAGES rkhunter chkrootkit"
+[ "$INSTALL_SURICATA" = "true" ] && SECURITY_PACKAGES="$SECURITY_PACKAGES suricata"
+
+echo "===== Installing packages based on configuration ====="
+echo "Components to install:"
+[ "$INSTALL_NGINX" = "true" ] && echo "  • Nginx web server"
+[ "$INSTALL_PHP" = "true" ] && echo "  • PHP 8.4 with php-fpm"
+[ "$INSTALL_GIT" = "true" ] && echo "  • Git version control"
+echo "Security components:"
+[ "$INSTALL_CLAMAV" = "true" ] && echo "  • ClamAV (HIGH resource usage)"
+[ "$INSTALL_RKHUNTER" = "true" ] && echo "  • RKHunter rootkit detection"
+[ "$INSTALL_SURICATA" = "true" ] && echo "  • Suricata IDS (MEDIUM resource usage)"
 
 if [ "$DOCKER_MODE" = "true" ]; then
-    # Docker-compatible package list
-    apt-get install -y "$CORE_PACKAGES" "$WEB_SERVER_PACKAGES" "$OPTIONAL_PACKAGES" lm-sensors
+    # Docker-compatible package list (no hddtemp, no unbound)
+    apt-get install -y $CORE_PACKAGES $COMPONENT_PACKAGES $SECURITY_PACKAGES lm-sensors
 else
     # Full package list for production servers
-    apt-get install -y "$CORE_PACKAGES" "$WEB_SERVER_PACKAGES" "$OPTIONAL_PACKAGES" lm-sensors hddtemp unbound
+    apt-get install -y $CORE_PACKAGES $COMPONENT_PACKAGES $SECURITY_PACKAGES lm-sensors hddtemp unbound
 fi
 
 # Display installed optional security components
@@ -928,27 +960,34 @@ INSTALLED_COMPONENTS=""
 [ "$INSTALL_SURICATA" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS suricata"
 echo "Installed optional security components:${INSTALLED_COMPONENTS:-none}"
 
-echo "Configuring nginx and PHP-FPM..."
-systemctl enable nginx
-systemctl enable php8.4-fpm
-systemctl start php8.4-fpm
+# Configure installed services
+if [ "$INSTALL_NGINX" = "true" ]; then
+    echo "Enabling Nginx service..."
+    systemctl enable nginx
+fi
 
-# Test installations
-if systemctl is-active --quiet php8.4-fpm; then
-    echo "✅ PHP-FPM is running"
+if [ "$INSTALL_PHP" = "true" ]; then
+    echo "Configuring PHP-FPM..."
+    systemctl enable php8.4-fpm
+    systemctl start php8.4-fpm
 
-    # Update PHP-FPM configuration with calculated values
-    update_php_fpm_config
-
-    # Restart PHP-FPM to apply updated configuration
-    systemctl restart php8.4-fpm
+    # Test PHP-FPM installation
     if systemctl is-active --quiet php8.4-fpm; then
-        echo "✅ PHP-FPM restarted with optimized configuration"
+        echo "✅ PHP-FPM is running"
+
+        # Update PHP-FPM configuration with calculated values
+        update_php_fpm_config
+
+        # Restart PHP-FPM to apply updated configuration
+        systemctl restart php8.4-fpm
+        if systemctl is-active --quiet php8.4-fpm; then
+            echo "✅ PHP-FPM restarted with optimized configuration"
+        else
+            echo "⚠️ PHP-FPM failed to restart after configuration update"
+        fi
     else
-        echo "⚠️ PHP-FPM failed to restart after configuration update"
+        echo "⚠️ PHP-FPM failed to start - check logs: journalctl -u php8.4-fpm"
     fi
-else
-    echo "⚠️ PHP-FPM failed to start - check logs: journalctl -u php8.4-fpm"
 fi
 
 # Security packages are now installed with the main package installation above
@@ -3009,11 +3048,12 @@ else
     echo "🐳 Skipping ModSecurity configuration in Docker mode (module not available)"
 fi
 
-# Install comprehensive nginx security configuration
-echo "===== 10.2.1 Installing Nginx Security Configuration ====="
+# Install comprehensive nginx security configuration (only if nginx is installed)
+if [ "$INSTALL_NGINX" = "true" ]; then
+    echo "===== 10.2.1 Installing Nginx Security Configuration ====="
 
-# Create security configuration for blocking common attacks
-cat > /etc/nginx/conf.d/security.conf << 'EOF'
+    # Create security configuration for blocking common attacks
+    cat > /etc/nginx/conf.d/security.conf << 'EOF'
 # Nginx Security Configuration for PolyServer Applications
 # This file contains security rules to block common attacks and sensitive file access
 
@@ -3150,10 +3190,13 @@ proxy_hide_header Server;
 EOF
 
 # Set proper permissions
-chmod 644 /etc/nginx/conf.d/security.conf
-chmod 644 /etc/nginx/conf.d/proxy_params
+    chmod 644 /etc/nginx/conf.d/security.conf
+    chmod 644 /etc/nginx/conf.d/proxy_params
 
-echo "Nginx security configuration installed"
+    echo "✅ Nginx security configuration installed"
+else
+    echo "⏭️  Skipping Nginx security configuration (INSTALL_NGINX=false)"
+fi
 
 # Configure AppArmor for applications
 echo "===== 10.3 Setting up AppArmor for applications ====="
@@ -3983,10 +4026,10 @@ if [ -e "$BLOCK_DEVICE" ]; then
 fi
 
 # ========= Docker Installation =========
-# Check if we need Docker (deployment mode is "docker" or just always install for flexibility)
-if [ "$DEPLOYMENT_MODE" = "docker" ] || [ "$DOCKER_MODE" = "false" ]; then
+# Install Docker if requested
+if [ "$INSTALL_DOCKER" = "true" ] && [ "$DOCKER_MODE" = "false" ]; then
     echo "===== 8. Installing Docker and Docker Compose ====="
-    echo "Installing Docker for deployment mode: $DEPLOYMENT_MODE"
+    echo "Installing Docker CE with docker-compose plugin..."
     
     apt-get install -y apt-transport-https ca-certificates curl software-properties-common gnupg lsb-release
 
