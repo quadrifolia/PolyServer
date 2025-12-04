@@ -496,14 +496,14 @@ if [ "$SMTP_ENABLED" = "true" ] && [ -n "$SMTP_FROM_EMAIL" ] && [ "$SMTP_FROM_EM
     fi
 fi
 
-# Validate hostname
-if [ -z "$HOSTNAME" ] || [ "$HOSTNAME" = "{{HOSTNAME}}" ]; then
+# Validate hostname (check if empty or looks like a placeholder)
+if [ -z "$HOSTNAME" ] || [[ "$HOSTNAME" =~ ^\{\{.*\}\}$ ]]; then
     log_error "Hostname must be configured"
     exit 1
 fi
 
-# Validate username
-if [ -z "$USERNAME" ] || [ "$USERNAME" = "{{DEPLOY_USER}}" ]; then
+# Validate username (check if empty or looks like a placeholder)
+if [ -z "$USERNAME" ] || [[ "$USERNAME" =~ ^\{\{.*\}\}$ ]]; then
     log_error "Deploy user must be configured"
     exit 1
 fi
