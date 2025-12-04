@@ -7,6 +7,9 @@
 .env.*
 !.env.example
 
+# User-specific configuration (should be copied from .example files)
+/templates/defaults.env
+
 # Logs
 *.log
 

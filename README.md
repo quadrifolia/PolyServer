@@ -362,13 +362,22 @@ PolyServer provides flexible SSH authentication configuration:
    cd PolyServer
    ```
 
-2. **Customize base configuration:**
+2. **Create your configuration file:**
+   Copy the example configuration to create your own `defaults.env`:
+
+   ```bash
+   cp templates/defaults.env.example templates/defaults.env
+   ```
+
+   **Note:** The `defaults.env` file is gitignored to prevent accidentally committing your production configuration.
+
+3. **Customize base configuration:**
    Edit `templates/defaults.env` to set your environment-specific values:
 
    ```bash
    nano templates/defaults.env
    ```
-   
+
    **Required changes:**
    - `LOGWATCH_EMAIL=your-email@example.com` (for daily security reports)
    - `SSL_EMAIL=your-email@example.com` (for Let's Encrypt certificates)
@@ -419,7 +428,7 @@ PolyServer provides flexible SSH authentication configuration:
    - `NETDATA_ENABLED=true` (enable/disable Netdata monitoring)
    - Other security and monitoring settings
 
-3. **Generate configuration files:**
+4. **Generate configuration files:**
 
    ```bash
    ./scripts/generate-configs.sh
