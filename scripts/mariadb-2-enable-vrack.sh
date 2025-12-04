@@ -399,7 +399,79 @@ else
     log_message "⚠️  MySQL connectivity test failed"
 fi
 
-log_message "===== 7. Updating Documentation ====="
+log_message "===== 7. Configuring Netdata MySQL Monitoring ====="
+
+# When MariaDB is bound to vRack IP only, Netdata must use Unix socket
+echo "Configuring Netdata to monitor MySQL via Unix socket..."
+
+# Create netdata monitoring user
+NETDATA_PASSWORD=$(openssl rand -base64 16)
+
+mysql -u root << 'NETDATA_SQL'
+-- Create netdata monitoring user
+CREATE USER IF NOT EXISTS 'netdata'@'localhost' IDENTIFIED BY 'NETDATA_PASSWORD_PLACEHOLDER';
+GRANT USAGE, REPLICATION CLIENT, PROCESS ON *.* TO 'netdata'@'localhost';
+FLUSH PRIVILEGES;
+NETDATA_SQL
+
+# Replace placeholder with actual password
+mysql -u root -e "ALTER USER 'netdata'@'localhost' IDENTIFIED BY '${NETDATA_PASSWORD}'; FLUSH PRIVILEGES;"
+
+# Get MySQL socket path
+SOCKET_PATH=$(mysql -u root -N -e "SHOW VARIABLES LIKE 'socket';" | awk '{print $2}')
+
+# Create Netdata MySQL configuration
+mkdir -p /etc/netdata/go.d
+
+cat > /etc/netdata/go.d/mysql.conf << EOF
+# Netdata go.d MySQL/MariaDB monitoring configuration
+# Using Unix socket because MariaDB is bound to vRack IP only
+
+jobs:
+  - name: local
+    dsn: 'netdata:${NETDATA_PASSWORD}@unix(${SOCKET_PATH})/'
+EOF
+
+chmod 640 /etc/netdata/go.d/mysql.conf
+chown root:netdata /etc/netdata/go.d/mysql.conf 2>/dev/null || chown root:root /etc/netdata/go.d/mysql.conf
+
+# Create debian-sys-maint user for debian-start script
+DEBIAN_PASSWORD=$(openssl rand -base64 16)
+
+mysql -u root << EOF
+CREATE USER IF NOT EXISTS 'debian-sys-maint'@'localhost' IDENTIFIED BY '${DEBIAN_PASSWORD}';
+GRANT ALL PRIVILEGES ON *.* TO 'debian-sys-maint'@'localhost' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+EOF
+
+cat > /etc/mysql/debian.cnf << EOF
+# Automatically generated for Debian scripts. DO NOT TOUCH!
+[client]
+host     = localhost
+user     = debian-sys-maint
+password = ${DEBIAN_PASSWORD}
+socket   = ${SOCKET_PATH}
+
+[mysql_upgrade]
+host     = localhost
+user     = debian-sys-maint
+password = ${DEBIAN_PASSWORD}
+socket   = ${SOCKET_PATH}
+EOF
+
+chmod 600 /etc/mysql/debian.cnf
+
+# Restart Netdata if it's running
+if systemctl is-active --quiet netdata 2>/dev/null; then
+    systemctl restart netdata
+    echo "✅ Netdata MySQL monitoring configured and restarted"
+    log_message "✅ Netdata MySQL monitoring configured via Unix socket"
+else
+    echo "ℹ️  Netdata not running, configuration saved for when it starts"
+    log_message "ℹ️  Netdata MySQL config created (Netdata not running)"
+fi
+
+log_message "===== 8. Updating Documentation ====="
 
 # Update the README with vRack information
 cat >> /root/MARIADB-SERVER-README.md << EOF
