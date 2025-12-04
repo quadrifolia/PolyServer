@@ -290,6 +290,7 @@ For secure access to your server, it's strongly recommended to use SSH keys inst
 If you don't already have SSH keys, create them on your local machine:
 
 **For Ed25519 keys (recommended):**
+
 ```bash
 # Generate a new Ed25519 SSH key
 ssh-keygen -t ed25519 -C "your-email@example.com"
@@ -299,6 +300,7 @@ ssh-keygen -t ed25519 -C "your-email@example.com"
 ```
 
 **For RSA keys (alternative):**
+
 ```bash
 # Generate a new RSA SSH key (4096 bits)
 ssh-keygen -t rsa -b 4096 -C "your-email@example.com"
@@ -343,6 +345,7 @@ PolyServer provides flexible SSH authentication configuration:
 - Start with password authentication
 - Add SSH keys to your server manually
 - Run the conversion script to disable password auth:
+
   ```bash
   # On the server, after adding SSH keys
   sudo /opt/polyserver/scripts/ssh-disable-password-auth.sh
@@ -353,6 +356,7 @@ PolyServer provides flexible SSH authentication configuration:
 **Run on your local machine:**
 
 1. **Clone the repository:**
+
    ```bash
    git clone https://github.com/quadrifolia/PolyServer.git
    cd PolyServer
@@ -360,6 +364,7 @@ PolyServer provides flexible SSH authentication configuration:
 
 2. **Customize base configuration:**
    Edit `templates/defaults.env` to set your environment-specific values:
+
    ```bash
    nano templates/defaults.env
    ```
@@ -373,6 +378,7 @@ PolyServer provides flexible SSH authentication configuration:
 
    **Netdata Cloud Integration (Optional):**
    For centralized monitoring across multiple servers:
+   
    ```bash
    # Enable Netdata with Cloud integration
    NETDATA_ENABLED=true
@@ -382,6 +388,7 @@ PolyServer provides flexible SSH authentication configuration:
 
    **Email Configuration (Recommended):**
    For reliable security notification delivery, configure external SMTP:
+   
    ```bash
    # Enable external SMTP for reliable email delivery
    SMTP_ENABLED=true
@@ -396,6 +403,7 @@ PolyServer provides flexible SSH authentication configuration:
    **Note**: If `SMTP_ENABLED=false`, all system emails will be stored locally in `/var/mail/root`
 
    **SSH Configuration:**
+   
    ```bash
    # For key-based authentication (recommended):
    SSH_PUBLIC_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG... your-email@example.com"
@@ -412,6 +420,7 @@ PolyServer provides flexible SSH authentication configuration:
    - Other security and monitoring settings
 
 3. **Generate configuration files:**
+
    ```bash
    ./scripts/generate-configs.sh
    ```
@@ -432,12 +441,14 @@ PolyServer provides flexible SSH authentication configuration:
 **Run from your local machine:**
 
 1. **Upload the generated hardening script to your server:**
+
    ```bash
    # Copy the customized script to your server
    scp config/server-setup.sh root@your-server-ip:/root/
    ```
 
 2. **SSH to your server and run the hardening script:**
+
    ```bash
    # Connect to your server
    ssh root@your-server-ip
@@ -493,6 +504,7 @@ A bastion host is a specialized server that:
 **Setup Process:**
 
 1. **Configure SSH Public Key in Script:**
+
    ```bash
    # Edit the bastion setup script
    nano scripts/server-setup-bastion.sh
@@ -505,6 +517,7 @@ A bastion host is a specialized server that:
    ```
 
 2. **Get Your SSH Public Key:**
+
    ```bash
    # Display your Ed25519 public key
    cat ~/.ssh/id_ed25519.pub
@@ -516,6 +529,7 @@ A bastion host is a specialized server that:
    ```
 
 3. **Deploy the Bastion Host:**
+
    ```bash
    # Copy the script to your server (as root)
    scp scripts/server-setup-bastion.sh root@your-bastion-ip:/root/
@@ -532,6 +546,7 @@ A bastion host is a specialized server that:
    - SMTP server details (recommended for production environments)
    
    **Alternative if you have sudo access:**
+
    ```bash
    # Copy the script to your server (as regular user)
    scp scripts/server-setup-bastion.sh debian@your-bastion-ip:/home/debian/
@@ -599,6 +614,7 @@ sudo -E ./scripts/server-setup-bastion.sh
 **Viewing Current Configuration:**
 
 After installation, check which components are active:
+
 ```bash
 sudo bastionstat
 ```
@@ -633,6 +649,7 @@ This shows which security services are running and which are inactive (not insta
 The bastion host uses **restrictive sudoers** configuration that only allows passwordless sudo for specific whitelisted commands. This prevents unauthorized privilege escalation.
 
 **Allowed Commands (No Password Required):**
+
 ```bash
 # System monitoring commands
 sudo bastionstat          # Show comprehensive bastion status
@@ -652,6 +669,7 @@ sudo tail /var/log/fail2ban.log
 ```
 
 **Restricted Commands (Require Root):**
+
 ```bash
 # These will NOT work with sudo - use 'su -' to become root
 sudo ./my-script.sh               # ❌ Scripts in home directory
@@ -787,6 +805,7 @@ Filesystem Status in SSH Sessions (Default):
 #### Running System Updates
 
 **Default behavior (No restrictions):**
+
 ```bash
 # SSH in as bastion user
 ssh -p 2222 bastion@your-bastion
@@ -1843,6 +1862,7 @@ Netdata provides real-time performance monitoring installed natively on your Deb
 Netdata is configured to bind only to localhost (127.0.0.1:19999) for security. Access it via:
 
 **SSH Tunnel (Local Access)**:
+
 ```bash
 ssh -L 19999:localhost:19999 -p 2222 deploy@your-server-ip
 # Then visit http://localhost:19999 in your browser
@@ -1864,6 +1884,7 @@ To set up Netdata Cloud integration after deployment:
    - Go to "Connect Nodes" and copy your claim token
 
 2. **Register Server**:
+
    ```bash
    # Connect to your server
    ssh -p 2222 deploy@your-server-ip
@@ -2010,6 +2031,7 @@ Edit `/etc/chkrootkit/whitelist.conf` to add:
 - **Packet sniffers**: Add process names to `WHITELIST_SNIFFERS` variable
 
 **Update RKHunter:**
+
 ```bash
 # Update RKHunter database
 sudo rkhunter --update
@@ -2170,6 +2192,7 @@ PolyServer provides comprehensive SSH security with flexible authentication opti
 #### Managing SSH Keys
 
 **Adding SSH Keys to Existing Server:**
+
 ```bash
 # Connect to your server
 ssh -p 2222 deploy@your-server-ip
@@ -2183,6 +2206,7 @@ chmod 700 ~/.ssh
 ```
 
 **Converting from Password to Key-Only Authentication:**
+
 ```bash
 # After adding SSH keys, disable password authentication
 sudo /opt/polyserver/scripts/ssh-disable-password-auth.sh
@@ -2196,6 +2220,7 @@ sudo /opt/polyserver/scripts/ssh-disable-password-auth.sh
 ```
 
 **Testing SSH Configuration:**
+
 ```bash
 # Test SSH config before applying changes
 sudo sshd -t
@@ -2219,6 +2244,7 @@ sudo tail -f /var/log/auth.log
 #### SSH Troubleshooting
 
 **If Locked Out of Server:**
+
 ```bash
 # If you have console access (VPS provider console)
 # 1. Access via provider's web console
@@ -2231,6 +2257,7 @@ sudo systemctl restart sshd
 ```
 
 **Backup and Recovery:**
+
 ```bash
 # SSH config is automatically backed up during changes
 ls -la /etc/ssh/sshd_config.*
@@ -2448,12 +2475,14 @@ For deployments using embedded databases, encryption can be enabled for at-rest 
 **To enable database encryption:**
 
 1. **Generate a strong encryption key**:
+
 ```bash
 # Generate a 32-byte base64-encoded key
 openssl rand -base64 32
 ```
 
 2. **Add the key to your environment configuration**:
+
 ```bash
 # Edit your environment file
 nano /opt/polyserver/config/.env
@@ -2463,6 +2492,7 @@ MB_ENCRYPTION_SECRET_KEY=your_generated_key_here
 ```
 
 3. **Restart Application**:
+
 ```bash
 # Docker mode
 docker compose restart app
@@ -2552,6 +2582,7 @@ sudo debsums -c
 In case of a suspected security incident:
 
 1. **Immediate Assessment**:
+
    ```bash
    # Check for unauthorized processes
    sudo htop
@@ -2564,6 +2595,7 @@ In case of a suspected security incident:
    ```
 
 2. **Network Investigation**:
+
    ```bash
    # Identify unusual network traffic
    sudo iftop -i eth0
@@ -2573,6 +2605,7 @@ In case of a suspected security incident:
    ```
 
 3. **Verify System Integrity**:
+
    ```bash
    # Check for modified system files
    sudo aide.wrapper --check
@@ -2586,6 +2619,7 @@ In case of a suspected security incident:
    ```
 
 4. **Create Evidence If Needed**:
+
    ```bash
    # Create disk image for forensics
    sudo dd if=/dev/sda of=/path/to/external/disk.img bs=4M
@@ -2938,6 +2972,7 @@ echo "DEPLOYMENT_MODE=docker" > test-config/.env
 ### Docker-Based Testing
 
 1. **Start Local Test Environment**:
+
    ```bash
    ./local-test-docker.sh
    ```
@@ -2957,6 +2992,7 @@ echo "DEPLOYMENT_MODE=docker" > test-config/.env
    - Zsh shell (testuser): `docker exec -it -u testuser polyserver-test /bin/zsh`
 
 3. **Cleanup Test Environment**:
+
    ```bash
    ./local-test-cleanup-docker.sh
    ```
@@ -3069,6 +3105,7 @@ All workflows must pass before PRs can be merged to main branch:
 ### Running Tests Locally
 
 #### Prerequisites
+
 ```bash
 # Docker for container testing
 docker --version
@@ -3081,6 +3118,7 @@ curl --version
 ```
 
 #### Local Test Execution
+
 ```bash
 # Run full local testing suite
 ./local-test-docker.sh
@@ -3098,6 +3136,7 @@ cat templates/defaults.env >> test.env
 ```
 
 #### Manual Security Checks
+
 ```bash
 # Check for secrets (requires TruffleHog)
 trufflehog git file://. --only-verified=false
