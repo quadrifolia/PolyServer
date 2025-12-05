@@ -1974,8 +1974,8 @@ fi
 # Configure hardware sensors
 echo "===== 7. Configuring hardware monitoring ====="
 if [ "$DOCKER_MODE" = "false" ]; then
-    # Detect and configure sensors automatically
-    yes | sensors-detect
+    # Detect and configure sensors automatically (non-interactive mode)
+    sensors-detect --auto
 else
     echo "🐳 Skipping hardware sensor detection in Docker mode"
 fi
