@@ -33,6 +33,14 @@ server {
         add_header Content-Type text/plain;
     }
 
+    # Nginx status endpoint (for Netdata monitoring)
+    location /nginx-status {
+        stub_status;
+        access_log off;
+        allow 127.0.0.1;
+        deny all;
+    }
+
     # Block access to hidden files
     location ~ /\. {
         access_log off;
@@ -93,6 +101,14 @@ server {
 #
 #     location / {
 #         try_files $uri $uri/ =404;
+#     }
+#
+#     # Nginx status endpoint (for Netdata monitoring)
+#     location /nginx-status {
+#         stub_status;
+#         access_log off;
+#         allow 127.0.0.1;
+#         deny all;
 #     }
 #
 #     # Include security configuration
