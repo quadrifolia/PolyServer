@@ -1709,7 +1709,7 @@ enable_and_start_service postfix
 
 # Check if we're in a container environment
 CONTAINER_ENV=""
-if [ -f /.dockerenv ] || [ -n "${CONTAINER}" ] || [ "${TESTING_MODE}" = "true" ]; then
+if [ -f /.dockerenv ] || [ -n "${CONTAINER:-}" ] || [ "${TESTING_MODE}" = "true" ]; then
     CONTAINER_ENV="true"
     echo "📦 Container environment detected - mail testing will be simplified"
 fi
