@@ -5084,10 +5084,14 @@ systemctl list-timers maldet-scan.timer clamscan.timer rkhunter-scan.timer --no-
 # ========= Now restart SSH with new configuration =========
 echo "===== 12. Restarting SSH to apply security settings ====="
 
+# Ensure SSH privilege separation directory exists
+mkdir -p /run/sshd
+chmod 755 /run/sshd
+
 # Test SSH configuration before restarting
 if ! sshd -t 2>&1; then
     log_error "SSH configuration test failed. Check /var/log/secure-server-setup.log for details"
-    sshd -t 2>&1 | tee -a "$LOGFILE"
+    sshd -t 2>&1 | tee -a "$LOG_FILE"
     exit 1
 fi
 
