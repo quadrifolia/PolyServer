@@ -707,12 +707,11 @@ if ! id "$USERNAME" &>/dev/null; then
   else
     # Determine if we should create user with or without password
     if [ -n "$SSH_PUBLIC_KEY" ]; then
-      echo "SSH public key provided - creating user without password prompt"
+      echo "SSH public key provided - creating user with key-only authentication"
       useradd -m -s /bin/bash "$USERNAME"
-      # Generate a random password and immediately expire it to force key-only auth
-      TEMP_PASS=$(openssl rand -base64 32)
-      echo "$USERNAME:$TEMP_PASS" | chpasswd
-      passwd -e "$USERNAME"
+      # Lock the password to enforce key-only authentication (no password login allowed)
+      passwd -l "$USERNAME"
+      echo "✅ User $USERNAME created with locked password (SSH key authentication only)"
     else
       echo "No SSH public key provided - user will be prompted to set password"
       adduser --gecos "" "$USERNAME"
