@@ -6079,11 +6079,10 @@ fi
 # Systemd Watchdog for Critical Services
 echo "Configuring systemd watchdog for critical services..."
 
-# Enhanced fail2ban service with watchdog and resource management
+# Enhanced fail2ban service priority (NO watchdog - fail2ban doesn't support it)
 mkdir -p /etc/systemd/system/fail2ban.service.d
-cat > /etc/systemd/system/fail2ban.service.d/watchdog.conf << 'EOF'
+cat > /etc/systemd/system/fail2ban.service.d/priority.conf << 'EOF'
 [Service]
-WatchdogSec=60
 Restart=on-failure
 RestartSec=30
 StartLimitInterval=600
