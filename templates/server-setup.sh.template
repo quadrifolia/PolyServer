@@ -373,9 +373,9 @@ start_service_with_retry() {
     local service="$1"
     local max_attempts=3
     local wait_time=5
-    
+
     log_message "Starting service: $service"
-    
+
     # Skip in Docker mode for services that don't work in containers
     if [ "$DOCKER_MODE" = "true" ]; then
         case "$service" in
@@ -385,7 +385,10 @@ start_service_with_retry() {
                 ;;
         esac
     fi
-    
+
+    # Reset failed state before attempting to start (in case of previous failures)
+    docker_systemctl reset-failed "$service" 2>/dev/null || true
+
     for attempt in $(seq 1 $max_attempts); do
         if docker_systemctl start "$service"; then
             sleep "$wait_time"
@@ -395,9 +398,11 @@ start_service_with_retry() {
             fi
         fi
         log_message "⚠️ Service $service start attempt $attempt failed, retrying..."
+        # Reset failed state before retrying
+        docker_systemctl reset-failed "$service" 2>/dev/null || true
         sleep $((wait_time * attempt))
     done
-    
+
     log_error "❌ Failed to start service $service after $max_attempts attempts"
     return 1
 }
