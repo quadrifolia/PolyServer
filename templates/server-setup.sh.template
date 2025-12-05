@@ -2258,10 +2258,9 @@ wget https://www.rfxn.com/downloads/maldetect-current.tar.gz
 
 # Extract and install
 tar -xzf maldetect-current.tar.gz
-# Get the directory name (disable errexit temporarily to handle SIGPIPE from head closing pipe early)
-set +e
-MALDET_DIR=$(tar -tzf maldetect-current.tar.gz 2>/dev/null | head -1 | cut -f1 -d"/")
-set -e
+# Get the directory name (ignore SIGPIPE from head closing pipe early)
+# Using || true to prevent ERR trap from catching exit code 141
+MALDET_DIR=$(tar -tzf maldetect-current.tar.gz 2>/dev/null | head -1 | cut -f1 -d"/" || true)
 cd "$MALDET_DIR"
 ./install.sh
 
