@@ -5103,6 +5103,8 @@ echo "Setting up DSGVO/GDPR compliance framework..."
 
 # Copy DSGVO setup script to the scripts directory first
 mkdir -p /opt/polyserver/scripts
+DSGVO_SETUP_SCRIPT=""
+
 if [ -f "/opt/polyserver/scripts/setup-dsgvo.sh" ]; then
     DSGVO_SETUP_SCRIPT="/opt/polyserver/scripts/setup-dsgvo.sh"
 else
@@ -5115,7 +5117,7 @@ else
     fi
 fi
 
-if [ -f "$DSGVO_SETUP_SCRIPT" ]; then
+if [ -n "$DSGVO_SETUP_SCRIPT" ] && [ -f "$DSGVO_SETUP_SCRIPT" ]; then
     echo "Running DSGVO compliance setup..."
     # Run non-interactively by providing default answers
     echo "y" | bash "$DSGVO_SETUP_SCRIPT" || echo "DSGVO setup completed with warnings"
