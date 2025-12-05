@@ -3138,18 +3138,126 @@ fi
 if [ "$INSTALL_NGINX" = "true" ]; then
     echo "===== 10.2.1 Installing Nginx Security Configuration ====="
 
-    # Create minimal security configuration file
-    # NOTE: ModSecurity WAF provides comprehensive protection
-    # This file intentionally minimal to avoid nginx configuration conflicts
-    # Location-specific security rules should be added to individual server blocks
+    # Create HTTP-level security configuration (if-based rules)
     cat > /etc/nginx/conf.d/security.conf << 'EOF'
-# Nginx Security Configuration for PolyServer Applications
-# Minimal HTTP-level configuration (location blocks must be in server {} blocks)
-# Primary security provided by ModSecurity WAF
+# Nginx Security Configuration - HTTP Level Rules
+# These rules work at the http{} level (no location blocks allowed here)
+# For location-based rules, include /etc/nginx/snippets/security-locations.conf in your server blocks
 
-# NOTE: server_tokens already set in main nginx.conf
-# Additional HTTP-level security directives can be added here
+# Block common vulnerability scanners and bad user agents
+map $http_user_agent $block_user_agent {
+    default 0;
+    ~*(nikto|sqlmap|fimap|nessus|openvas|nmap|masscan|zmap|zap|burp|netsparker|acunetix|appscan|webscarab|w3af|skipfish|wapiti|whatweb|gobuster|dirb|dirbuster|ffuf|feroxbuster|nuclei|httpx|subfinder) 1;
+}
+
+# Block suspicious referrers
+map $http_referer $block_referrer {
+    default 0;
+    ~*(babes|click|diamond|forsale|girl|jewelry|love|nudit|organic|poker|porn|sex|teen|video|webcam|zippo) 1;
+}
+
+# Block SQL injection attempts in query strings
+map $args $block_sql_injection {
+    default 0;
+    ~*(union|select|insert|delete|update|drop|create|alter|exec|execute|script|javascript|vbscript) 1;
+}
+
+# Block suspicious query strings
+map $args $block_suspicious_args {
+    default 0;
+    ~*(\.\./|<script|GLOBALS|globals|javascript:|vbscript:|onload|onerror|onclick) 1;
+}
 EOF
+
+    # Create location-based security rules as a snippet
+    mkdir -p /etc/nginx/snippets
+    cat > /etc/nginx/snippets/security-locations.conf << 'EOF'
+# Security Location Blocks - Include this file in your server {} blocks
+# Usage: include /etc/nginx/snippets/security-locations.conf;
+
+# Block based on maps from security.conf
+if ($block_user_agent) {
+    return 444;
+}
+
+if ($block_referrer) {
+    return 444;
+}
+
+if ($block_sql_injection) {
+    return 444;
+}
+
+if ($block_suspicious_args) {
+    return 444;
+}
+
+# Block empty user agents
+if ($http_user_agent ~ ^$) {
+    return 444;
+}
+
+# Block access to hidden files (.git, .env, .htaccess, etc.)
+location ~ /\. {
+    deny all;
+    access_log off;
+    log_not_found off;
+}
+
+# Allow Let's Encrypt ACME challenge (exception to hidden files rule)
+location ~ ^/(\.well-known/acme-challenge/)(.*)$ {
+    allow all;
+}
+
+# Block access to common sensitive files
+location ~* \.(env|git|gitignore|gitmodules|htaccess|htpasswd|ini|log|sh|sql|conf|config|bak|backup|swp|tmp)$ {
+    deny all;
+    access_log off;
+    log_not_found off;
+}
+
+# Block access to README and documentation files
+location ~* ^/(readme|README|changelog|CHANGELOG|license|LICENSE|install|INSTALL|upgrade|UPGRADE|todo|TODO).*$ {
+    deny all;
+    access_log off;
+    log_not_found off;
+}
+
+# Block access to common admin paths (application-agnostic protection)
+location ~* ^/(admin|administrator|wp-admin|wp-login|wp-config|wp-content|wp-includes|wp-json|xmlrpc|phpmyadmin|pma|mysql|adminer|cpanel|plesk|webmail|roundcube|squirrelmail)(.*)$ {
+    return 444;
+    access_log off;
+}
+
+# Block access to common CMS and framework paths
+location ~* ^/(drupal|joomla|wordpress|magento|prestashop|opencart|typo3|concrete5|modx|craft|laravel|symfony|codeigniter|cakephp|zend|yii)(.*)$ {
+    return 444;
+    access_log off;
+}
+
+# Block access to common development/testing paths
+location ~* ^/(test|tests|testing|dev|development|staging|demo|backup|backups|old|new|temp|tmp|cache|logs|vendor|node_modules|bower_components)(.*)$ {
+    return 444;
+    access_log off;
+}
+
+# Block access to common exploit paths
+location ~* ^/(shell|webshell|c99|c100|r57|r99|backdoor|hack|hacked|exploit|virus|trojan|worm|bot|zombie|scanner|scan|probe|brute|force|attack)(.*)$ {
+    return 444;
+    access_log off;
+}
+
+# Block requests for non-existent scripts that are commonly probed
+location ~* \.(asp|aspx|jsp|cgi|pl|py|rb|php3|php4|php5|phtml|shtml)$ {
+    return 444;
+    access_log off;
+}
+EOF
+
+    echo "✅ Created /etc/nginx/snippets/security-locations.conf"
+    echo "   Include this file in server blocks for location-based security rules"
+
+fi
 
 # Create proxy parameters file for reusable proxy settings
 cat > /etc/nginx/conf.d/proxy_params << 'EOF'
