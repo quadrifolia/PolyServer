@@ -5103,7 +5103,7 @@ fi
 # Verify SSH is running only on target port and clean up port 22
 if ss -tnlp | grep -q ":$SSH_PORT.*sshd"; then
   sed -i '/^Port 22$/d' /etc/ssh/sshd_config
-  docker_systemctl reload ssh
+  docker_systemctl reload ssh || log_message "⚠️ SSH reload failed, but service is running on port $SSH_PORT"
   ufw delete allow 22/tcp || true
   echo "✅ SSH now running only on port $SSH_PORT"
 fi
