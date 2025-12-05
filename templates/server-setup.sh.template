@@ -1238,8 +1238,8 @@ if sensors 2>/dev/null | grep -E "CRITICAL|ALARM" | grep -v "intrusion" | grep -
 fi
 
 # Rotate log if it gets too large (keep last 1000 lines)
-if [ -f "$LOGFILE" ] && [ $(wc -l < "$LOGFILE") -gt 1000 ]; then
-    tail -n 500 "$LOGFILE" > "${LOGFILE}.tmp" && mv "${LOGFILE}.tmp" "$LOGFILE"
+if [ -f "$LOGFILE" ] && [ $(wc -l < "$LOGFILE" 2>/dev/null || echo 0) -gt 1000 ]; then
+    tail -n 500 "$LOGFILE" > "${LOGFILE}.tmp" 2>/dev/null && mv "${LOGFILE}.tmp" "$LOGFILE" 2>/dev/null || true
 fi
 EOF
         
