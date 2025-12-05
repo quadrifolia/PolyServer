@@ -1863,6 +1863,8 @@ Unattended-Upgrade::Allow-downgrade "true";
 EOF
 
 # Configure automatic service restart without interactivity
+# Create directory if it doesn't exist (needrestart package might not be installed yet)
+mkdir -p /etc/needrestart/conf.d
 cat > /etc/needrestart/conf.d/unattended.conf << 'EOF'
 # Automatically restart services without prompting during unattended upgrades
 \$nrconf{restart} = 'a';
