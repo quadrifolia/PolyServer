@@ -2253,7 +2253,8 @@ if [ "$INSTALL_MALDET" = true ]; then
     mkdir -p /tmp/maldet
     cd /tmp/maldet
 
-# Download the latest version
+# Clean up any previous downloads and download the latest version
+rm -f maldetect-current.tar.gz*
 wget https://www.rfxn.com/downloads/maldetect-current.tar.gz
 
 # Extract and install
