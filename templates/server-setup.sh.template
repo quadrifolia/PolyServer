@@ -2727,9 +2727,9 @@ cat > /etc/audit/rules.d/audit.rules << 'EOF'
 -w /etc/sudoers.d -p wa -k sudoers_modifications
 
 ## Login monitoring
--w /var/log/faillog -p wa -k login_failures
+# Note: faillog and faillock paths may not exist on all systems
+# These rules will be added conditionally after the main rules
 -w /var/log/lastlog -p wa -k login_activity
--w /var/run/faillock -p wa -k login_failures
 
 ## Process and system activity
 -w /sbin/insmod -p x -k module_insertion
@@ -2827,6 +2827,15 @@ cat > /etc/audit/rules.d/audit.rules << 'EOF'
 ## WARNING: You will need to reboot to make changes after enabling this option
 #-e 2
 EOF
+
+# Add conditional audit rules for paths that may not exist on all systems
+echo "Adding conditional audit rules for login monitoring..."
+if [ -f /var/log/faillog ]; then
+    echo "-w /var/log/faillog -p wa -k login_failures" >> /etc/audit/rules.d/audit.rules
+fi
+if [ -d /var/run/faillock ]; then
+    echo "-w /var/run/faillock -p wa -k login_failures" >> /etc/audit/rules.d/audit.rules
+fi
 
 # Create daily audit report script
 cat > /etc/cron.daily/audit-report << 'EOF'

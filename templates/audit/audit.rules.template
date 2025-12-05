@@ -33,9 +33,9 @@
 -w /etc/sudoers.d -p wa -k sudoers_modifications
 
 ## Login monitoring
--w /var/log/faillog -p wa -k login_failures
+# Note: faillog and faillock paths may not exist on all systems
+# These rules will be added by the setup script only if the paths exist
 -w /var/log/lastlog -p wa -k login_activity
--w /var/run/faillock -p wa -k login_failures
 
 ## Process and system activity
 -w /sbin/insmod -p x -k module_insertion
