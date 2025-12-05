@@ -2253,7 +2253,8 @@ wget https://www.rfxn.com/downloads/maldetect-current.tar.gz
 
 # Extract and install
 tar -xzf maldetect-current.tar.gz
-MALDET_DIR=$(tar -tzf maldetect-current.tar.gz | head -1 | cut -f1 -d"/")
+# Get the directory name (ignore SIGPIPE from head closing pipe early)
+MALDET_DIR=$(tar -tzf maldetect-current.tar.gz 2>/dev/null | head -1 | cut -f1 -d"/")
 cd "$MALDET_DIR"
 ./install.sh
 
