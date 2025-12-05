@@ -4192,11 +4192,10 @@ if [ "$DOCKER_MODE" = "false" ] && [ "$NETDATA_ENABLED" = "true" ]; then
         
         # Check if claim token is provided via template variables
         NETDATA_CLAIM_TOKEN="{{NETDATA_CLAIM_TOKEN}}"
-        NETDATA_CLAIM_ROOMS="{{NETDATA_CLAIM_ROOMS}}"
-        
+
         if [ -n "$NETDATA_CLAIM_TOKEN" ] && [ "$NETDATA_CLAIM_TOKEN" != "{{NETDATA_CLAIM_TOKEN}}" ]; then
             echo "Installing with Netdata Cloud integration (from configuration)..."
-            sh /tmp/netdata-kickstart.sh --stable-channel --disable-telemetry --claim-token "$NETDATA_CLAIM_TOKEN" --claim-rooms "$NETDATA_CLAIM_ROOMS"
+            sh /tmp/netdata-kickstart.sh --stable-channel --disable-telemetry --claim-token "$NETDATA_CLAIM_TOKEN" --claim-url https://app.netdata.cloud
         else
             echo "Installing without Netdata Cloud (local monitoring only)..."
             sh /tmp/netdata-kickstart.sh --stable-channel --disable-telemetry --dont-wait
@@ -4256,8 +4255,7 @@ EOF
 
     # Optional Netdata Cloud Integration (show instructions if not configured)
     NETDATA_CLAIM_TOKEN="{{NETDATA_CLAIM_TOKEN}}"
-    NETDATA_CLAIM_ROOMS="{{NETDATA_CLAIM_ROOMS}}"
-    
+
     if [ -z "$NETDATA_CLAIM_TOKEN" ] || [ "$NETDATA_CLAIM_TOKEN" = "{{NETDATA_CLAIM_TOKEN}}" ]; then
         echo ""
         echo "📊 NETDATA CLOUD INTEGRATION (Optional)"
@@ -4271,14 +4269,12 @@ EOF
         echo ""
         echo "   sudo /opt/netdata/bin/netdata-claim.sh \\"
         echo "     -token=YOUR_CLAIM_TOKEN \\"
-        echo "     -rooms=YOUR_ROOM_ID \\"
         echo "     -url=https://app.netdata.cloud"
         echo ""
         echo "5. Your server will appear in Netdata Cloud within 1-2 minutes"
         echo ""
-        echo "📝 To set up automatic claiming, add these to your .env file:"
+        echo "📝 To set up automatic claiming, add this to your .env file:"
         echo "   NETDATA_CLAIM_TOKEN=your_claim_token"
-        echo "   NETDATA_CLAIM_ROOMS=your_room_id"
         echo ""
     else
         echo "✅ Netdata Cloud integration configured from template variables"
