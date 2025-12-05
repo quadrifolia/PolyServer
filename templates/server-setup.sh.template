@@ -2150,8 +2150,7 @@ RestartSec=60
 StartLimitInterval=1200
 StartLimitBurst=2
 
-# Watchdog configuration for production workloads
-WatchdogSec=300
+# Note: Watchdog disabled - ClamAV doesn't send systemd watchdog pings
 
 # OOM handling - kill ClamAV rather than other services
 OOMPolicy=kill
@@ -3027,9 +3026,7 @@ RestartSec=60
 TimeoutStartSec=60
 TimeoutStopSec=30
 
-# Watchdog configuration
-WatchdogSec=120
-NotifyAccess=main
+# Note: Watchdog disabled - auditd doesn't send systemd watchdog pings
 EOF
 
 systemctl daemon-reload
@@ -6126,12 +6123,12 @@ Nice=-8
 # Security is provided by network isolation, firewalls, and access controls instead
 EOF
 
-# Nginx service watchdog with resource management (if not Docker mode)
+# Nginx service priority and resource management (if not Docker mode)
+# Note: Watchdog NOT enabled - nginx doesn't send systemd watchdog pings
 if [ "$DEPLOYMENT_MODE" != "docker" ]; then
     mkdir -p /etc/systemd/system/nginx.service.d
-    cat > /etc/systemd/system/nginx.service.d/watchdog.conf << 'EOF'
+    cat > /etc/systemd/system/nginx.service.d/priority.conf << 'EOF'
 [Service]
-WatchdogSec=30
 Restart=on-failure
 RestartSec=5
 StartLimitInterval=300
