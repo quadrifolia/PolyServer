@@ -6982,6 +6982,15 @@ if [ -f /tmp/audit.rules.full ]; then
         echo "-w /var/run/faillock -p wa -k login_failures" >> /etc/audit/rules.d/audit.rules
     fi
 
+    # Remove rules for application directories that don't exist yet
+    # These will be added when the application is deployed
+    if [ ! -d "{{DEPLOY_DIR}}/config" ]; then
+        sed -i '\|{{DEPLOY_DIR}}/config|d' /etc/audit/rules.d/audit.rules 2>/dev/null || true
+    fi
+    if [ ! -d "{{DEPLOY_DIR}}/scripts" ]; then
+        sed -i '\|{{DEPLOY_DIR}}/scripts|d' /etc/audit/rules.d/audit.rules 2>/dev/null || true
+    fi
+
     # Reload audit rules
     augenrules --load || log_message "⚠️  Some audit rules may have failed to load (non-critical)"
     docker_systemctl restart auditd || log_message "⚠️  Auditd restart failed (non-critical)"
