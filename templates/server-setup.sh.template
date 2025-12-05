@@ -2691,8 +2691,41 @@ krb5_principal = auditd
 distribute_network = no
 EOF
 
-# Configure audit rules
+# Configure minimal audit rules (full rules will be added after all services are installed)
 cat > /etc/audit/rules.d/audit.rules << 'EOF'
+## auditd rules for enhanced security monitoring
+## NOTE: This is a minimal initial configuration
+## Full rules will be loaded after all services are installed
+
+## First rule - delete all
+-D
+
+## Increase the buffers to survive stress events
+## Adjust buffer size based on system activity
+-b 8192
+
+## This determines how long to wait in burst of events
+--backlog_wait_time 0
+
+## Set failure mode to syslog
+-f 1
+
+## Minimal rules for guaranteed-to-exist paths only
+## File System monitoring (basic)
+-w /etc/passwd -p wa -k user_modify
+-w /etc/group -p wa -k user_group_modifications
+-w /etc/shadow -p wa -k password_modifications
+-w /etc/sudoers -p wa -k sudoers_modifications
+-w /etc/hosts -p wa -k hosts_file_modifications
+
+## SSH configuration
+-w /etc/ssh/sshd_config -p wa -k sshd_config_modifications
+
+## Note: Additional rules will be added after service installation completes
+EOF
+
+# Save the full audit rules for later deployment
+cat > /tmp/audit.rules.full << 'FULLRULES'
 ## auditd rules for enhanced security monitoring
 
 ## First rule - delete all
@@ -2826,16 +2859,9 @@ cat > /etc/audit/rules.d/audit.rules << 'EOF'
 ## Make the configuration immutable until next reboot (uncomment if needed)
 ## WARNING: You will need to reboot to make changes after enabling this option
 #-e 2
-EOF
+FULLRULES
 
-# Add conditional audit rules for paths that may not exist on all systems
-echo "Adding conditional audit rules for login monitoring..."
-if [ -f /var/log/faillog ]; then
-    echo "-w /var/log/faillog -p wa -k login_failures" >> /etc/audit/rules.d/audit.rules
-fi
-if [ -d /var/run/faillock ]; then
-    echo "-w /var/run/faillock -p wa -k login_failures" >> /etc/audit/rules.d/audit.rules
-fi
+echo "Full audit rules saved to /tmp/audit.rules.full for later deployment"
 
 # Create daily audit report script
 cat > /etc/cron.daily/audit-report << 'EOF'
@@ -6870,6 +6896,31 @@ if [ -z "$AUTOMATED_INSTALL" ]; then
     prompt_advanced_settings
 else
     log_message "Skipping advanced settings prompt in automated mode"
+fi
+
+# Deploy full audit rules now that all services are installed
+echo "===== 17.9 Deploying Full Audit Rules ====="
+log_message "Deploying comprehensive audit rules..."
+if [ -f /tmp/audit.rules.full ]; then
+    # Deploy full rules
+    cp /tmp/audit.rules.full /etc/audit/rules.d/audit.rules
+
+    # Add conditional rules for paths that may not exist
+    if [ -f /var/log/faillog ]; then
+        echo "-w /var/log/faillog -p wa -k login_failures" >> /etc/audit/rules.d/audit.rules
+    fi
+    if [ -d /var/run/faillock ]; then
+        echo "-w /var/run/faillock -p wa -k login_failures" >> /etc/audit/rules.d/audit.rules
+    fi
+
+    # Reload audit rules
+    augenrules --load || log_message "⚠️  Some audit rules may have failed to load (non-critical)"
+    docker_systemctl restart auditd || log_message "⚠️  Auditd restart failed (non-critical)"
+
+    log_message "✅ Full audit rules deployed"
+    rm -f /tmp/audit.rules.full
+else
+    log_message "⚠️  Full audit rules not found, using minimal rules"
 fi
 
 echo "===== 18. Setup complete! ====="
