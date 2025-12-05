@@ -5064,7 +5064,22 @@ systemctl list-timers maldet-scan.timer clamscan.timer rkhunter-scan.timer --no-
 
 # ========= Now restart SSH with new configuration =========
 echo "===== 12. Restarting SSH to apply security settings ====="
-docker_systemctl restart sshd
+
+# Test SSH configuration before restarting
+if ! sshd -t 2>&1; then
+    log_error "SSH configuration test failed. Check /var/log/secure-server-setup.log for details"
+    sshd -t 2>&1 | tee -a "$LOGFILE"
+    exit 1
+fi
+
+# Restart SSH service (Debian uses 'ssh' not 'sshd')
+if docker_systemctl restart ssh; then
+    echo "✅ SSH service restarted successfully"
+else
+    log_error "Failed to restart SSH service"
+    systemctl status ssh.service || true
+    exit 1
+fi
 
 # Verify SSH is running only on target port and clean up port 22
 if ss -tnlp | grep -q ":$SSH_PORT.*sshd"; then
