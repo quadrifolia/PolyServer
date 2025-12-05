@@ -1353,6 +1353,17 @@ if id "$USERNAME" &>/dev/null; then
     # Configure Oh My Zsh with useful plugins (whether newly installed or already present)
     if [ -f /home/$USERNAME/.zshrc ]; then
         sudo -u $USERNAME sed -i 's/plugins=(git)/plugins=(git docker sudo systemd colored-man-pages)/' /home/$USERNAME/.zshrc
+
+        # Verify that oh-my-zsh sourcing line exists
+        if ! grep -q "source.*oh-my-zsh.sh" /home/$USERNAME/.zshrc; then
+            echo "⚠️  oh-my-zsh.sh source line missing, recreating .zshrc from template"
+            if [ -f /home/$USERNAME/.oh-my-zsh/templates/zshrc.zsh-template ]; then
+                cp /home/$USERNAME/.oh-my-zsh/templates/zshrc.zsh-template /home/$USERNAME/.zshrc
+                chown $USERNAME:$USERNAME /home/$USERNAME/.zshrc
+                sudo -u $USERNAME sed -i 's/plugins=(git)/plugins=(git docker sudo systemd colored-man-pages)/' /home/$USERNAME/.zshrc
+            fi
+        fi
+
         echo "✅ Oh My Zsh configured for $USERNAME"
     fi
 
@@ -1374,6 +1385,16 @@ fi
 # Configure Oh My Zsh for root (whether newly installed or already present)
 if [ -f /root/.zshrc ]; then
     sed -i 's/plugins=(git)/plugins=(git docker sudo systemd colored-man-pages)/' /root/.zshrc
+
+    # Verify that oh-my-zsh sourcing line exists
+    if ! grep -q "source.*oh-my-zsh.sh" /root/.zshrc; then
+        echo "⚠️  oh-my-zsh.sh source line missing for root, recreating .zshrc from template"
+        if [ -f /root/.oh-my-zsh/templates/zshrc.zsh-template ]; then
+            cp /root/.oh-my-zsh/templates/zshrc.zsh-template /root/.zshrc
+            sed -i 's/plugins=(git)/plugins=(git docker sudo systemd colored-man-pages)/' /root/.zshrc
+        fi
+    fi
+
     echo "✅ Oh My Zsh configured for root"
 fi
 
@@ -1541,11 +1562,24 @@ ls -A "\$@"
 EOF
 chmod +x /usr/local/bin/la
 
-# Add aliases to both users' shell configs
+# Add aliases to both users' shell configs (only if not already present)
 if id "$USERNAME" &>/dev/null; then
-    echo 'source /etc/profile.d/polyserver-aliases.sh 2>/dev/null || true' >> /home/$USERNAME/.zshrc
+    if ! grep -q "polyserver-aliases.sh" /home/$USERNAME/.zshrc 2>/dev/null; then
+        echo 'source /etc/profile.d/polyserver-aliases.sh 2>/dev/null || true' >> /home/$USERNAME/.zshrc
+        echo "✅ Added polyserver aliases to $USERNAME's .zshrc"
+    fi
+
+    # Ensure ZSH path is properly set (use $HOME instead of hardcoded path)
+    if grep -q '^export ZSH="/home/' /home/$USERNAME/.zshrc 2>/dev/null; then
+        sed -i 's|^export ZSH="/home/.*/.oh-my-zsh"|export ZSH="$HOME/.oh-my-zsh"|' /home/$USERNAME/.zshrc
+        echo "✅ Fixed ZSH path in $USERNAME's .zshrc to use \$HOME"
+    fi
 fi
-echo 'source /etc/profile.d/polyserver-aliases.sh 2>/dev/null || true' >> /root/.zshrc
+
+if ! grep -q "polyserver-aliases.sh" /root/.zshrc 2>/dev/null; then
+    echo 'source /etc/profile.d/polyserver-aliases.sh 2>/dev/null || true' >> /root/.zshrc
+    echo "✅ Added polyserver aliases to root's .zshrc"
+fi
 
 echo "Enhanced shell environment configured with zsh, Oh My Zsh, vim enhancements, and useful aliases"
 
