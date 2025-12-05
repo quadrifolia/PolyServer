@@ -3902,8 +3902,8 @@ if [ "$DOCKER_MODE" = "false" ]; then
 # Update database on a daily basis
 UPDATE_MIRRORS=1
 MIRRORS_MODE=0
-UPDATE_MIRRORS=1
-WEB_CMD="DISABLED"
+# Disable web-based updates (use package manager updates instead)
+WEB_CMD=""
 
 # Mail options - same email as logwatch
 MAIL-ON-WARNING=${LOGWATCH_EMAIL:-root}
@@ -4121,7 +4121,7 @@ if [ "$INSTALL_DOCKER" = "true" ] && [ "$DOCKER_MODE" = "false" ]; then
     echo "===== 8. Installing Docker and Docker Compose ====="
     echo "Installing Docker CE with docker-compose plugin..."
     
-    apt-get install -y apt-transport-https ca-certificates curl software-properties-common gnupg lsb-release
+    apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release
 
     # Add Docker repository for Debian
     curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
