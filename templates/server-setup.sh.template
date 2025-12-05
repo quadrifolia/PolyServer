@@ -1326,16 +1326,29 @@ locale-gen
 # Install Oh My Zsh for deploy user
 if id "$USERNAME" &>/dev/null; then
     echo "Installing Oh My Zsh for $USERNAME..."
-    sudo -u $USERNAME sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
-    
+
+    # Ensure home directory exists (safety check)
+    if [ ! -d "/home/$USERNAME" ]; then
+        echo "Creating home directory for $USERNAME..."
+        mkdir -p /home/$USERNAME
+        chown $USERNAME:$USERNAME /home/$USERNAME
+    fi
+
+    # Install Oh My Zsh with HOME environment variable set explicitly
+    sudo -u $USERNAME HOME=/home/$USERNAME sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+
     # Configure Oh My Zsh with useful plugins
-    sudo -u $USERNAME sed -i 's/plugins=(git)/plugins=(git docker sudo systemd colored-man-pages)/' /home/$USERNAME/.zshrc
+    if [ -f /home/$USERNAME/.zshrc ]; then
+        sudo -u $USERNAME sed -i 's/plugins=(git)/plugins=(git docker sudo systemd colored-man-pages)/' /home/$USERNAME/.zshrc
+    fi
 fi
 
 # Install Oh My Zsh for root user as well
 echo "Installing Oh My Zsh for root..."
-sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
-sed -i 's/plugins=(git)/plugins=(git docker sudo systemd colored-man-pages)/' /root/.zshrc
+HOME=/root sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+if [ -f /root/.zshrc ]; then
+    sed -i 's/plugins=(git)/plugins=(git docker sudo systemd colored-man-pages)/' /root/.zshrc
+fi
 
 # Configure vim globally with enhanced settings for server administration
 cat > /etc/vim/vimrc.local << EOF
