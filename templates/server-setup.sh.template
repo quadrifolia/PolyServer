@@ -1229,10 +1229,10 @@ echo "[$DATE] Sensor readings:" >> "$LOGFILE"
 sensors >> "$LOGFILE" 2>/dev/null
 echo "" >> "$LOGFILE"
 
-# Check for critical temperatures and log alerts
-if sensors 2>/dev/null | grep -E "CRITICAL|ALARM" | grep -v "+0.0"; then
+# Check for critical temperatures and log alerts (exclude intrusion sensors - common false positives)
+if sensors 2>/dev/null | grep -E "CRITICAL|ALARM" | grep -v "intrusion" | grep -v "+0.0" | grep -q .; then
     echo "[$DATE] CRITICAL: Sensor alerts detected!" >> "$LOGFILE"
-    sensors 2>/dev/null | grep -E "CRITICAL|ALARM" >> "$LOGFILE"
+    sensors 2>/dev/null | grep -E "CRITICAL|ALARM" | grep -v "intrusion" >> "$LOGFILE"
     echo "" >> "$LOGFILE"
 fi
 
