@@ -3956,10 +3956,10 @@ fi
 EOF
 chmod 755 /etc/cron.daily/rkhunter-scan
 
-    # Run initial scan to establish baseline
-    echo "Running initial RKHunter scan to create baseline..."
+    # Update properties file for baseline (skip full scan - takes too long, will run via cron)
+    echo "Updating RKHunter properties database..."
     rkhunter --propupd
-    rkhunter --check --skip-keypress --report-warnings-only
+    log_message "✅ RKHunter configured. First full scan will run via daily cron job."
 else
     echo "🐳 Skipping RKHunter configuration in Docker mode"
 fi
