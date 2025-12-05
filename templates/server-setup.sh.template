@@ -6985,6 +6985,11 @@ if [ -f /tmp/audit.rules.full ]; then
         sed -i '\|{{DEPLOY_DIR}}/scripts|d' /etc/audit/rules.d/audit.rules 2>/dev/null || true
     fi
 
+    # Remove backup directory audit rule if backup storage not configured
+    if [ ! -d "/mnt/backup/backups" ]; then
+        sed -i '\|/mnt/backup/backups|d' /etc/audit/rules.d/audit.rules 2>/dev/null || true
+    fi
+
     # Reload audit rules
     augenrules --load || log_message "⚠️  Some audit rules may have failed to load (non-critical)"
     docker_systemctl restart auditd || log_message "⚠️  Auditd restart failed (non-critical)"
