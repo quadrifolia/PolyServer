@@ -6091,11 +6091,10 @@ Nice=5
 OOMScoreAdjust=100
 EOF
 
-# SSH service watchdog with enhanced security hardening
+# SSH service priority and restart policy (NO watchdog - SSH doesn't support it)
 mkdir -p /etc/systemd/system/ssh.service.d
-cat > /etc/systemd/system/ssh.service.d/watchdog.conf << 'EOF'
+cat > /etc/systemd/system/ssh.service.d/priority.conf << 'EOF'
 [Service]
-WatchdogSec=30
 Restart=on-failure
 RestartSec=5
 StartLimitInterval=300
@@ -6984,13 +6983,13 @@ echo "📊 System Resource Optimization Applied:"
 if [ -n "$NGINX_WORKERS" ] && [ "$NGINX_WORKERS" != "auto" ]; then
     echo "   • Nginx: $NGINX_WORKERS workers, $NGINX_WORKER_CONNECTIONS connections each"
 fi
-if [ -n "$PHP_MAX_CHILDREN" ]; then
+if [ -n "${PHP_MAX_CHILDREN:-}" ]; then
     echo "   • PHP-FPM: Up to $PHP_MAX_CHILDREN processes, ${PHP_MEMORY_LIMIT}MB memory limit per process"
 fi
-if [ -n "$MYSQL_INNODB_BUFFER_POOL_SIZE" ]; then
+if [ -n "${MYSQL_INNODB_BUFFER_POOL_SIZE:-}" ]; then
     echo "   • MariaDB: ${MYSQL_INNODB_BUFFER_POOL_SIZE}MB InnoDB buffer pool, $MYSQL_MAX_CONNECTIONS max connections"
 fi
-if [ -n "$REDIS_MAX_MEMORY" ]; then
+if [ -n "${REDIS_MAX_MEMORY:-}" ]; then
     echo "   • Redis: ${REDIS_MAX_MEMORY}MB max memory, $REDIS_MAX_CLIENTS max clients"
 fi
 echo ""
