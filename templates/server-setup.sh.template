@@ -4355,8 +4355,10 @@ EOF
 
 # Configure system to use our DNS resolver (Debian networking)
 # Debian uses traditional /etc/network/interfaces or systemd-resolved
-# Make resolv.conf immutable to prevent DHCP from overwriting it
-chattr +i /etc/resolv.conf
+# Make resolv.conf immutable to prevent DHCP from overwriting it (if filesystem supports it)
+if ! chattr +i /etc/resolv.conf 2>/dev/null; then
+    log_message "⚠️  Could not make /etc/resolv.conf immutable (filesystem may not support it)"
+fi
 
 # Configure systemd-resolved to use our local DNS
 if systemctl is-active --quiet systemd-resolved; then
