@@ -4193,7 +4193,7 @@ if [ "$DOCKER_MODE" = "false" ] && [ "$NETDATA_ENABLED" = "true" ]; then
         # Check if claim token is provided via template variables
         NETDATA_CLAIM_TOKEN="{{NETDATA_CLAIM_TOKEN}}"
 
-        if [ -n "$NETDATA_CLAIM_TOKEN" ] && [ "$NETDATA_CLAIM_TOKEN" != "{{NETDATA_CLAIM_TOKEN}}" ]; then
+        if [ -n "$NETDATA_CLAIM_TOKEN" ]; then
             echo "Installing with Netdata Cloud integration (from configuration)..."
             sh /tmp/netdata-kickstart.sh --stable-channel --disable-telemetry --claim-token "$NETDATA_CLAIM_TOKEN" --claim-url https://app.netdata.cloud
         else
@@ -4256,7 +4256,7 @@ EOF
     # Optional Netdata Cloud Integration (show instructions if not configured)
     NETDATA_CLAIM_TOKEN="{{NETDATA_CLAIM_TOKEN}}"
 
-    if [ -z "$NETDATA_CLAIM_TOKEN" ] || [ "$NETDATA_CLAIM_TOKEN" = "{{NETDATA_CLAIM_TOKEN}}" ]; then
+    if [ -z "$NETDATA_CLAIM_TOKEN" ]; then
         echo ""
         echo "📊 NETDATA CLOUD INTEGRATION (Optional)"
         echo "======================================"
