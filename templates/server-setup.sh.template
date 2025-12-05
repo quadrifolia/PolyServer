@@ -1352,6 +1352,12 @@ if id "$USERNAME" &>/dev/null; then
         sudo -u $USERNAME sed -i 's/plugins=(git)/plugins=(git docker sudo systemd colored-man-pages)/' /home/$USERNAME/.zshrc
         echo "✅ Oh My Zsh configured for $USERNAME"
     fi
+
+    # Change default shell to zsh for deploy user
+    if [ "$(getent passwd $USERNAME | cut -d: -f7)" != "/bin/zsh" ]; then
+        chsh -s /bin/zsh $USERNAME
+        echo "✅ Changed default shell to zsh for $USERNAME"
+    fi
 fi
 
 # Install Oh My Zsh for root user as well
@@ -1366,6 +1372,12 @@ fi
 if [ -f /root/.zshrc ]; then
     sed -i 's/plugins=(git)/plugins=(git docker sudo systemd colored-man-pages)/' /root/.zshrc
     echo "✅ Oh My Zsh configured for root"
+fi
+
+# Change default shell to zsh for root
+if [ "$(getent passwd root | cut -d: -f7)" != "/bin/zsh" ]; then
+    chsh -s /bin/zsh root
+    echo "✅ Changed default shell to zsh for root"
 fi
 
 # Configure vim globally with enhanced settings for server administration
