@@ -3890,8 +3890,10 @@ EOF
 # Configure RKHunter
 echo "===== 10. Configuring RKHunter ====="
 if [ "$DOCKER_MODE" = "false" ]; then
-    # Update rkhunter database
-    rkhunter --update
+    # Update rkhunter database (non-critical if it fails)
+    if ! rkhunter --update; then
+        log_message "⚠️  RKHunter database update failed (non-critical, will retry during daily cron)"
+    fi
 
     # Set up RKHunter properties
     cat > /etc/rkhunter.conf.local << EOF
