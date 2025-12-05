@@ -3590,17 +3590,24 @@ Restart=always
 RestartSec=60
 TimeoutStartSec=120
 TimeoutStopSec=30
-
-# Watchdog configuration
-WatchdogSec=300
-NotifyAccess=main
 EOF
 
     systemctl daemon-reload
 
     # Enable and start Suricata
     systemctl enable suricata
-    systemctl start suricata
+
+    # Try to start Suricata, but don't fail setup if it doesn't start
+    # Suricata may need additional configuration or resources
+    if systemctl start suricata 2>/dev/null; then
+        log_message "✅ Suricata IDS started successfully"
+    else
+        log_message "⚠️ Suricata failed to start - may need additional configuration"
+        log_message "   Check 'systemctl status suricata' and 'journalctl -xeu suricata' for details"
+        log_message "   You can try: systemctl reset-failed suricata && systemctl start suricata"
+        # Reset failed state so it can be started manually later
+        systemctl reset-failed suricata 2>/dev/null || true
+    fi
 else
     echo "🐳 Skipping Suricata configuration in Docker mode"
 fi
@@ -6065,11 +6072,11 @@ OOMScoreAdjust=-100
 Nice=-5
 EOF
 
-# Enhanced Suricata service with watchdog and resource management
+# Enhanced Suricata service restart policy
+# Note: Watchdog disabled - Suricata doesn't send systemd watchdog pings by default
 mkdir -p /etc/systemd/system/suricata.service.d
-cat > /etc/systemd/system/suricata.service.d/watchdog.conf << 'EOF'
+cat > /etc/systemd/system/suricata.service.d/restart-policy.conf << 'EOF'
 [Service]
-WatchdogSec=120
 Restart=on-failure
 RestartSec=30
 StartLimitInterval=1200
