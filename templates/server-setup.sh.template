@@ -3257,10 +3257,8 @@ EOF
     echo "✅ Created /etc/nginx/snippets/security-locations.conf"
     echo "   Include this file in server blocks for location-based security rules"
 
-fi
-
-# Create proxy parameters file for reusable proxy settings
-cat > /etc/nginx/conf.d/proxy_params << 'EOF'
+    # Create proxy parameters file for reusable proxy settings
+    cat > /etc/nginx/conf.d/proxy_params << 'EOF'
 # Common proxy parameters for applications
 # This file contains reusable proxy settings
 
@@ -3295,7 +3293,7 @@ proxy_hide_header X-Powered-By;
 proxy_hide_header Server;
 EOF
 
-# Set proper permissions
+    # Set proper permissions
     chmod 644 /etc/nginx/conf.d/security.conf
     chmod 644 /etc/nginx/conf.d/proxy_params
 
