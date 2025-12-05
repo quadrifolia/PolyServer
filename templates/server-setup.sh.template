@@ -792,7 +792,8 @@ MaxStartups 3:30:10
 
 # Forwarding Controls (Restrictive by Default)
 AllowTcpForwarding local
-PermitOpen 10.0.0.0/8:*,172.16.0.0/12:*,192.168.0.0/16:*
+# Note: PermitOpen doesn't support CIDR notation, would need specific host:port pairs
+# AllowTcpForwarding local already restricts to localhost forwarding
 AllowAgentForwarding no
 PermitTunnel no
 GatewayPorts no
