@@ -53,6 +53,23 @@ trap cleanup EXIT
 
 log_message "Starting server setup script"
 
+# ========= Load Configuration =========
+# Load configuration from defaults.env if it exists
+# This file is deployed by deploy-unified.sh and contains all configuration settings
+CONFIG_FILE="/opt/polyserver/config/defaults.env"
+if [ -f "$CONFIG_FILE" ]; then
+    log_message "Loading configuration from $CONFIG_FILE"
+    # Source the configuration file
+    # shellcheck disable=SC1090
+    set +u  # Temporarily allow unset variables during config load
+    source "$CONFIG_FILE"
+    set -u  # Re-enable strict mode
+    log_message "✓ Configuration loaded successfully"
+else
+    log_message "⚠ Configuration file not found at $CONFIG_FILE"
+    log_message "⚠ Using template defaults only"
+fi
+
 # ========= Variables =========
 USERNAME="{{DEPLOY_USER}}"                # Non-root user to create
 HOSTNAME="{{HOSTNAME}}"                   # Server hostname
@@ -5750,10 +5767,11 @@ else
 fi
 
 # Optional Resource Guardian System
+# Check if Resource Guardian should be installed (configured in defaults.env)
+: "${INSTALL_RESOURCE_GUARDIAN:={{INSTALL_RESOURCE_GUARDIAN}}}"
 echo ""
-read -p "Install Resource Guardian system for proactive resource management? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+if [ "${INSTALL_RESOURCE_GUARDIAN,,}" = "true" ]; then
+    log_message "Installing Resource Guardian system (INSTALL_RESOURCE_GUARDIAN=true)"
     echo "===== 15.1 Setting up Resource Guardian System ====="
     echo "Installing Resource Guardian for proactive resource management..."
     
@@ -5959,15 +5977,15 @@ EOF
     echo "   • Sends email alerts for all actions taken"
     echo ""
 else
-    echo "Skipping Resource Guardian installation"
+    log_message "Skipping Resource Guardian installation (INSTALL_RESOURCE_GUARDIAN=${INSTALL_RESOURCE_GUARDIAN})"
 fi
 
 # Optional Advanced Monitoring Tools
+# Check if advanced monitoring should be installed (configured in defaults.env)
+: "${INSTALL_ADVANCED_MONITORING:={{INSTALL_ADVANCED_MONITORING}}}"
 echo ""
-read -p "Install advanced server monitoring commands (serverstatus, logmon, servermail)? (y/N): " -n 1 -r
-echo
-MONITORING_TOOLS_REPLY=$REPLY
-if [[ $MONITORING_TOOLS_REPLY =~ ^[Yy]$ ]]; then
+if [ "${INSTALL_ADVANCED_MONITORING,,}" = "true" ]; then
+    log_message "Installing advanced monitoring tools (INSTALL_ADVANCED_MONITORING=true)"
     echo "===== 15.2 Setting up Advanced Monitoring Tools ====="
     echo "Installing advanced monitoring commands for server management..."
     
@@ -6133,7 +6151,7 @@ EOF
     echo "   • logmon requires sudo for log access"
     echo ""
 else
-    echo "Skipping advanced monitoring tools installation"
+    log_message "Skipping advanced monitoring tools installation (INSTALL_ADVANCED_MONITORING=${INSTALL_ADVANCED_MONITORING})"
 fi
 
 # Unattended Reboot Warning System
@@ -6400,91 +6418,76 @@ echo "Configuration backup location: /var/backups/security-configs/"
 echo "Backup retention: 30 days"
 
 echo "===== 16. Optional Application Components ====="
-echo "Choose which application components to install for your server:"
+log_message "Determining components to install based on configuration..."
 echo ""
 
 # Optional component installation section
+# Build component list from environment variables (configured in defaults.env)
 INSTALL_COMPONENTS=""
 
-# Docker (Enhanced Installation)
-if [ "$DEPLOYMENT_MODE" != "docker" ]; then
-    echo ""
-    read -p "Install/Configure Docker with security optimizations? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        INSTALL_COMPONENTS="$INSTALL_COMPONENTS docker"
-    fi
+# Docker installation check
+if [ "${INSTALL_DOCKER,,}" = "true" ]; then
+    log_message "Docker selected for installation (INSTALL_DOCKER=true)"
+    INSTALL_COMPONENTS="$INSTALL_COMPONENTS docker"
 fi
 
 # PHP Stack
-echo ""
-echo "=== PHP Development Stack ==="
-read -p "Install PHP 8.4 with php-fpm and common extensions? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+if [ "${INSTALL_PHP,,}" = "true" ]; then
+    log_message "PHP selected for installation (INSTALL_PHP=true)"
     INSTALL_COMPONENTS="$INSTALL_COMPONENTS php"
-    read -p "Include PHP development tools (Composer, Xdebug)? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+
+    # Check for PHP dev tools
+    : "${INSTALL_PHP_DEV_TOOLS:={{INSTALL_PHP_DEV_TOOLS}}}"
+    if [ "${INSTALL_PHP_DEV_TOOLS,,}" = "true" ]; then
+        log_message "PHP development tools selected (INSTALL_PHP_DEV_TOOLS=true)"
         INSTALL_COMPONENTS="$INSTALL_COMPONENTS php-dev"
     fi
 fi
 
 # Database Systems
-echo ""
-echo "=== Database Systems ==="
-read -p "Install MariaDB with secure configuration? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+if [ "${INSTALL_MARIADB,,}" = "true" ]; then
+    log_message "MariaDB selected for installation (INSTALL_MARIADB=true)"
     INSTALL_COMPONENTS="$INSTALL_COMPONENTS mariadb"
 fi
 
-read -p "Install PostgreSQL with secure configuration? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+if [ "${INSTALL_POSTGRESQL,,}" = "true" ]; then
+    log_message "PostgreSQL selected for installation (INSTALL_POSTGRESQL=true)"
     INSTALL_COMPONENTS="$INSTALL_COMPONENTS postgresql"
 fi
 
 # Node.js Stack
-echo ""
-echo "=== Node.js Development Stack ==="
-read -p "Install Node.js with PM2 process manager? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+if [ "${INSTALL_NODEJS,,}" = "true" ]; then
+    log_message "Node.js selected for installation (INSTALL_NODEJS=true)"
     INSTALL_COMPONENTS="$INSTALL_COMPONENTS nodejs"
-    read -p "Include development tools (Yarn, TypeScript)? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+
+    # Check for Node.js dev tools
+    : "${INSTALL_NODEJS_DEV_TOOLS:={{INSTALL_NODEJS_DEV_TOOLS}}}"
+    if [ "${INSTALL_NODEJS_DEV_TOOLS,,}" = "true" ]; then
+        log_message "Node.js development tools selected (INSTALL_NODEJS_DEV_TOOLS=true)"
         INSTALL_COMPONENTS="$INSTALL_COMPONENTS nodejs-dev"
     fi
 fi
 
 # Caching and Additional Services
-echo ""
-echo "=== Caching and Additional Services ==="
-read -p "Install Redis with secure configuration? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+if [ "${INSTALL_REDIS,,}" = "true" ]; then
+    log_message "Redis selected for installation (INSTALL_REDIS=true)"
     INSTALL_COMPONENTS="$INSTALL_COMPONENTS redis"
 fi
 
-read -p "Install Git with optimized configuration? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+if [ "${INSTALL_GIT,,}" = "true" ]; then
+    log_message "Git selected for installation (INSTALL_GIT=true)"
     INSTALL_COMPONENTS="$INSTALL_COMPONENTS git"
 fi
 
-# Display selected components
+# Display selected components and proceed with installation
 if [ -n "$INSTALL_COMPONENTS" ]; then
     echo ""
-    echo "Selected components: $INSTALL_COMPONENTS"
+    echo "Components configured for installation: $INSTALL_COMPONENTS"
+    log_message "Installing components: $INSTALL_COMPONENTS"
     echo ""
-    read -p "Proceed with installation? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        echo "===== 16.1 Installing Selected Components ====="
-        # Component installation will be implemented next
-        for component in $INSTALL_COMPONENTS; do
+    echo "===== 16.1 Installing Selected Components ====="
+    # Component installation will be implemented next
+    for component in $INSTALL_COMPONENTS; do
             echo "Installing $component..."
             case $component in
                 docker)
@@ -6985,13 +6988,10 @@ GIT_EOF
                     echo "Unknown component: $component"
                     ;;
             esac
-        done
-        echo "✅ Component installation completed"
-    else
-        echo "Skipping component installation"
-    fi
+    done
+    echo "✅ Component installation completed"
 else
-    echo "No additional components selected"
+    log_message "No additional components selected for installation"
 fi
 
 echo "===== 17. Final configuration validation ====="
