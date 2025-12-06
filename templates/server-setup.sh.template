@@ -4767,6 +4767,54 @@ EOF
 
 echo "✅ Comprehensive log rotation configured (including rsyslog system logs)"
 
+# ========= Configure Swap =========
+if [ "$DOCKER_MODE" = "false" ]; then
+    echo "===== 10.6 Configuring swap space ====="
+
+    SWAPFILE="/swapfile"
+    SWAP_SIZE_MB=2048  # 2GB
+
+    # Check if swapfile already exists
+    if [ -f "$SWAPFILE" ]; then
+        echo "Swap file already exists, checking size..."
+        CURRENT_SIZE=$(stat -c%s "$SWAPFILE" 2>/dev/null || echo "0")
+        EXPECTED_SIZE=$((SWAP_SIZE_MB * 1024 * 1024))
+
+        if [ "$CURRENT_SIZE" -eq "$EXPECTED_SIZE" ]; then
+            echo "✅ Swap file already correct size (${SWAP_SIZE_MB}MB)"
+        else
+            echo "Resizing swap file from $(($CURRENT_SIZE / 1024 / 1024))MB to ${SWAP_SIZE_MB}MB..."
+            swapoff "$SWAPFILE" 2>/dev/null || true
+            rm -f "$SWAPFILE"
+            dd if=/dev/zero of="$SWAPFILE" bs=1M count=$SWAP_SIZE_MB status=progress
+            chmod 600 "$SWAPFILE"
+            mkswap "$SWAPFILE"
+            swapon "$SWAPFILE"
+            echo "✅ Swap file resized to ${SWAP_SIZE_MB}MB"
+        fi
+    else
+        echo "Creating ${SWAP_SIZE_MB}MB swap file..."
+        dd if=/dev/zero of="$SWAPFILE" bs=1M count=$SWAP_SIZE_MB status=progress
+        chmod 600 "$SWAPFILE"
+        mkswap "$SWAPFILE"
+        swapon "$SWAPFILE"
+        echo "✅ Swap file created (${SWAP_SIZE_MB}MB)"
+    fi
+
+    # Ensure swap is in /etc/fstab
+    if ! grep -q "$SWAPFILE" /etc/fstab; then
+        echo "$SWAPFILE none swap sw 0 0" >> /etc/fstab
+        echo "✅ Swap added to /etc/fstab for persistence"
+    fi
+
+    # Verify swap is active
+    swapon --show
+
+    echo "✅ Swap configured (2GB, swappiness=10 set in kernel parameters)"
+else
+    echo "🐳 Docker mode: skipping swap configuration"
+fi
+
 # ========= Additional security hardening =========
 echo "===== 11. Additional security hardening ====="
 
@@ -4888,6 +4936,9 @@ fs.protected_symlinks = 1
 # Additional memory protection
 vm.mmap_rnd_bits = 32
 vm.mmap_rnd_compat_bits = 16
+
+# Memory management - reduce swap usage (prefer RAM)
+vm.swappiness = 10
 
 # Automatic reboot after kernel panic (headless environment)
 kernel.panic = 10
