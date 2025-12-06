@@ -933,7 +933,7 @@ echo ""
 echo "===== 6.2 Installing core packages and web server ====="
 
 # Core security and monitoring packages (always installed)
-CORE_PACKAGES="fail2ban unattended-upgrades apt-listchanges gnupg-agent logwatch apparmor apparmor-utils awscli smartmontools rsyslog"
+CORE_PACKAGES="fail2ban unattended-upgrades apt-listchanges gnupg-agent logwatch apparmor apparmor-utils smartmontools rsyslog"
 
 # Build component-based package list
 COMPONENT_PACKAGES=""

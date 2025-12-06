@@ -1586,126 +1586,135 @@ SSL certificates are automatically managed by Certbot. The initial certificate i
 
 ## Backup Strategy
 
-This deployment includes a comprehensive backup strategy using OVH Object Storage (primary) and optional Block Storage (secondary).
+This deployment includes a comprehensive backup strategy using S3-compatible object storage (primary) and optional block storage (secondary).
 
-### Primary: OVH Object Storage for Backups
+### Primary: S3-Compatible Object Storage for Backups
 
-OVH Object Storage is the recommended backup solution with many advantages:
+S3-compatible object storage is the recommended backup solution with many advantages:
 
+- **Universal compatibility**: Works with any S3-compatible provider (AWS S3, OVH, Cloudflare R2, MinIO, etc.)
 - **Access from multiple servers**: Can be accessed from any server in any region
-- **Higher durability**: Data is stored with erasure coding across multiple availability zones (with 3-AZ option)
+- **Higher durability**: Data is typically stored with erasure coding across multiple availability zones
 - **Unlimited capacity**: No need to manage volume sizes or worry about running out of space
 - **Versioning support**: Maintain multiple versions of your backups for better protection
 - **Lifecycle policies**: Automate retention and deletion of old backups
 - **Immutability options**: Prevent backups from being modified or deleted for compliance
 - **Company-wide storage**: Can be organized across departments using buckets and prefixes
 
-#### Setting Up OVH Object Storage
+#### Supported S3-Compatible Providers
 
-1. **Create an Object Storage container in the OVH Cloud Manager**:
-   - Log in to your OVH Control Panel
-   - Navigate to Public Cloud > Storage > Object Storage
-   - Click "Create an Object Container"
-   - Select a region close to your server for better performance (e.g., GRA, SBG, BHS)
-   - Choose "Standard" storage class for backups
+The backup system works with any S3-compatible object storage provider:
 
-2. **Create an S3 user and generate access credentials**:
-   - In the Object Storage section, click "Users and Roles"
-   - Create a new user with a descriptive name (e.g., "app-backup")
-   - Generate access keys and save them securely
-   - **SECURITY**: Apply the principle of least privilege - limit permissions to only what's needed
+- **AWS S3**: Amazon's object storage service
+- **OVH Object Storage**: European provider with GDPR compliance
+- **Cloudflare R2**: Zero egress fees, global distribution
+- **MinIO**: Self-hosted S3-compatible storage
+- **Backblaze B2**: Cost-effective storage with S3 compatibility
+- **DigitalOcean Spaces**: Simple, scalable object storage
+- **And many others**: Any provider supporting the S3 API
+
+#### Setting Up S3-Compatible Object Storage
+
+1. **Create a storage bucket with your provider**:
+   - Sign in to your provider's control panel
+   - Navigate to object storage / S3 section
+   - Create a new bucket with a unique name (e.g., `polyserver-backups`)
+   - Select a region close to your server for better performance
+   - Choose appropriate storage class (standard for backups)
+
+2. **Create access credentials**:
+   - Generate S3-compatible access keys (access key ID and secret key)
+   - Save credentials securely
+   - **SECURITY**: Apply the principle of least privilege - grant only required permissions:
+     - List bucket contents
+     - Upload objects (write backups)
+     - Delete objects (cleanup old backups)
 
 3. **Configure your S3 credentials in the environment file**:
 
 ```bash
-# Edit the environment file
-nano /opt/polyserver/config/.env
+# Edit templates/defaults.env before deployment
+nano templates/defaults.env
 
-# Add your S3 credentials
+# Configure S3-compatible storage
 S3_BUCKET=polyserver-backups
-S3_REGION=gra  # Your region (e.g., gra, sbg, bhs)
-S3_PREFIX=production
-AWS_ACCESS_KEY_ID=your_access_key
-AWS_SECRET_ACCESS_KEY=your_secret_key
+S3_REGION=us-east-1              # Your region
+S3_PREFIX=production             # Optional prefix for organization
+S3_ACCESS_KEY_ID=your_access_key
+S3_SECRET_ACCESS_KEY=your_secret_key
+
+# Optional: S3 endpoint (required for non-AWS providers)
+# Examples:
+#   OVH:          S3_ENDPOINT=https://s3.gra.cloud.ovh.net
+#   Cloudflare:   S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+#   MinIO:        S3_ENDPOINT=https://minio.example.com
+# AWS S3:        Leave blank (auto-detected)
+# S3_ENDPOINT=https://s3.gra.cloud.ovh.net
 
 # Generate a strong encryption key for backups (highly recommended)
 BACKUP_ENCRYPTION_KEY=$(openssl rand -base64 32)
-echo "BACKUP_ENCRYPTION_KEY=$BACKUP_ENCRYPTION_KEY" >> /opt/polyserver/config/.env
 
 # IMPORTANT: Store this encryption key safely outside the server too
-echo "Save this encryption key in a secure location: $BACKUP_ENCRYPTION_KEY"
-echo "Without this key, encrypted backups cannot be restored!"
+# Without this key, encrypted backups cannot be restored!
 ```
 
-4. **The S3 backup process will run automatically** via the scheduled backups.
-
-**Note**: AWS CLI is already installed during the initial server setup.
+4. **The S3 backup process will run automatically** according to the configured schedule (default: daily at 2 AM).
 
 #### Organization Strategy for Company-Wide Storage
 
-For a company-wide Object Storage strategy, we recommend:
+For a company-wide object storage strategy, we recommend:
 
-1. **Create one project per environment**:
-   - Production
-   - Development/Testing
+1. **Create one bucket per environment** or **use prefixes**:
+   - Option A: Separate buckets (polyserver-prod, polyserver-dev)
+   - Option B: Single bucket with prefixes (production/, staging/, development/)
 
-2. **Within each project, create buckets by application**:
-   - polyserver-backups
-   - application-x-backups
-   - database-backups
+2. **Use prefixes within buckets for organization**:
+   - `production/server1/`
+   - `production/server2/`
+   - `staging/`
+   - `daily/`, `weekly/`, `monthly/`
 
-3. **Use prefixes within buckets for organization**:
-   - production/
-   - staging/
-   - daily/weekly/monthly/
+3. **Apply lifecycle policies** to automatically expire old backups and manage costs
 
-This organization allows for clear separation while maintaining the same pricing, as OVH charges based on total storage used regardless of how it's organized.
+This organization provides clear separation while optimizing costs (most providers charge based on total storage used regardless of organization).
 
 ### Optional: Block Storage for Local Backups
 
-Block Storage can be used as a secondary backup option, particularly when you need fast backup/restore performance. However, it has several limitations:
+Block storage (additional disk volumes) can be used as a secondary backup location, particularly when you need fast local backup/restore performance. This is simply additional storage mounted to your server for storing backup files locally.
 
+**Advantages**:
+- **Fast access**: Local disk I/O is faster than network transfers
+- **No egress fees**: No bandwidth costs for reading backups
+- **Simple setup**: Just mount and use like any local directory
+
+**Limitations**:
 - **Single-instance mounting**: Can only be attached to one server at a time
-- **Manual attachment**: Requires manual detachment/attachment to move between servers
-- **No automatic failover**: If your primary server fails, you must manually recover backups
+- **No geographic redundancy**: Data loss if the datacenter fails
 - **Fixed capacity**: Must provision a specific size in advance
+- **Manual migration**: Requires detaching/reattaching to move between servers
 
-#### Setting Up OVH Block Storage (Optional)
+#### Setting Up Block Storage (Optional)
 
-If you choose to use Block Storage as a secondary backup option, follow these steps:
+If you have additional block storage attached to your server:
 
-1. **Enable Block Storage backups in your configuration**:
-
-```bash
-# Edit the environment file
-nano /opt/polyserver/config/.env
-
-# Enable Block Storage backups
-BLOCK_STORAGE_ENABLED=true
-```
-
-2. **Provision a Block Storage volume**:
-   - In your OVH Control Panel, navigate to your B2-7 server
-   - Go to "Block Storage" and click "Create"
-   - Select a size (recommended 50GB minimum for backups)
-   - Choose the same region as your server
-   - Click "Create" and wait for provisioning to complete
-
-3. **Attach and mount the volume**:
-   - Attach it to your server from the OVH control panel
-   - SSH into your server and identify the block device:
+1. **Identify the block device**:
 
 ```bash
+# List all block devices
 lsblk
+
+# Example output:
+# sdb     8:16   0  100G  0 disk    <- Your additional storage
 ```
 
-4. **Format the block device if it's new** (CAUTION: This erases all data):
+2. **Format the block device if it's new** (⚠️ CAUTION: This erases all data):
 
 ```bash
-sudo mkfs.ext4 /dev/sdb  # Replace sdb with your actual device
+# Replace /dev/sdb with your actual device
+sudo mkfs.ext4 /dev/sdb
 ```
 
-5. **Mount and configure the storage**:
+3. **Mount the storage**:
 
 ```bash
 # Create mount directory
@@ -1723,13 +1732,23 @@ sudo chown -R deploy:deploy /mnt/backup/backups
 sudo chmod 750 /mnt/backup/backups
 ```
 
-6. **Verify the mount**:
+4. **Verify the mount**:
 
 ```bash
 df -h | grep "/mnt/backup"
 ```
 
-With both backup systems in place, you'll have a robust, multi-layered backup strategy with the speed of local storage and the durability of cloud storage.
+5. **Configure backups to use the mount**:
+
+```bash
+# Edit templates/defaults.env
+nano templates/defaults.env
+
+# Set the backup mount point
+BACKUP_MOUNT=/mnt/backup
+```
+
+With both S3-compatible object storage and local block storage configured, you'll have a robust multi-layered backup strategy combining the speed of local storage with the durability and accessibility of cloud storage.
 
 ## Server Monitoring and Security
 
