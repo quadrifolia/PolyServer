@@ -2279,18 +2279,40 @@ EOF
     echo "   • Enhanced security isolation and OOM protection"
 fi
 
-# Enable and start ClamAV services
+# Enable ClamAV daemon and configure freshclam for nightly updates
 create_rollback_point "clamav-config"
-enable_and_start_service clamav-freshclam
+
+# Disable systemd freshclam service - we'll use cron for nightly updates instead
+# This prevents database updates during business hours
+docker_systemctl disable --now clamav-freshclam.service 2>/dev/null || true
+docker_systemctl disable --now clamav-freshclam.timer 2>/dev/null || true
+
+# Create cron job for nightly virus definition updates at 3 AM
+cat > /etc/cron.d/clamav-freshclam << 'EOF'
+# ClamAV freshclam - nightly virus definition updates at 3 AM
+# Runs quietly and restarts daemon after update to avoid business hour disruptions
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# Run freshclam at 3 AM daily
+0 3 * * * root /usr/bin/freshclam --quiet && systemctl restart clamav-daemon || logger -t freshclam "Failed to update virus definitions"
+EOF
+
+chmod 644 /etc/cron.d/clamav-freshclam
+
+# Enable and start ClamAV daemon
 enable_and_start_service clamav-daemon
 
 if [ "$DOCKER_MODE" = "false" ]; then
     echo ""
     echo "📋 ClamAV Management Commands:"
-    echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
+    echo "   • Check daemon: systemctl status clamav-daemon"
     echo "   • View logs: journalctl -u clamav-daemon -f"
     echo "   • Manual scan: clamscan -r /path/to/scan"
+    echo "   • Manual update: /usr/bin/freshclam && systemctl restart clamav-daemon"
     echo "   • Monitor resources: systemctl show clamav-daemon --property=CPUUsageNSec,MemoryCurrent"
+    echo ""
+    echo "   Note: Virus definitions update nightly at 3 AM via cron (not during business hours)"
 fi
 else
     echo "⏭️ ClamAV antivirus not selected - skipping configuration"
