@@ -106,11 +106,9 @@ render_template() {
 # Note: This script generates base configurations only
 # Application-specific configurations should be handled separately
 
-# Generate systemd service file if template exists
-if [ -f "${TEMPLATE_DIR}/systemd/application.service.template" ]; then
-  mkdir -p "${OUTPUT_DIR}/systemd"
-  render_template "${TEMPLATE_DIR}/systemd/application.service.template" "${OUTPUT_DIR}/systemd/application.service"
-fi
+# NOTE: systemd/application.service is application-specific, not part of base server setup
+# Applications should generate their own systemd services
+# Skipping systemd service generation for base server deployment
 
 # Generate base nginx configurations
 mkdir -p "${OUTPUT_DIR}/nginx/conf.d"
@@ -170,35 +168,22 @@ if [ -f "${TEMPLATE_DIR}/server-setup.sh.template" ]; then
   chmod +x "${OUTPUT_DIR}/server-setup.sh"
 fi
 
-# Generate monitoring configuration if templates exist
-if [ -f "${TEMPLATE_DIR}/netdata/health_alarm_notify.conf.template" ]; then
-  mkdir -p "${OUTPUT_DIR}/monitoring/netdata"
-  render_template "${TEMPLATE_DIR}/netdata/health_alarm_notify.conf.template" "${OUTPUT_DIR}/monitoring/netdata/health_alarm_notify.conf"
-fi
-
-if [ -f "${TEMPLATE_DIR}/netdata/docker.conf.template" ]; then
-  mkdir -p "${OUTPUT_DIR}/monitoring/netdata/go.d"
-  render_template "${TEMPLATE_DIR}/netdata/docker.conf.template" "${OUTPUT_DIR}/monitoring/netdata/go.d/docker.conf"
-fi
-
-if [ -f "${TEMPLATE_DIR}/netdata/health.d/cgroups.conf.template" ]; then
-  mkdir -p "${OUTPUT_DIR}/monitoring/netdata/health.d"
-  render_template "${TEMPLATE_DIR}/netdata/health.d/cgroups.conf.template" "${OUTPUT_DIR}/monitoring/netdata/health.d/cgroups.conf"
-fi
+# NOTE: Netdata monitoring configurations are managed by server-setup.sh during installation
+# These templates are not deployed via deploy-unified.sh as Netdata installs its own configs
+# Skipping Netdata config generation for base server deployment
 
 # Generate Unbound configuration if enabled
 if [ "${UNBOUND_ENABLED:-false}" = "true" ]; then
   echo "Generating Unbound DNS cache configurations..."
-  
+
   # Generate unbound configuration file
   if [ -f "${TEMPLATE_DIR}/unbound/local.conf.template" ]; then
+    mkdir -p "${OUTPUT_DIR}/unbound"
     render_template "${TEMPLATE_DIR}/unbound/local.conf.template" "${OUTPUT_DIR}/unbound/local.conf"
   fi
-  
-  # Generate dhclient configuration file
-  if [ -f "${TEMPLATE_DIR}/unbound/dhclient.conf.template" ]; then
-    render_template "${TEMPLATE_DIR}/unbound/dhclient.conf.template" "${OUTPUT_DIR}/unbound/dhclient.conf"
-  fi
+
+  # NOTE: dhclient.conf is not used in modern Debian with systemd-resolved
+  # Unbound is configured directly in server-setup.sh
 fi
 
 # Generate Audit configuration if enabled
@@ -220,29 +205,9 @@ if [ "${AUDIT_ENABLED:-false}" = "true" ]; then
   fi
 fi
 
-# Generate PHP configurations if templates exist
-if [ -d "${TEMPLATE_DIR}/php" ]; then
-  echo "Generating PHP configurations..."
-  
-  # Create PHP configuration directory
-  mkdir -p "${OUTPUT_DIR}/php/fpm/pool.d"
-  mkdir -p "${OUTPUT_DIR}/php/mods-available"
-  
-  # Generate PHP-FPM pool configuration
-  if [ -f "${TEMPLATE_DIR}/php/security-pool.conf.template" ]; then
-    render_template "${TEMPLATE_DIR}/php/security-pool.conf.template" "${OUTPUT_DIR}/php/fpm/pool.d/security.conf"
-  fi
-  
-  # Generate PHP security configuration
-  if [ -f "${TEMPLATE_DIR}/php/99-security.ini.template" ]; then
-    render_template "${TEMPLATE_DIR}/php/99-security.ini.template" "${OUTPUT_DIR}/php/mods-available/99-security.ini"
-  fi
-  
-  # Generate Xdebug configuration
-  if [ -f "${TEMPLATE_DIR}/php/xdebug.ini.template" ]; then
-    render_template "${TEMPLATE_DIR}/php/xdebug.ini.template" "${OUTPUT_DIR}/php/mods-available/xdebug.ini"
-  fi
-fi
+# NOTE: PHP configurations are managed by server-setup.sh during PHP installation
+# These templates are installed directly by server-setup.sh when INSTALL_PHP=true
+# Skipping PHP config generation for base server deployment
 
 echo "===== Configuration files generated successfully ====="
 echo "You can now deploy these files to your server"
