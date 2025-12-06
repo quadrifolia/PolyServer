@@ -1728,6 +1728,172 @@ BACKUP_ENCRYPTION_KEY=$(openssl rand -base64 32)
 
 4. **The S3 backup process will run automatically** according to the configured schedule (default: daily at 2 AM).
 
+#### What Gets Backed Up
+
+**IMPORTANT**: The backup scripts are **templates** that must be customized for your specific application.
+
+By default, the backup scripts include:
+- **File-based backups**: Archives the data directory (`{{DEPLOY_DIR}}/data`)
+- **Database examples**: Commented examples for PostgreSQL, MySQL, SQLite
+- **Container examples**: Example for backing up Docker containers
+- **Encryption**: Optional AES-256-CBC encryption with your encryption key
+
+**Location of backup scripts**:
+- `templates/scripts/backup.sh.template` - Local/block storage backups
+- `templates/scripts/s3backup.sh.template` - S3-compatible storage backups with encryption
+
+#### Customizing What to Back Up
+
+Edit the backup script template before deployment to specify what to back up:
+
+```bash
+# Edit templates/scripts/s3backup.sh.template
+nano templates/scripts/s3backup.sh.template
+```
+
+**Example customizations**:
+
+1. **Back up a PostgreSQL database**:
+   ```bash
+   # Uncomment and customize in the script:
+   pg_dump -h localhost -U myapp_user myapp_db | gzip > "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
+   ```
+
+2. **Back up a MySQL/MariaDB database**:
+   ```bash
+   # Uncomment and customize in the script:
+   mysqldump -u myapp_user -p'password' myapp_db | gzip > "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
+   ```
+
+3. **Back up multiple directories**:
+   ```bash
+   # Add to the script:
+   tar -czf "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" \
+     /var/www/html \
+     /opt/myapp/data \
+     /opt/myapp/config
+   ```
+
+4. **Back up Docker volumes**:
+   ```bash
+   # Add to the script:
+   docker run --rm -v myapp_data:/data -v ${LOCAL_BACKUP_DIR}:/backup \
+     alpine tar -czf /backup/${BACKUP_NAME} /data
+   ```
+
+5. **Custom application backup**:
+   ```bash
+   # Add your application's backup command:
+   /opt/myapp/bin/backup --output "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
+   ```
+
+After customizing, regenerate configs:
+```bash
+./scripts/generate-configs.sh
+```
+
+#### Backup Schedule and Automation
+
+Configure backup timing in `templates/defaults.env`:
+
+```bash
+# Backup schedule (cron format)
+BACKUP_SCHEDULE="0 2 * * *"  # Daily at 2 AM (default)
+
+# Other examples:
+# BACKUP_SCHEDULE="0 */6 * * *"    # Every 6 hours
+# BACKUP_SCHEDULE="0 3 * * 0"      # Weekly on Sunday at 3 AM
+# BACKUP_SCHEDULE="0 1 1 * *"      # Monthly on 1st at 1 AM
+```
+
+The backup runs automatically via cron. To manually trigger a backup:
+
+```bash
+# On the server
+sudo /opt/polyserver/scripts/s3backup.sh
+```
+
+#### Backup Retention and Rotation
+
+Configure how long backups are kept in `templates/defaults.env`:
+
+```bash
+# Retention settings (in days)
+BACKUP_RETENTION_DAYS=30  # Default: 30 days
+
+# Different retention for local vs S3 (optional):
+LOCAL_RETENTION=7   # Keep local backups for 7 days
+S3_RETENTION=90     # Keep S3 backups for 90 days (longer term)
+```
+
+**How rotation works**:
+
+1. **Automatic cleanup**: Old backups are automatically deleted when they exceed the retention period
+2. **Local backups**: Cleaned up using `find -mtime` (based on file modification time)
+3. **S3 backups**: Cleaned up using S3 API (based on LastModified date)
+4. **Retention check**: Runs after each backup to remove old files
+
+**Example retention strategy**:
+```bash
+# Keep local backups short (save disk space)
+LOCAL_RETENTION=7
+
+# Keep S3 backups longer (they're cheap)
+S3_RETENTION=90
+
+# With daily backups:
+# - Local: ~7 backups on disk
+# - S3: ~90 backups in object storage
+```
+
+#### Backup Encryption
+
+Backups can be encrypted with AES-256-CBC:
+
+```bash
+# In templates/defaults.env:
+BACKUP_ENCRYPTION_KEY=$(openssl rand -base64 32)
+
+# Or set your own key:
+BACKUP_ENCRYPTION_KEY="your-strong-encryption-key-here"
+```
+
+**IMPORTANT**: Store your encryption key securely outside the server! Without it, encrypted backups cannot be restored.
+
+**To restore an encrypted backup**:
+```bash
+# Decrypt the backup
+openssl enc -d -aes-256-cbc -in backup.tar.gz -out backup_decrypted.tar.gz \
+  -pass "pass:your-encryption-key"
+
+# Extract
+tar -xzf backup_decrypted.tar.gz
+```
+
+#### Monitoring Backups
+
+Check backup status and logs:
+
+```bash
+# View recent backup logs
+ls -lh /opt/polyserver/backups/*.log | tail -5
+
+# View last backup log
+tail -50 /opt/polyserver/backups/backup_*.log | tail -50
+
+# Check S3 backups
+aws s3 ls s3://your-bucket/your-prefix/ --region your-region
+
+# Count local backups
+ls -1 /opt/polyserver/backups/*.tar.gz | wc -l
+```
+
+The backup script logs:
+- Backup creation time and size
+- Upload status to S3
+- Cleanup operations (old backups deleted)
+- Any errors encountered
+
 #### Organization Strategy for Company-Wide Storage
 
 For a company-wide object storage strategy, we recommend:
