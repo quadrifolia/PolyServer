@@ -4815,6 +4815,40 @@ else
     echo "🐳 Docker mode: skipping swap configuration"
 fi
 
+# ========= Disable Transparent Huge Pages =========
+if [ "$DOCKER_MODE" = "false" ]; then
+    echo "===== 10.7 Disabling Transparent Huge Pages (THP) ====="
+
+    # THP can cause latency spikes and memory bloat for web servers, databases, and containers
+    # Recommended to disable for: Redis, MongoDB, PostgreSQL, PHP-FPM, Docker workloads
+
+    # Create systemd service to disable THP at boot
+    cat > /etc/systemd/system/disable-thp.service << 'EOF'
+[Unit]
+Description=Disable Transparent Huge Pages (THP)
+Documentation=https://www.kernel.org/doc/html/latest/admin-guide/mm/transhuge.html
+After=sysinit.target local-fs.target
+Before=mongod.service redis.service postgresql.service mariadb.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c "echo never > /sys/kernel/mm/transparent_hugepage/enabled"
+ExecStart=/bin/sh -c "echo never > /sys/kernel/mm/transparent_hugepage/defrag"
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Enable and start the service
+    docker_systemctl daemon-reload
+    docker_systemctl enable disable-thp.service
+    docker_systemctl start disable-thp.service
+
+    echo "✅ Transparent Huge Pages disabled (prevents latency spikes and memory bloat)"
+else
+    echo "🐳 Docker mode: skipping THP configuration"
+fi
+
 # ========= Additional security hardening =========
 echo "===== 11. Additional security hardening ====="
 
