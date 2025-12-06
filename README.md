@@ -13,7 +13,7 @@ This repository provides a comprehensive, security-hardened Debian server founda
   - [Step 1: Local Setup and Configuration](#step-1-local-setup-and-configuration)
   - [Step 2: Server Provisioning](#step-2-server-provisioning)
   - [Step 3: Deploy and Run Server Hardening](#step-3-deploy-and-run-server-hardening)
-  - [Step 4: Deploy Base Configuration](#step-4-deploy-base-configuration)
+  - [Step 4: Run Server Hardening](#step-4-run-server-hardening)
 - [Specialized Server Deployments](#specialized-server-deployments)
   - [Bastion Host Setup](#bastion-host-setup)
   - [MariaDB Dedicated Server](#mariadb-dedicated-server)
@@ -184,7 +184,6 @@ polyserver/
 │   ├── systemd/                         # System service templates
 │   │   └── application.service.template
 │   └── unbound/                         # DNS resolver templates
-│       ├── dhclient.conf.template
 │       └── local.conf.template
 ├── config/                              # Generated configuration files (git-ignored)
 │   └── [generated from templates/]     # Output directory for processed templates
@@ -387,12 +386,11 @@ PolyServer provides flexible SSH authentication configuration:
 
    **Netdata Cloud Integration (Optional):**
    For centralized monitoring across multiple servers:
-   
+
    ```bash
    # Enable Netdata with Cloud integration
    NETDATA_ENABLED=true
    NETDATA_CLAIM_TOKEN=your_claim_token_from_netdata_cloud
-   NETDATA_CLAIM_ROOMS=your_room_id_from_netdata_cloud
    ```
 
    **Email Configuration (Recommended):**
@@ -449,47 +447,69 @@ PolyServer provides flexible SSH authentication configuration:
 
 **Run from your local machine:**
 
-1. **Upload the generated hardening script and configuration to your server:**
-
-   ```bash
-   # Copy the customized script to your server
-   scp config/server-setup.sh root@your-server-ip:/root/
-
-   # Copy the environment configuration (for advanced settings during setup)
-   ssh root@your-server-ip "mkdir -p /opt/polyserver/config"
-   scp templates/defaults.env root@your-server-ip:/opt/polyserver/config/
-   ```
-
-2. **SSH to your server and run the hardening script:**
-
-   ```bash
-   # Connect to your server
-   ssh root@your-server-ip
-   
-   # Run the hardening script (already executable)
-   /root/server-setup.sh
-   ```
-
-   **The script will automatically:**
-   - Update and secure the base Debian system
-   - Install and configure all security tools
-   - Set up monitoring and logging systems
-   - Configure DSGVO/GDPR compliance framework
-   - Harden network and system access
-   - Change SSH port to 2222 (reconnect using this port afterward)
-
-### Step 4: Deploy Base Configuration
-
-**Run from your local machine after server hardening:**
-
-Deploy the generated configuration to your hardened server:
+Deploy all configuration files to your server using the unified deployment script:
 
 ```bash
-# Deploy base configuration to server (note the new SSH port)
-./scripts/deploy-unified.sh templates/defaults.env deploy your-server-ip 2222
+# Basic deployment (uses defaults from templates/defaults.env)
+./scripts/deploy-unified.sh --host your-server-ip
+
+# Or with custom options
+./scripts/deploy-unified.sh \
+  --host your-server-ip \
+  --user root \
+  --port 22 \
+  --env-file templates/defaults.env \
+  --identity ~/.ssh/id_ed25519
 ```
 
-**Note:** After step 3, SSH access will be on port 2222, and you'll connect as the `deploy` user, not root.
+**SSH Key Authentication:**
+
+The deployment script supports SSH key authentication with the `-i` flag. If your SSH key is not automatically selected:
+
+```bash
+# Specify your SSH key explicitly
+./scripts/deploy-unified.sh \
+  --host your-server-ip \
+  --identity ~/.ssh/id_ed25519
+
+# Or add your key to the SSH agent for automatic selection
+ssh-add ~/.ssh/id_ed25519
+./scripts/deploy-unified.sh --host your-server-ip
+```
+
+**What gets deployed:**
+- Environment configuration (`defaults.env`) → `/opt/polyserver/config/`
+- Server setup script (`server-setup.sh`) → `/opt/polyserver/config/`
+- Nginx configurations → `/opt/polyserver/config/nginx/`
+- Backup scripts → `/opt/polyserver/scripts/`
+- Audit configurations (if enabled) → `/opt/polyserver/config/audit/`
+- Unbound DNS configurations (if enabled) → `/opt/polyserver/config/unbound/`
+
+### Step 4: Run Server Hardening
+
+**SSH to your server and run the hardening script:**
+
+```bash
+# Connect to your server
+ssh root@your-server-ip
+
+# Navigate to the config directory
+cd /opt/polyserver/config
+
+# Run the hardening script (reads settings from defaults.env)
+sudo bash server-setup.sh
+```
+
+**The script will automatically:**
+- Read all configuration from `/opt/polyserver/config/defaults.env`
+- Update and secure the base Debian system
+- Install and configure all security tools
+- Set up monitoring and logging systems
+- Configure DSGVO/GDPR compliance framework
+- Harden network and system access
+- Change SSH port to 2222 (reconnect using this port afterward)
+
+**Important:** After the script completes, SSH will be on port 2222 and you'll connect as the `deploy` user (not root).
 
 ## Specialized Server Deployments
 
@@ -963,9 +983,8 @@ Bastion hosts can optionally include Netdata monitoring for enhanced visibility:
 # Enable Netdata during bastion setup by setting:
 export INSTALL_NETDATA=true
 
-# Or configure Netdata Cloud integration with environment variables:
+# Or configure Netdata Cloud integration with environment variable:
 export NETDATA_CLAIM_TOKEN=your_claim_token
-export NETDATA_CLAIM_ROOMS=your_room_id
 ```
 
 **Bastion Monitoring Benefits:**
@@ -1088,10 +1107,14 @@ echo "DEPLOYMENT_MODE=docker" >> templates/defaults.env
 # 2. Generate Docker-optimized configs
 ./scripts/generate-configs.sh
 
-# 3. Deploy hardened server with Docker support
-./scripts/deploy-unified.sh templates/defaults.env deploy server.example.com 2222
+# 3. Deploy configuration to server
+./scripts/deploy-unified.sh --host server.example.com
 
-# 4. Create application Docker Compose file
+# 4. SSH to server and run server-setup.sh
+ssh root@server.example.com
+cd /opt/polyserver/config && sudo bash server-setup.sh
+
+# 5. Create application Docker Compose file
 cat > docker-compose.yml << EOF
 version: '3.8'
 services:
@@ -1124,10 +1147,14 @@ echo "DEPLOYMENT_MODE=baremetal" >> templates/defaults.env
 # 2. Generate bare metal optimized configs
 ./scripts/generate-configs.sh
 
-# 3. Deploy hardened server
-./scripts/deploy-unified.sh templates/defaults.env deploy server.example.com 2222
+# 3. Deploy configuration to server
+./scripts/deploy-unified.sh --host server.example.com
 
-# 4. Deploy React application directly
+# 4. SSH to server and run server-setup.sh
+ssh root@server.example.com
+cd /opt/polyserver/config && sudo bash server-setup.sh
+
+# 5. Deploy React application directly
 npm run build
 pm2 start ecosystem.config.js
 ```
@@ -1912,7 +1939,7 @@ ssh -L 19999:localhost:19999 -p 2222 deploy@your-server-ip
 ```
 
 **Netdata Cloud (Centralized Monitoring)**:
-- **Automatic Setup**: Configure `NETDATA_CLAIM_TOKEN` and `NETDATA_CLAIM_ROOMS` in your environment for automatic registration
+- **Automatic Setup**: Configure `NETDATA_CLAIM_TOKEN` in your environment for automatic registration
 - **Manual Setup**: Use the detailed instructions provided during server setup
 - **Mobile App**: Access your servers via Netdata Cloud mobile app
 - **Team Collaboration**: Share dashboards, alerts, and insights across team members
@@ -1931,11 +1958,10 @@ To set up Netdata Cloud integration after deployment:
    ```bash
    # Connect to your server
    ssh -p 2222 deploy@your-server-ip
-   
-   # Claim the node to Netdata Cloud
+
+   # Claim the node to Netdata Cloud (token is required, rooms are optional)
    sudo /opt/netdata/bin/netdata-claim.sh \
      -token=YOUR_CLAIM_TOKEN \
-     -rooms=YOUR_ROOM_ID \
      -url=https://app.netdata.cloud
    ```
 
