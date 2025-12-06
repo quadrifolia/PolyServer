@@ -2055,10 +2055,11 @@ FixStaleSocket true
 LocalSocketGroup clamav
 LocalSocketMode 666
 
-# Resource-balanced configuration for application servers
-MaxThreads 2
+# Resource-balanced configuration for web upload scanning
+# Optimized for low resource usage on shared web/app servers
+MaxThreads 1
 MaxConnectionQueueLength 10
-MaxQueue 100
+MaxQueue 50
 
 # Optimize scanning performance vs resources
 ReadTimeout 180
@@ -2100,7 +2101,7 @@ LogVerbose false
 # Network and detection settings
 SelfCheck 3600
 DatabaseDirectory /var/lib/clamav
-OfficialDatabaseOnly false
+OfficialDatabaseOnly true
 Foreground false
 Debug false
 
@@ -2111,11 +2112,11 @@ LeaveTemporaryFiles false
 DetectPUA false
 CrossFilesystems true
 
-# Heuristic settings - balanced approach
+# Heuristic settings - optimized for resource usage
 AlgorithmicDetection true
-Bytecode true
+Bytecode false
 BytecodeSecurity TrustSigned
-BytecodeTimeout 60000
+BytecodeTimeout 30000
 
 # Enhanced detection for production servers
 PhishingSignatures true
@@ -2157,8 +2158,8 @@ NotifyClamd /etc/clamav/clamd.conf
 # Test database before loading
 TestDatabases yes
 
-# Bytecode updates
-Bytecode true
+# Bytecode updates (disabled for resource savings)
+Bytecode false
 EOF
 
     # Create systemd resource limits for ClamAV services
