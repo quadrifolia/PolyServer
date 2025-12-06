@@ -1169,47 +1169,115 @@ pm2 start ecosystem.config.js
 
 ## DSGVO/GDPR Compliance
 
-This repository includes a comprehensive DSGVO/GDPR compliance toolkit for ensuring your server deployments meet data protection requirements, regardless of the application type.
+**⚠️ OPTIONAL**: This section is only relevant if you need to comply with EU data protection regulations (DSGVO/GDPR). Skip this if you don't process EU personal data.
 
-### Compliance Documentation
+This repository includes a comprehensive DSGVO/GDPR compliance toolkit that helps you meet data protection requirements by providing:
+- **Documentation templates** for required GDPR records
+- **Incident response scripts** for handling data breaches
+- **Compliance verification tools** to check your setup
+- **Data subject request handlers** for GDPR rights (access, deletion, etc.)
 
-- **DSGVO.md**: Main compliance guide covering breach procedures, notification requirements, and documentation templates
-- **DSGVO-TOOLS.md**: Overview of all DSGVO/GDPR tools and usage instructions
-- **Templates**:
-  - **processing-activities-record.md**: Template for Article 30 records of processing activities
-  - **processing_records.md.template**: Detailed documentation of data processing activities
-  - **retention_policy.md.template**: Data retention policy template
-  - **deletion_procedures.md.template**: Procedures for secure data deletion
-  - **subject_request_procedures.md.template**: Procedures for handling data subject requests
+### What It Does
 
-### Compliance Scripts
+The DSGVO compliance toolkit provides ready-to-use templates and tools for:
 
-- **breach-response-checklist.sh**: Interactive script for guiding through data breach response
-- **collect-forensics.sh**: Comprehensive forensic evidence collection during security incidents
-- **dsgvo-compliance-check.sh**: Automated verification of GDPR compliance status
-- **data-subject-request.sh**: Interactive tool for handling data subject requests
-- **setup-dsgvo.sh**: Automation script for setting up the DSGVO/GDPR compliance environment
+1. **Article 30 Records**: Documentation of data processing activities (legally required)
+2. **Data Breach Response**: Step-by-step procedures and automated forensic collection
+3. **Data Subject Requests**: Handle access, deletion, and portability requests
+4. **Retention Policies**: Document how long you keep data and why
+5. **Compliance Verification**: Automated checks of your GDPR compliance status
 
-### Compliance Setup
+### Available Documentation Templates
 
-To set up the DSGVO/GDPR compliance toolkit:
+Located in `templates/dsgvo/`:
+- **processing-activities-record.md**: Article 30 record of processing activities
+- **processing_records.md.template**: Detailed data processing documentation
+- **retention_policy.md.template**: Data retention policy
+- **deletion_procedures.md.template**: Secure data deletion procedures
+- **subject_request_procedures.md.template**: Data subject request handling
+- **contacts.conf.template**: DPO and data controller contact information
 
-```bash
-# Make the setup script executable
-chmod +x scripts/setup-dsgvo.sh
+### Available Compliance Scripts
 
-# Run the setup script
-sudo ./scripts/setup-dsgvo.sh
-```
+Located in `scripts/`:
+- **breach-response-checklist.sh**: Interactive data breach response guide
+- **collect-forensics.sh**: Automated forensic evidence collection
+- **dsgvo-compliance-check.sh**: Verify GDPR compliance status
+- **data-subject-request.sh**: Handle data access/deletion requests
+- **setup-dsgvo.sh**: Install all DSGVO files on the server
 
-The setup script will:
-1. Create necessary directories in `/etc/dsgvo/` and `/opt/polyserver/`
-2. Install all configuration templates and scripts
-3. Configure log files and appropriate permissions
-4. Set up scheduled compliance checks
-5. Provide guidance for next steps
+### When and Where to Set Up
 
-For more information, see the [DSGVO-TOOLS.md](./DSGVO-TOOLS.md) documentation.
+**IMPORTANT**: The DSGVO toolkit is installed **ON THE SERVER** after the base server setup is complete.
+
+#### Installation Process
+
+1. **Complete base server setup first** (Steps 1-4 from Base Server Setup Process above)
+
+2. **Copy the setup script to your server**:
+   ```bash
+   # From your local machine
+   scp -P 2222 scripts/setup-dsgvo.sh deploy@your-server-ip:/tmp/
+   ```
+
+3. **SSH to your server and run the setup**:
+   ```bash
+   # Connect to your server
+   ssh -p 2222 deploy@your-server-ip
+
+   # Run the DSGVO setup script (requires sudo)
+   sudo bash /tmp/setup-dsgvo.sh
+   ```
+
+#### What Gets Installed
+
+The setup script installs files on the server:
+
+**Configuration files** → `/etc/dsgvo/`:
+- `contacts.conf` - DPO contact information
+- `data_inventory.json` - Inventory of processed data
+- `processing_records.md` - Processing activity records
+- `retention_policy.md` - Data retention policy
+- `deletion_procedures.md` - Deletion procedures
+- `subject_request_procedures.md` - Subject request handling
+
+**Scripts** → `/opt/polyserver/scripts/`:
+- `breach-response-checklist.sh` - Breach response guide
+- `collect-forensics.sh` - Forensic collection
+- `dsgvo-compliance-check.sh` - Compliance checker
+- `data-subject-request.sh` - Request handler
+
+**Log directories** → `/var/log/`:
+- `/var/log/dsgvo/` - Compliance logs
+- `/var/log/security/incidents/` - Security incident logs
+
+#### After Installation
+
+1. **Customize the templates** with your organization's information:
+   ```bash
+   # Edit the templates on the server
+   sudo nano /etc/dsgvo/contacts.conf
+   sudo nano /etc/dsgvo/processing_records.md
+   # ... edit other files as needed
+   ```
+
+2. **Use the compliance tools** as needed:
+   ```bash
+   # Check compliance status
+   sudo /opt/polyserver/scripts/dsgvo-compliance-check.sh
+
+   # Handle a data subject request
+   sudo /opt/polyserver/scripts/data-subject-request.sh
+
+   # Respond to a data breach
+   sudo /opt/polyserver/scripts/breach-response-checklist.sh
+   ```
+
+### Detailed Documentation
+
+For complete information on DSGVO compliance requirements, procedures, and tool usage, see:
+- **[DSGVO.md](./DSGVO.md)**: Main compliance guide with breach procedures and notification requirements
+- **[DSGVO-TOOLS.md](./DSGVO-TOOLS.md)**: Detailed overview of all tools and their usage
 
 ## Base Server Features
 
