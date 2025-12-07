@@ -72,7 +72,7 @@ render_template() {
     # Read value from environment (ENV_FILE has been sourced above)
     # Use indirect expansion via eval but with proper quoting
     local val=""
-    if eval "[ -n \"\${${var}+x}\" ]"; then
+    if eval "declare -p ${var} >/dev/null 2>&1"; then
       # Variable is set, get its value
       val="$(eval "echo \"\$${var}\"")"
     fi

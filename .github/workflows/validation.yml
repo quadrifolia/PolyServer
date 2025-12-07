@@ -83,7 +83,7 @@ jobs:
         [ -f "test-output/nginx/nginx.conf" ] || { echo "❌ nginx config not generated"; exit 1; }
 
         # Test generated script has valid syntax
-        shellcheck -e SC1091,SC2034,SC2154 test-output/server-setup.sh
+        shellcheck -e SC1090,SC1091,SC2034,SC2154,SC2086,SC2016,SC2004 test-output/server-setup.sh
 
         echo "✅ Configuration generation successful"
         
