@@ -5800,7 +5800,8 @@ log_message() {
 # Function to check CPU usage
 check_cpu_usage() {
     # Find processes using high CPU for sustained periods
-    ps aux --sort=-%cpu | awk 'NR>1 {print $2, $3, $10, $11}' | head -10 | while read -r pid cpu_percent time_col command; do
+    # Limit in awk to avoid broken pipe errors from head
+    ps aux --sort=-%cpu | awk 'NR>1 && NR<=11 {print $2, $3, $10, $11}' | while read -r pid cpu_percent time_col command; do
         if ! echo "$command" | grep -qE "$CRITICAL_PROCESSES"; then
             if (( $(echo "$cpu_percent > $HIGH_CPU_THRESHOLD" | bc -l) )); then
                 # Convert time to seconds for comparison
@@ -5859,7 +5860,8 @@ check_memory_usage() {
         log_message "CRITICAL: Memory usage at ${memory_usage}% - emergency cleanup"
         
         # Emergency: kill highest memory non-critical processes
-        ps aux --sort=-%mem | awk 'NR>1 {print $2, $4, $11}' | head -5 | while read -r pid mem_percent command; do
+        # Limit in awk to avoid broken pipe errors from head
+        ps aux --sort=-%mem | awk 'NR>1 && NR<=6 {print $2, $4, $11}' | while read -r pid mem_percent command; do
             if ! echo "$command" | grep -qE "$CRITICAL_PROCESSES"; then
                 if (( $(echo "$mem_percent > 15" | bc -l) )); then
                     log_message "EMERGENCY: Killing high-memory process: PID=$pid CMD=$command MEM=${mem_percent}%"

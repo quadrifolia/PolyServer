@@ -6276,7 +6276,8 @@ To prevent: kill \$pid or systemctl stop [service]" | mail -s "BASTION WARNING: 
                 log_message "INFO: High CPU process \$pid (\$command) is whitelisted - skipping"
             fi
         fi
-    done < <(ps aux --sort=-%cpu | awk 'NR>1 && \$3>0 {print \$2, \$3, \$11}' | head -10)
+    # Limit in awk to avoid broken pipe errors from head
+    done < <(ps aux --sort=-%cpu | awk 'NR>1 && NR<=11 && \$3>0 {print \$2, \$3, \$11}')
 }
 
 # Function to check memory usage
@@ -6289,7 +6290,8 @@ check_memory_usage() {
         log_message "CRITICAL: Memory usage at \${memory_usage}% - taking emergency action"
         
         # Find biggest memory consumers (excluding critical processes)
-        ps aux --sort=-%mem | awk 'NR>1 {print \$2, \$4, \$11}' | head -5 | while read -r pid mem_percent command; do
+        # Limit in awk to avoid broken pipe errors from head
+        ps aux --sort=-%mem | awk 'NR>1 && NR<=6 {print \$2, \$4, \$11}' | while read -r pid mem_percent command; do
             if ! echo "\$command" | grep -qE "\$CRITICAL_PROCESSES"; then
                 if (( \$(echo "\$mem_percent > 10" | bc -l) )); then
                     log_message "EMERGENCY: Killing high-memory process: PID=\$pid CMD=\$command MEM=\${mem_percent}%"
@@ -6348,7 +6350,8 @@ check_disk_io() {
     # Simple check using iotop if available
     if command -v iotop >/dev/null 2>&1; then
         # Get processes with high I/O (simplified check)
-        local high_io_procs=\$(iotop -a -o -d 1 -n 1 2>/dev/null | grep -v TOTAL | awk '\$4+\$6 > 1000 {print \$2, \$4+\$6, \$NF}' | head -3)
+        # Limit in awk to avoid broken pipe errors from head
+        local high_io_procs=\$(iotop -a -o -d 1 -n 1 2>/dev/null | grep -v TOTAL | awk '\$4+\$6 > 1000 && ++count<=3 {print \$2, \$4+\$6, \$NF}')
         
         if [ -n "\$high_io_procs" ]; then
             log_message "High I/O processes detected:"
