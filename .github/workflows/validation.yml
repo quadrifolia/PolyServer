@@ -74,17 +74,17 @@ jobs:
     - name: Test configuration generation
       run: |
         echo "🔧 Testing configuration generation..."
-        
-        # Test basic generation
-        ./scripts/generate-configs.sh templates/defaults.env test-output/
-        
+
+        # Test basic generation (use .example file)
+        ./scripts/generate-configs.sh templates/defaults.env.example test-output/
+
         # Verify key files were generated
         [ -f "test-output/server-setup.sh" ] || { echo "❌ server-setup.sh not generated"; exit 1; }
         [ -f "test-output/nginx/nginx.conf" ] || { echo "❌ nginx config not generated"; exit 1; }
-        
+
         # Test generated script has valid syntax
         shellcheck -e SC1091,SC2034,SC2154 test-output/server-setup.sh
-        
+
         echo "✅ Configuration generation successful"
         
     - name: Security checks
@@ -111,7 +111,7 @@ jobs:
         echo "📋 Checking required files exist..."
         
         required_files=(
-          "templates/defaults.env"
+          "templates/defaults.env.example"
           "scripts/generate-configs.sh"
           "templates/server-setup.sh.template"
           "templates/nginx/nginx-docker.conf.template"
@@ -142,17 +142,17 @@ jobs:
         
         # Test Docker mode
         echo "DEPLOYMENT_MODE=docker" > test-docker.env
-        grep -v "^DEPLOYMENT_MODE=" templates/defaults.env >> test-docker.env
+        grep -v "^DEPLOYMENT_MODE=" templates/defaults.env.example >> test-docker.env
         ./scripts/generate-configs.sh test-docker.env docker-output/
-        
+
         # Verify Docker-specific configs
-        grep -q "upstream backend" docker-output/nginx/nginx.conf || { 
-          echo "❌ Docker mode upstream config missing"; exit 1; 
+        grep -q "upstream backend" docker-output/nginx/nginx.conf || {
+          echo "❌ Docker mode upstream config missing"; exit 1;
         }
-        
+
         # Test Bare Metal mode
         echo "DEPLOYMENT_MODE=baremetal" > test-baremetal.env
-        grep -v "^DEPLOYMENT_MODE=" templates/defaults.env >> test-baremetal.env
+        grep -v "^DEPLOYMENT_MODE=" templates/defaults.env.example >> test-baremetal.env
         ./scripts/generate-configs.sh test-baremetal.env baremetal-output/
         
         # Verify both modes generated valid configs
