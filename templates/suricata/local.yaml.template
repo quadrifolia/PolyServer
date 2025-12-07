@@ -123,23 +123,9 @@ rule-files:
   - suricata.rules
   - application-custom.rules
 
-# Additional custom rules for Application server security
-# Rules will be written to application-custom.rules
-custom-rules: |
-  # Alert on potential SQL injection attempts to Application
-  alert http $EXTERNAL_NET any -> $HOME_NET any (msg:"APPLICATION SQL Injection Attempt"; flow:established,to_server; http.method; content:"POST"; http.uri; content:"/api/dataset"; nocase; pcre:"/(\%27)|(\')|(\-\-)|(%23)|(#)/i"; classtype:web-application-attack; sid:3000001; rev:1;)
-  
-  # Alert on possible brute force attempts against Application
-  alert http $EXTERNAL_NET any -> $HOME_NET any (msg:"APPLICATION Authentication Brute Force Attempt"; flow:established,to_server; http.method; content:"POST"; http.uri; content:"/api/session"; threshold:type threshold, track by_src, count 5, seconds 60; classtype:attempted-admin; sid:3000002; rev:1;)
-  
-  # Alert on unauthorized API access attempts
-  alert http $EXTERNAL_NET any -> $HOME_NET any (msg:"APPLICATION Unauthorized API Access Attempt"; flow:established,to_server; http.method; content:"GET"; http.uri; content:"/api/"; http.response.status:401; threshold:type threshold, track by_src, count 3, seconds 60; classtype:attempted-recon; sid:3000003; rev:1;)
-  
-  # Alert on file download activity (potential data exfiltration)
-  alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"APPLICATION Data Export"; flow:established,to_client; http.method; content:"GET"; http.uri; content:"/api/card/"; content:"/query/csv"; distance:0; classtype:policy-violation; sid:3000004; rev:1;)
-  
-  # Alert on database connection attempts from unexpected sources
-  alert tcp $EXTERNAL_NET any -> $SQL_SERVERS $DB_PORTS (msg:"APPLICATION Unauthorized Database Connection Attempt"; flow:established,to_server; threshold:type threshold, track by_src, count 5, seconds 60; classtype:attempted-admin; sid:3000005; rev:1;)
-  
-  # Alert on port scans against server
-  alert tcp $EXTERNAL_NET any -> $HOME_NET any (msg:"APPLICATION Port Scan Detected"; flow:established; flags:S; threshold:type threshold, track by_src, count 5, seconds 10; classtype:attempted-recon; sid:3000006; rev:1;)
+# Application-specific rules are in application-custom.rules
+# Rules have been updated to reduce false positives:
+# - Increased authentication brute force threshold (5 -> 20 requests)
+# - Added SQL injection, XSS, and directory traversal detection
+# - Added scanner detection via User-Agent strings
+# - Port scan detection based on SYN flags, not established connections

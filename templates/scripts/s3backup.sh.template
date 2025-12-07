@@ -15,11 +15,18 @@ LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-{{DEPLOY_DIR}}/backups}"
 DATA_DIR="${DATA_DIR:-{{DEPLOY_DIR}}/data}"
 APPLICATION_NAME="${APPLICATION_NAME:-application}"
 
-# S3 settings
+# S3-Compatible Object Storage settings
 S3_BUCKET="${S3_BUCKET:-{{S3_BUCKET}}}"
 S3_PREFIX="${S3_PREFIX:-{{S3_PREFIX}}}"
-S3_ENDPOINT="${S3_ENDPOINT:-https://s3.{{S3_REGION}}.cloud.ovh.net}"
 S3_REGION="${S3_REGION:-{{S3_REGION}}}"
+
+# S3 Endpoint (provider-specific)
+# If S3_ENDPOINT is not set, will default to AWS S3 standard endpoint
+if [ -n "{{S3_ENDPOINT}}" ] && [ "{{S3_ENDPOINT}}" != "{{S3""_ENDPOINT}}" ]; then
+  S3_ENDPOINT="{{S3_ENDPOINT}}"
+else
+  S3_ENDPOINT="${S3_ENDPOINT:-}"
+fi
 
 # Retention settings (days to keep backups)
 LOCAL_RETENTION="${LOCAL_RETENTION:-{{BACKUP_RETENTION_DAYS}}}"
@@ -36,17 +43,28 @@ log() {
 }
 
 check_s3_configured() {
-  if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
-    log "ERROR: AWS credentials not configured. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in your environment"
+  # Support both generic S3_* names and AWS_* names for backwards compatibility
+  # Export as AWS_* since the AWS CLI requires these specific names
+  if [ -n "${S3_ACCESS_KEY_ID:-}" ]; then
+    export AWS_ACCESS_KEY_ID="${S3_ACCESS_KEY_ID}"
+  fi
+  if [ -n "${S3_SECRET_ACCESS_KEY:-}" ]; then
+    export AWS_SECRET_ACCESS_KEY="${S3_SECRET_ACCESS_KEY}"
+  fi
+
+  # Check if credentials are set (either via S3_* or AWS_* variables)
+  if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+    log "ERROR: S3 credentials not configured. Set S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY"
+    log "       (or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY for backwards compatibility)"
     return 1
   fi
-  
+
   # Check if AWS CLI is installed
   if ! command -v aws &> /dev/null; then
     log "ERROR: AWS CLI not installed. Please install with: apt-get install -y awscli"
     return 1
   fi
-  
+
   return 0
 }
 
@@ -95,22 +113,27 @@ fi
 BACKUP_SIZE=$(du -h "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" | cut -f1)
 log "Backup created: ${BACKUP_NAME} (${BACKUP_SIZE})"
 
-# ========= Upload to S3 Object Storage =========
+# ========= Upload to S3-Compatible Object Storage =========
 if check_s3_configured; then
-  log "Uploading backup to OVH Object Storage"
-  
-  # Set S3 endpoint for OVH
-  aws configure set default.s3.endpoint_url "${S3_ENDPOINT}"
-  
-  # Check if bucket exists, create if it doesn't
-  if ! aws s3 ls "s3://${S3_BUCKET}" --region "${S3_REGION}" &>/dev/null; then
-    log "Creating S3 bucket: ${S3_BUCKET}"
-    aws s3 mb "s3://${S3_BUCKET}" --region "${S3_REGION}"
+  log "Uploading backup to S3-compatible object storage"
+
+  # Configure AWS CLI with custom endpoint if specified
+  AWS_OPTS=""
+  if [ -n "${S3_ENDPOINT}" ]; then
+    log "Using custom S3 endpoint: ${S3_ENDPOINT}"
+    aws configure set default.s3.endpoint_url "${S3_ENDPOINT}"
+    AWS_OPTS="--endpoint-url ${S3_ENDPOINT}"
   fi
-  
+
+  # Check if bucket exists, create if it doesn't
+  if ! aws s3 ls "s3://${S3_BUCKET}" --region "${S3_REGION}" ${AWS_OPTS} &>/dev/null; then
+    log "Creating S3 bucket: ${S3_BUCKET}"
+    aws s3 mb "s3://${S3_BUCKET}" --region "${S3_REGION}" ${AWS_OPTS}
+  fi
+
   # Upload backup file
   aws s3 cp "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" "s3://${S3_BUCKET}/${S3_PREFIX}/${BACKUP_NAME}" \
-    --region "${S3_REGION}"
+    --region "${S3_REGION}" ${AWS_OPTS}
   
   if [ $? -eq 0 ]; then
     log "Backup uploaded to s3://${S3_BUCKET}/${S3_PREFIX}/${BACKUP_NAME}"
@@ -121,24 +144,24 @@ if check_s3_configured; then
   # Cleanup old backups in S3
   if [ -n "$S3_RETENTION" ] && [ "$S3_RETENTION" -gt 0 ]; then
     log "Cleaning up S3 backups older than ${S3_RETENTION} days"
-    
+
     # Get list of backups older than retention period
     RETENTION_DATE=$(date -d "-${S3_RETENTION} days" +"%Y-%m-%d")
-    
+
     # List objects and filter by date
     aws s3api list-objects-v2 --bucket "${S3_BUCKET}" --prefix "${S3_PREFIX}/" \
-      --region "${S3_REGION}" --query "Contents[?LastModified<='${RETENTION_DATE}'].Key" \
+      --region "${S3_REGION}" ${AWS_OPTS} --query "Contents[?LastModified<='${RETENTION_DATE}'].Key" \
       --output text | while read -r KEY; do
-      
+
       if [ -n "$KEY" ]; then
         log "Deleting old S3 backup: ${KEY}"
-        aws s3 rm "s3://${S3_BUCKET}/${KEY}" --region "${S3_REGION}"
+        aws s3 rm "s3://${S3_BUCKET}/${KEY}" --region "${S3_REGION}" ${AWS_OPTS}
       fi
     done
   fi
   
   # Count S3 backups
-  S3_COUNT=$(aws s3 ls "s3://${S3_BUCKET}/${S3_PREFIX}/" --region "${S3_REGION}" | wc -l)
+  S3_COUNT=$(aws s3 ls "s3://${S3_BUCKET}/${S3_PREFIX}/" --region "${S3_REGION}" ${AWS_OPTS} | wc -l)
   log "S3 backups available: ${S3_COUNT}"
 else
   log "WARN: S3 not configured or AWS CLI not installed, skipping S3 upload"

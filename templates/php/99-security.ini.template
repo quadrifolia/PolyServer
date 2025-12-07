@@ -1,0 +1,39 @@
+; Security hardening for PHP
+expose_php = Off
+display_errors = Off
+display_startup_errors = Off
+log_errors = On
+error_reporting = E_ALL & ~E_DEPRECATED & ~E_STRICT
+
+; File upload security
+file_uploads = On
+upload_max_filesize = 32M
+max_file_uploads = 20
+
+; Session security (these are also set in pool config for redundancy)
+session.cookie_httponly = On
+session.cookie_secure = On
+session.use_strict_mode = On
+session.cookie_samesite = "Strict"
+
+; Prevent information disclosure
+allow_url_fopen = Off
+allow_url_include = Off
+
+; Disable dangerous functions (also set in pool config)
+disable_functions = exec,passthru,shell_exec,system,proc_open,popen,curl_exec,curl_multi_exec,parse_ini_file,show_source
+
+{{#PHP_OPCACHE_ENABLED}}
+; OPCache optimization
+opcache.enable = 1
+opcache.enable_cli = 1
+opcache.memory_consumption = 128
+opcache.interned_strings_buffer = 8
+opcache.max_accelerated_files = 10000
+opcache.revalidate_freq = 2
+opcache.fast_shutdown = 1
+opcache.enable_file_override = 1
+opcache.validate_timestamps = 1
+opcache.save_comments = 1
+opcache.load_comments = 1
+{{/PHP_OPCACHE_ENABLED}}

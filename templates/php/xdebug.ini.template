@@ -1,0 +1,17 @@
+; Xdebug configuration for development
+; Enable with: phpenmod xdebug && systemctl reload php8.4-fpm  
+; Disable with: phpdismod xdebug && systemctl reload php8.4-fpm
+
+zend_extension = xdebug
+xdebug.mode = debug
+xdebug.start_with_request = trigger
+xdebug.client_host = localhost
+xdebug.client_port = 9003
+xdebug.log = /var/log/xdebug.log
+xdebug.discover_client_host = true
+
+; Performance settings - conservative defaults
+xdebug.max_nesting_level = 256
+xdebug.var_display_max_depth = 3
+xdebug.var_display_max_children = 128
+xdebug.var_display_max_data = 512

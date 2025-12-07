@@ -43,45 +43,72 @@ if [ -z "$DEPLOYMENT_MODE" ]; then
 fi
 echo "Deployment mode: $DEPLOYMENT_MODE"
 
-# Function to replace variables in a template
+# Helper to test truthy values (true/yes/1/on)
+_is_truthy() {
+  local v="${1:-}"
+  v=$(echo "$v" | tr '[:upper:]' '[:lower:]')
+  case "$v" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Function to replace variables and handle simple Mustache-like sections in a template
 render_template() {
   local template="$1"
   local output="$2"
-  
+
   echo "Generating: $output from $template"
-  
-  # Create a temporary file with variables exported
-  local tmpfile=$(mktemp)
-  
-  # Read the template and replace all {{VARIABLE}} occurrences
+
+  # Read the template content
+  local content
   content=$(cat "$template")
-  
-  # Get all variables from the env file
+
+  # Handle conditional sections {{#VAR}} ... {{/VAR}} based on env values
+  # Collect unique section variables
+  local section_vars
+  section_vars=$(echo "$content" | grep -oE '{{#[A-Za-z0-9_]+}}' | sed 's/{{#//;s/}}//g' | sort -u || true)
+  for var in $section_vars; do
+    # Read value from environment (ENV_FILE has been sourced above)
+    # Use indirect expansion via eval but with proper quoting
+    local val=""
+    if eval "[ -n \"\${${var}+x}\" ]"; then
+      # Variable is set, get its value
+      val="$(eval "echo \"\$${var}\"")"
+    fi
+
+    if _is_truthy "$val"; then
+      # Keep contents, strip the section markers
+      content=$(echo "$content" | sed -e "s|{{#$var}}||g" -e "s|{{/$var}}||g")
+    else
+      # Remove the entire section (non-greedy across newlines)
+      content=$(perl -0777 -pe "s/{{#$var}}.*?{{\/$var}}//gs" <<< "$content")
+    fi
+  done
+
+  # Replace all {{VARIABLE}} occurrences with values from ENV_FILE
   while IFS='=' read -r key value; do
     # Skip comments and empty lines
     [[ $key =~ ^# ]] || [[ -z $key ]] && continue
-    
+
     # Remove quotes if present
     value=$(echo "$value" | sed -e 's/^"//' -e 's/"$//')
-    
+
     # Replace placeholders
     content=$(echo "$content" | sed "s|{{$key}}|$value|g")
   done < "$ENV_FILE"
-  
+
   # Write to output file
   echo "$content" > "$output"
-  rm "$tmpfile"
 }
 
 # Generate application-specific configurations as needed
 # Note: This script generates base configurations only
 # Application-specific configurations should be handled separately
 
-# Generate systemd service file if template exists
-if [ -f "${TEMPLATE_DIR}/systemd/application.service.template" ]; then
-  mkdir -p "${OUTPUT_DIR}/systemd"
-  render_template "${TEMPLATE_DIR}/systemd/application.service.template" "${OUTPUT_DIR}/systemd/application.service"
-fi
+# NOTE: systemd/application.service is application-specific, not part of base server setup
+# Applications should generate their own systemd services
+# Skipping systemd service generation for base server deployment
 
 # Generate base nginx configurations
 mkdir -p "${OUTPUT_DIR}/nginx/conf.d"
@@ -141,35 +168,22 @@ if [ -f "${TEMPLATE_DIR}/server-setup.sh.template" ]; then
   chmod +x "${OUTPUT_DIR}/server-setup.sh"
 fi
 
-# Generate monitoring configuration if templates exist
-if [ -f "${TEMPLATE_DIR}/netdata/health_alarm_notify.conf.template" ]; then
-  mkdir -p "${OUTPUT_DIR}/monitoring/netdata"
-  render_template "${TEMPLATE_DIR}/netdata/health_alarm_notify.conf.template" "${OUTPUT_DIR}/monitoring/netdata/health_alarm_notify.conf"
-fi
-
-if [ -f "${TEMPLATE_DIR}/netdata/docker.conf.template" ]; then
-  mkdir -p "${OUTPUT_DIR}/monitoring/netdata/go.d"
-  render_template "${TEMPLATE_DIR}/netdata/docker.conf.template" "${OUTPUT_DIR}/monitoring/netdata/go.d/docker.conf"
-fi
-
-if [ -f "${TEMPLATE_DIR}/netdata/health.d/cgroups.conf.template" ]; then
-  mkdir -p "${OUTPUT_DIR}/monitoring/netdata/health.d"
-  render_template "${TEMPLATE_DIR}/netdata/health.d/cgroups.conf.template" "${OUTPUT_DIR}/monitoring/netdata/health.d/cgroups.conf"
-fi
+# NOTE: Netdata monitoring configurations are managed by server-setup.sh during installation
+# These templates are not deployed via deploy-unified.sh as Netdata installs its own configs
+# Skipping Netdata config generation for base server deployment
 
 # Generate Unbound configuration if enabled
 if [ "${UNBOUND_ENABLED:-false}" = "true" ]; then
   echo "Generating Unbound DNS cache configurations..."
-  
+
   # Generate unbound configuration file
   if [ -f "${TEMPLATE_DIR}/unbound/local.conf.template" ]; then
+    mkdir -p "${OUTPUT_DIR}/unbound"
     render_template "${TEMPLATE_DIR}/unbound/local.conf.template" "${OUTPUT_DIR}/unbound/local.conf"
   fi
-  
-  # Generate dhclient configuration file
-  if [ -f "${TEMPLATE_DIR}/unbound/dhclient.conf.template" ]; then
-    render_template "${TEMPLATE_DIR}/unbound/dhclient.conf.template" "${OUTPUT_DIR}/unbound/dhclient.conf"
-  fi
+
+  # NOTE: dhclient.conf is not used in modern Debian with systemd-resolved
+  # Unbound is configured directly in server-setup.sh
 fi
 
 # Generate Audit configuration if enabled
@@ -190,6 +204,10 @@ if [ "${AUDIT_ENABLED:-false}" = "true" ]; then
     render_template "${TEMPLATE_DIR}/audit/audit.rules.template" "${OUTPUT_DIR}/audit/rules.d/audit.rules"
   fi
 fi
+
+# NOTE: PHP configurations are managed by server-setup.sh during PHP installation
+# These templates are installed directly by server-setup.sh when INSTALL_PHP=true
+# Skipping PHP config generation for base server deployment
 
 echo "===== Configuration files generated successfully ====="
 echo "You can now deploy these files to your server"

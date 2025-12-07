@@ -7,6 +7,9 @@
 .env.*
 !.env.example
 
+# User-specific configuration (should be copied from .example files)
+/templates/defaults.env
+
 # Logs
 *.log
 
@@ -31,3 +34,9 @@ Thumbs.db
 /local-backup.db
 /local-backup.mv.db
 /nginx-conf
+fix-sensor-log.sh
+fix-unbound-apparmor.sh
+fix-postfix.sh
+fix-aide.sh
+fix-audit-rules.sh
+disable-smt.sh

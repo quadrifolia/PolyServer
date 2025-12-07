@@ -187,11 +187,6 @@ The main server setup now includes a comprehensive optional component installati
   - Secure daemon.json with restricted networking and resource limits
   - Systemd security hardening (NoNewPrivileges, ProtectKernelModules)
   - Custom network ranges and security options
-  
-- **Nginx Unit**: Modern application server supporting multiple languages
-  - Built-in PHP, Python, Go, JavaScript support
-  - Systemd security hardening and resource management
-  - API-driven configuration via Unix socket
 
 - **PHP 8.4**: Latest PHP with php-fpm and security optimizations (from official Debian 13 repositories)
   - Comprehensive extension set (MySQL, PostgreSQL, Redis, etc.)

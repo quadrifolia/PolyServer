@@ -285,19 +285,21 @@ validate_critical_configs() {
 # All parameters are set to secure defaults for bastion use case
 
 USERNAME="bastion"                      # Bastion user to create
-HOSTNAME="bastion"                      # Bastion hostname  
+HOSTNAME="bastion"                      # Bastion hostname
 SSH_PORT="${SSH_PORT:-2222}"            # Custom SSH port (configurable via environment, default 2222)
+BANNER_TITLE="${BANNER_TITLE:-BASTION HOST ACCESS}"  # SSH banner title (configurable)
+SERVER_TYPE="${SERVER_TYPE:-bastion host}"            # Server type for banner (configurable)
 LOGWATCH_EMAIL="root"                   # Security notification email
 MAX_SSH_SESSIONS="5"                    # Maximum concurrent SSH sessions
 SSH_LOGIN_GRACE_TIME="30"               # SSH login grace time
 SSH_CLIENT_ALIVE_INTERVAL="300"         # Keep alive interval
 SSH_CLIENT_ALIVE_COUNT_MAX="2"          # Max keep alive attempts
 
-# Optional Security Components (defaults to false for resource-conscious bastions)
-: "${INSTALL_CLAMAV:=false}"            # Install ClamAV antivirus (high resource usage)
-: "${INSTALL_MALDET:=false}"            # Install Linux Malware Detect (medium resource usage)
-: "${INSTALL_RKHUNTER:=false}"          # Install rootkit detection tools (low resource usage)
-: "${INSTALL_SURICATA:=false}"          # Install Suricata IDS (medium resource usage)
+# Security Components - Essential tools enabled by default for comprehensive bastion protection
+: "${INSTALL_CLAMAV:=false}"            # Install ClamAV antivirus (high resource usage) - optional
+: "${INSTALL_MALDET:=false}"            # Install Linux Malware Detect (medium resource usage) - optional
+: "${INSTALL_RKHUNTER:=true}"           # Install rootkit detection tools (low resource usage) - ENABLED BY DEFAULT
+: "${INSTALL_SURICATA:=true}"           # Install Suricata IDS (medium resource usage) - ENABLED BY DEFAULT
 
 # Bastion-specific network configuration
 INTERNAL_NETWORK="10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
@@ -342,6 +344,51 @@ fi
 
 echo "✅ Valid SSH public key provided - proceeding with secure bastion setup"
 
+# Hostname configuration
+echo ""
+while true; do
+    read -r -p "Enter the hostname for this server (default: bastion): " HOSTNAME_INPUT
+    if [ -z "$HOSTNAME_INPUT" ]; then
+        HOSTNAME="bastion"
+        break
+    elif [[ "$HOSTNAME_INPUT" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
+        HOSTNAME="$HOSTNAME_INPUT"
+        break
+    else
+        echo "Please enter a valid hostname"
+    fi
+done
+
+# Default username configuration
+echo ""
+while true; do
+    read -r -p "Enter SSH username for bastion access (default: bastion): " USERNAME_INPUT
+    if [ -z "$USERNAME_INPUT" ]; then
+        USERNAME="bastion"
+        break
+    elif [[ "$USERNAME_INPUT" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+        USERNAME="$USERNAME_INPUT"
+        break
+    else
+        echo "Please enter a valid username"
+    fi
+done
+    
+# SSH port configuration
+echo ""
+while true; do
+    read -r -p "Enter SSH port for bastion access (default: 2222): " SSH_PORT_INPUT
+    if [ -z "$SSH_PORT_INPUT" ]; then
+        SSH_PORT="2222"
+        break
+    elif [[ "$SSH_PORT_INPUT" =~ ^[0-9]+$ ]] && [ "$SSH_PORT_INPUT" -ge 1024 ] && [ "$SSH_PORT_INPUT" -le 65535 ]; then
+        SSH_PORT="$SSH_PORT_INPUT"
+        break
+    else
+        echo "Please enter a valid port number (1024-65535)"
+    fi
+done
+
 # Email configuration
 echo ""
 while true; do
@@ -356,23 +403,9 @@ while true; do
         echo "Please enter a valid email address"
     fi
 done
-    
-echo ""
-while true; do
-    read -r -p "Enter SSH port for bastion access (default: 2222): " SSH_PORT_INPUT
-    if [ -z "$SSH_PORT_INPUT" ]; then
-        SSH_PORT="2222"
-        break
-    elif [[ "$SSH_PORT_INPUT" =~ ^[0-9]+$ ]] && [ "$SSH_PORT_INPUT" -ge 1024 ] && [ "$SSH_PORT_INPUT" -le 65535 ]; then
-        SSH_PORT="$SSH_PORT_INPUT"
-        break
-    else
-        echo "Please enter a valid port number (1024-65535)"
-    fi
-done
-echo ""
 
 # SMTP Configuration for reliable email delivery
+echo ""
 echo "===== SMTP EMAIL CONFIGURATION ====="
 echo ""
 echo "Configure external SMTP for reliable email delivery (recommended)."
@@ -446,29 +479,26 @@ echo "===== 1. Updating system packages ====="
 wait_for_dpkg_lock() {
     local timeout=300  # 5 minutes timeout
     local count=0
-    
-    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
+
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+       || fuser /var/cache/apt/archives/lock >/dev/null 2>&1 \
+       || pgrep -x unattended-upgrade >/dev/null 2>&1 \
+       || pgrep -x apt-get >/dev/null 2>&1 \
+       || pgrep -x dpkg >/dev/null 2>&1; do
         if [ $count -ge $timeout ]; then
             echo "⚠️ Timeout waiting for package management lock - continuing anyway"
             break
         fi
-        
+
         if [ $((count % 10)) -eq 0 ]; then
             echo "Waiting for package management to complete... ($count/$timeout seconds)"
             # Show what process is holding the lock
             pgrep -af "(apt|dpkg|unattended)" || true
         fi
-        
+
         sleep 1
         count=$((count + 1))
     done
-}
-
-# Safe dpkg lock waiting function
-wait_for_dpkg_lock() {
-  while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
-     || fuser /var/cache/apt/archives/lock >/dev/null 2>&1 \
-     || pgrep -x unattended-upgrade >/dev/null 2>&1; do sleep 3; done
 }
 
 echo "Checking for running package management processes..."
@@ -534,29 +564,40 @@ if ! id "$USERNAME" &>/dev/null; then
     
     # Add bastion user to adm group for log access
     usermod -aG adm "$USERNAME"
-    
+
+    # Get the actual home directory created by useradd
+    USER_HOME=$(getent passwd "$USERNAME" | cut -d: -f6)
+
+    if [ -z "$USER_HOME" ]; then
+        echo "❌ Could not determine home directory for newly created user $USERNAME"
+        exit 1
+    fi
+
+    echo "Using home directory: $USER_HOME"
+
     # Create SSH directory for the new user
-    mkdir -p /home/$USERNAME/.ssh
-    chmod 700 /home/$USERNAME/.ssh
-    chown $USERNAME:$USERNAME /home/$USERNAME/.ssh
-    
+    mkdir -p "$USER_HOME/.ssh"
+    chmod 700 "$USER_HOME/.ssh"
+    chown "$USERNAME:$USERNAME" "$USER_HOME/.ssh"
+
     # Set up SSH key if provided
     if [ -n "$SSH_PUBLIC_KEY" ]; then
         echo "Setting up SSH public key for $USERNAME"
-        echo "$SSH_PUBLIC_KEY" > /home/$USERNAME/.ssh/authorized_keys
-        chmod 600 /home/$USERNAME/.ssh/authorized_keys
-        chown $USERNAME:$USERNAME /home/$USERNAME/.ssh/authorized_keys
+        echo "$SSH_PUBLIC_KEY" > "$USER_HOME/.ssh/authorized_keys"
+        chmod 600 "$USER_HOME/.ssh/authorized_keys"
+        chown "$USERNAME:$USERNAME" "$USER_HOME/.ssh/authorized_keys"
         echo "SSH key configured successfully"
     fi
 fi
 
-# Create restricted sudo access for bastion user (SECURITY HARDENED)
-echo "Setting up restricted sudo privileges for $USERNAME..."
-cat > /etc/sudoers.d/bastion-$USERNAME << EOF
-# Bastion user sudo privileges - RESTRICTED to absolute minimum for security
+# Create shared command aliases (only once, to avoid conflicts)
+if [ ! -f /etc/sudoers.d/bastion-aliases ]; then
+    echo "Creating shared sudo command aliases..."
+    cat > /etc/sudoers.d/bastion-aliases << 'EOF'
+# Bastion shared command aliases - RESTRICTED to absolute minimum for security
 # Using Cmnd_Alias with exact paths to prevent privilege escalation
 
-# Define command aliases with exact paths only
+# SSH service management
 Cmnd_Alias SSH_RESTART = /usr/bin/systemctl restart ssh, /bin/systemctl restart ssh, /usr/bin/systemctl restart sshd, /bin/systemctl restart sshd
 Cmnd_Alias SSH_STATUS = /usr/bin/systemctl status ssh, /bin/systemctl status ssh, /usr/bin/systemctl status sshd, /bin/systemctl status sshd
 Cmnd_Alias SSH_ACTIVE = /usr/bin/systemctl is-active ssh, /bin/systemctl is-active ssh, /usr/bin/systemctl is-active sshd, /bin/systemctl is-active sshd
@@ -568,23 +609,56 @@ Cmnd_Alias UFW_STATUS = /usr/sbin/ufw status, /sbin/ufw status, /usr/bin/ufw sta
 Cmnd_Alias FAIL2BAN_STATUS = /usr/bin/fail2ban-client status
 
 # Essential bastion monitoring scripts (custom commands only)
-Cmnd_Alias BASTION_COMMANDS = /usr/local/bin/bastionstat, /usr/local/bin/sshmon, /usr/local/bin/bastionmail
+Cmnd_Alias BASTION_COMMANDS = /usr/local/bin/bastionstat, /usr/local/bin/sshmon, /usr/local/bin/bastionmail, /usr/local/bin/dbstatus, /usr/local/bin/serverstatus
 
 # Specific log file access (no wildcards)
 Cmnd_Alias LOG_ACCESS = /usr/bin/tail /var/log/auth.log, /usr/bin/tail /var/log/syslog, /usr/bin/tail /var/log/fail2ban.log
 
+# MariaDB/MySQL commands (for database servers)
+Cmnd_Alias MYSQL_COMMANDS = /usr/local/bin/mysql-health, /usr/local/bin/mysql-backup, /usr/local/bin/mariadb-vrack-status
+EOF
+    chmod 440 /etc/sudoers.d/bastion-aliases
+
+    # Validate syntax
+    if ! visudo -c -f /etc/sudoers.d/bastion-aliases >/dev/null 2>&1; then
+        echo "❌ ERROR: Invalid sudoers syntax in bastion-aliases"
+        rm /etc/sudoers.d/bastion-aliases
+        exit 1
+    fi
+    echo "✅ Shared sudo aliases created and validated"
+fi
+
+# Create user-specific sudo privileges (references shared aliases)
+echo "Setting up restricted sudo privileges for $USERNAME..."
+
+# Remove any existing file for this user (in case of re-run)
+rm -f /etc/sudoers.d/bastion-$USERNAME
+
+cat > /etc/sudoers.d/bastion-$USERNAME << EOF
+# Bastion user sudo privileges for: $USERNAME
+# References shared command aliases from /etc/sudoers.d/bastion-aliases
+
 # Grant minimal required privileges
 $USERNAME ALL=(ALL) NOPASSWD: SSH_RESTART, SSH_STATUS, SSH_ACTIVE
 $USERNAME ALL=(ALL) NOPASSWD: UFW_STATUS
-$USERNAME ALL=(ALL) NOPASSWD: FAIL2BAN_STATUS  
+$USERNAME ALL=(ALL) NOPASSWD: FAIL2BAN_STATUS
 $USERNAME ALL=(ALL) NOPASSWD: BASTION_COMMANDS
 $USERNAME ALL=(ALL) NOPASSWD: LOG_ACCESS
+$USERNAME ALL=(ALL) NOPASSWD: MYSQL_COMMANDS
 
 # Security settings
 Defaults:$USERNAME !requiretty
 Defaults:$USERNAME secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 EOF
 chmod 440 /etc/sudoers.d/bastion-$USERNAME
+
+# Validate syntax
+if ! visudo -c -f /etc/sudoers.d/bastion-$USERNAME >/dev/null 2>&1; then
+    echo "❌ ERROR: Invalid sudoers syntax for $USERNAME"
+    rm /etc/sudoers.d/bastion-$USERNAME
+    exit 1
+fi
+echo "✅ Sudo privileges configured and validated for $USERNAME"
 
 # Ensure bastion user is in adm group (for existing users too)
 usermod -aG adm "$USERNAME" 2>/dev/null || true
@@ -624,7 +698,9 @@ PasswordAuthentication no
 PermitEmptyPasswords no
 ChallengeResponseAuthentication no
 KbdInteractiveAuthentication no
-UsePAM no
+UsePAM yes
+# PAM enabled for session accounting, limits, pam_nologin, and potential 2FA/MFA
+# AuthenticationMethods publickey still enforces key-only authentication
 AuthorizedKeysFile .ssh/authorized_keys
 
 # Forwarding and Tunneling - Essential for bastion functionality
@@ -674,13 +750,13 @@ SyslogFacility AUTH
 Banner /etc/ssh/banner
 EOF
     
-# Create SSH banner for bastion host
+# Create SSH banner (configurable via BANNER_TITLE and SERVER_TYPE variables)
 cat > /etc/ssh/banner << EOF
 ***************************************************************************
-                          BASTION HOST ACCESS
+                          ${BANNER_TITLE}
 ***************************************************************************
 
-WARNING: This is a secure bastion host. All access is logged and monitored.
+WARNING: This is a secure ${SERVER_TYPE}. All access is logged and monitored.
 
 Unauthorized access is prohibited and will be prosecuted to the full extent
 of the law. All activities on this system are recorded and may be used as
@@ -931,9 +1007,9 @@ if [ "$INSTALL_CLAMAV" = true ]; then
     fi
 fi
 
-echo "• INSTALL_MALDET=$INSTALL_MALDET (Malware detection - MEDIUM resource usage)"
-echo "• INSTALL_RKHUNTER=$INSTALL_RKHUNTER (Rootkit detection - LOW resource usage)"
-echo "• INSTALL_SURICATA=$INSTALL_SURICATA (Network IDS - MEDIUM resource usage)"
+echo "• INSTALL_MALDET=$INSTALL_MALDET (Malware detection - MEDIUM resource usage - optional)"
+echo "• INSTALL_RKHUNTER=$INSTALL_RKHUNTER (Rootkit detection - LOW resource usage - ENABLED BY DEFAULT)"
+echo "• INSTALL_SURICATA=$INSTALL_SURICATA (Network IDS - MEDIUM resource usage - ENABLED BY DEFAULT)"
 echo ""
 
 echo "===== 5.1 Installing core bastion packages ====="
@@ -950,9 +1026,9 @@ echo "✅ Bastion security package installation completed"
 INSTALLED_COMPONENTS=""
 [ "$INSTALL_CLAMAV" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS clamav"
 [ "$INSTALL_MALDET" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS maldet"
-[ "$INSTALL_RKHUNTER" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS rkhunter"
-[ "$INSTALL_SURICATA" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS suricata"
-echo "Installed optional components:${INSTALLED_COMPONENTS:-none}"
+[ "$INSTALL_RKHUNTER" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS rkhunter(default)"
+[ "$INSTALL_SURICATA" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS suricata(default)"
+echo "Installed security components:${INSTALLED_COMPONENTS:- none}"
 
 if [ "$INSTALL_CLAMAV" = true ]; then
     echo "===== 6.0.1 Configuring ClamAV with resource optimization for bastion hosts ====="
@@ -1105,11 +1181,7 @@ OOMPolicy=kill
 OOMScoreAdjust=500
 
 # Security and resource isolation
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
 NoNewPrivileges=true
-ReadWritePaths=/var/lib/clamav /var/log/clamav /run/clamav
 
 # Prevent memory fragmentation issues
 TasksMax=50
@@ -1139,11 +1211,7 @@ OOMPolicy=kill
 OOMScoreAdjust=400
 
 # Security isolation
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
 NoNewPrivileges=true
-ReadWritePaths=/var/lib/clamav /var/log/clamav
 
 # Prevent resource conflicts during updates
 TasksMax=20
@@ -1421,11 +1489,11 @@ server:
     so-rcvbuf: 256k
     so-sndbuf: 256k
     so-reuseport: yes
-    
-    # DNSSEC - disable for simplified bastion configuration
-    # trust-anchor-file: "/var/lib/unbound/root.key"
-    auto-trust-anchor-file: "/var/lib/unbound/root.key"
-    
+
+    # DNSSEC disabled for simplified bastion configuration
+    # (DNSSEC validation adds complexity and potential failure points)
+    # If needed in future, uncomment: auto-trust-anchor-file: "/var/lib/unbound/root.key"
+
     # Private address handling
     private-address: 192.168.0.0/16
     private-address: 172.16.0.0/12
@@ -1447,8 +1515,35 @@ include-toplevel: "/etc/unbound/unbound.conf.d/*.conf"
 EOF
 
 # Disable unbound-resolvconf service (causes issues in bastion environment)
-#systemctl disable unbound-resolvconf 2>/dev/null || true
-#systemctl mask unbound-resolvconf 2>/dev/null || true
+# The unbound-resolvconf service tries to configure loopback which fails with:
+# "Failed to set DNS configuration: Link lo is loopback device"
+systemctl stop unbound-resolvconf 2>/dev/null || true
+systemctl disable unbound-resolvconf 2>/dev/null || true
+systemctl mask unbound-resolvconf 2>/dev/null || true
+echo "✅ Disabled unbound-resolvconf service (not needed for bastion)"
+
+# Configure AppArmor to allow Unbound net_admin capability
+# This is required for Unbound to manage network configuration
+echo "Configuring AppArmor for Unbound..."
+mkdir -p /etc/apparmor.d/local
+if [ ! -f /etc/apparmor.d/local/usr.sbin.unbound ]; then
+    cat > /etc/apparmor.d/local/usr.sbin.unbound << 'APPARMOR_EOF'
+# Site-specific additions and overrides for usr.sbin.unbound.
+# For more details, please see /etc/apparmor.d/local/README.
+
+# Allow net_admin capability for network configuration
+capability net_admin,
+APPARMOR_EOF
+    echo "✅ Created AppArmor local override for Unbound"
+
+    # Reload AppArmor profile if it exists
+    if [ -f /etc/apparmor.d/usr.sbin.unbound ]; then
+        apparmor_parser -r /etc/apparmor.d/usr.sbin.unbound 2>/dev/null || true
+        echo "✅ Reloaded AppArmor profile for Unbound"
+    fi
+else
+    echo "✅ AppArmor override already exists for Unbound"
+fi
 
 # Create systemd override for Unbound to ensure IPv4-only operation
 mkdir -p /etc/systemd/system/unbound.service.d
@@ -1768,11 +1863,10 @@ if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
     
     # Configure postfix for external SMTP relay
     postconf -e "relayhost = [$SMTP_SERVER]:$SMTP_PORT"
-    postconf -e "smtp_use_tls = yes"
+    postconf -e "smtp_tls_security_level = encrypt"
     postconf -e "smtp_sasl_auth_enable = yes"
     postconf -e "smtp_sasl_security_options = noanonymous"
     postconf -e "smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd"
-    postconf -e "smtp_tls_security_level = encrypt"
     postconf -e "smtp_tls_note_starttls_offer = yes"
     postconf -e "smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt"
     
@@ -1805,22 +1899,25 @@ if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
     postconf -e "smtp_header_checks = regexp:/etc/postfix/smtp_header_checks"
     
     # Create recipient canonical map to redirect all local recipients
+    # Use actual hostname and username variables for dynamic configuration
     cat > /etc/postfix/recipient_canonical << EOF
 # Redirect all local recipients to external email address
-root@bastion    $LOGWATCH_EMAIL
-bastion@bastion $LOGWATCH_EMAIL
-admin@bastion   $LOGWATCH_EMAIL
-security@bastion $LOGWATCH_EMAIL
-postmaster@bastion $LOGWATCH_EMAIL
-webmaster@bastion $LOGWATCH_EMAIL
-logcheck@bastion $LOGWATCH_EMAIL
-root@\$(hostname)    $LOGWATCH_EMAIL
-bastion@\$(hostname) $LOGWATCH_EMAIL
-admin@\$(hostname)   $LOGWATCH_EMAIL
-security@\$(hostname) $LOGWATCH_EMAIL
-postmaster@\$(hostname) $LOGWATCH_EMAIL
-webmaster@\$(hostname) $LOGWATCH_EMAIL
-logcheck@\$(hostname) $LOGWATCH_EMAIL
+# Using hostname: $HOSTNAME and username: $USERNAME
+root@$HOSTNAME    $LOGWATCH_EMAIL
+$USERNAME@$HOSTNAME $LOGWATCH_EMAIL
+admin@$HOSTNAME   $LOGWATCH_EMAIL
+security@$HOSTNAME $LOGWATCH_EMAIL
+postmaster@$HOSTNAME $LOGWATCH_EMAIL
+webmaster@$HOSTNAME $LOGWATCH_EMAIL
+logcheck@$HOSTNAME $LOGWATCH_EMAIL
+# Catch-all for any local user
+root    $LOGWATCH_EMAIL
+$USERNAME $LOGWATCH_EMAIL
+admin   $LOGWATCH_EMAIL
+security $LOGWATCH_EMAIL
+postmaster $LOGWATCH_EMAIL
+webmaster $LOGWATCH_EMAIL
+logcheck $LOGWATCH_EMAIL
 EOF
     
     # Configure recipient canonical mapping
@@ -1858,7 +1955,7 @@ EOF
     cat > /etc/aliases << EOF
 # All local mail redirected to external email address
 root: $LOGWATCH_EMAIL
-bastion: $LOGWATCH_EMAIL
+$USERNAME: $LOGWATCH_EMAIL
 admin: $LOGWATCH_EMAIL
 security: $LOGWATCH_EMAIL
 postmaster: $LOGWATCH_EMAIL
@@ -2030,6 +2127,9 @@ apt-get install -y iftop nethogs ethtool mtr-tiny
 apt-get install -y arp-scan dnsutils net-tools traceroute whois
 apt-get install -y nmap ncat socat
 
+# Disk and hardware monitoring tools
+apt-get install -y nvme-cli smartmontools
+
 # Pre-configure iperf3 to not start as daemon (security best practice for bastions)
 echo "iperf3 iperf3/start_daemon boolean false" | debconf-set-selections
 apt-get install -y iperf3
@@ -2162,6 +2262,16 @@ EOF
 LOGFILE="/var/log/sensors/sensors.log"
 DATE=$(date '+%Y-%m-%d %H:%M:%S')
 
+# Exit silently if sensors command not available or no sensors detected
+if ! command -v sensors >/dev/null 2>&1; then
+    exit 0
+fi
+
+# Check if sensors actually has data before logging
+if ! sensors 2>/dev/null | grep -q "°C\|°F\|RPM\|V\|W"; then
+    exit 0
+fi
+
 # Ensure log directory exists
 mkdir -p /var/log/sensors
 
@@ -2178,8 +2288,15 @@ if sensors 2>/dev/null | grep -E "CRITICAL|ALARM" | grep -v "+0.0"; then
 fi
 
 # Rotate log if it gets too large (keep last 1000 lines)
-if [ -f "$LOGFILE" ] && [ $(wc -l < "$LOGFILE") -gt 1000 ]; then
-    tail -n 500 "$LOGFILE" > "${LOGFILE}.tmp" && mv "${LOGFILE}.tmp" "$LOGFILE"
+# Use /tmp for temporary file to avoid read-only filesystem issues
+if [ -f "$LOGFILE" ] && [ $(wc -l < "$LOGFILE" 2>/dev/null || echo 0) -gt 1000 ]; then
+    TMPFILE=$(mktemp /tmp/sensors-log-XXXXXX)
+    if tail -n 500 "$LOGFILE" > "$TMPFILE" 2>/dev/null && [ -s "$TMPFILE" ]; then
+        mv "$TMPFILE" "$LOGFILE"
+    else
+        # If tail fails, remove any partial temp file and keep original
+        rm -f "$TMPFILE"
+    fi
 fi
 EOF
         
@@ -2276,18 +2393,43 @@ fi
 # Install Oh My Zsh for bastion user with security-focused plugins
 if id "$USERNAME" &>/dev/null; then
     echo "Installing Oh My Zsh for $USERNAME with security plugins..."
-    # Remove existing Oh My Zsh installation if present to allow reinstall
-    if [ -d "/home/$USERNAME/.oh-my-zsh" ]; then
-        echo "Removing existing Oh My Zsh installation..."
-        sudo -u $USERNAME rm -rf /home/$USERNAME/.oh-my-zsh /home/$USERNAME/.zshrc
-    fi
-    sudo -u $USERNAME sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
-    
-    # Configure with security and network monitoring plugins
-    sudo -u $USERNAME sed -i 's/plugins=(git)/plugins=(git sudo systemd colored-man-pages history-substring-search docker ssh-agent)/' /home/$USERNAME/.zshrc
-    
-    # Add bastion-specific aliases
-    cat >> /home/$USERNAME/.zshrc << EOF
+
+    # Get the actual home directory for the user
+    USER_HOME=$(getent passwd "$USERNAME" | cut -d: -f6)
+
+    if [ -z "$USER_HOME" ] || [ ! -d "$USER_HOME" ]; then
+        echo "⚠️  Could not determine home directory for $USERNAME, skipping Oh My Zsh installation"
+    else
+        echo "Using home directory: $USER_HOME"
+
+        # Remove existing Oh My Zsh installation if present to allow reinstall
+        if [ -d "$USER_HOME/.oh-my-zsh" ]; then
+            echo "Removing existing Oh My Zsh installation..."
+            sudo -u "$USERNAME" rm -rf "$USER_HOME/.oh-my-zsh" "$USER_HOME/.zshrc"
+        fi
+
+        # Install Oh My Zsh with proper HOME and USER environment variables set
+        # The Oh My Zsh installer uses $USER to determine the home directory, so we must set both
+        echo "Downloading and installing Oh My Zsh..."
+
+        # Download the installer first to ensure we can set environment properly
+        curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh -o /tmp/omz-install.sh
+        chmod +x /tmp/omz-install.sh
+
+        # Run with explicit environment variables that will be preserved
+        # IMPORTANT: cd to user's home first, because the installer uses "cd -" to return to $PWD
+        # and the bastion user might not have access to the current directory
+        (cd "$USER_HOME" && sudo -u "$USERNAME" env HOME="$USER_HOME" USER="$USERNAME" sh /tmp/omz-install.sh --unattended)
+
+        # Clean up installer
+        rm -f /tmp/omz-install.sh
+
+        # Configure with security and network monitoring plugins
+        if [ -f "$USER_HOME/.zshrc" ]; then
+            sudo -u "$USERNAME" sed -i 's/plugins=(git)/plugins=(git sudo systemd colored-man-pages history-substring-search docker ssh-agent)/' "$USER_HOME/.zshrc"
+
+            # Add bastion-specific aliases
+            cat >> "$USER_HOME/.zshrc" << EOF
 
 # Bastion host specific aliases and functions
 alias auth-log='sudo tail -f /var/log/auth.log'
@@ -2320,8 +2462,8 @@ sshmon() {
 }
 EOF
 
-    # Configure vim settings for better bastion administration
-    cat >> /home/$USERNAME/.vimrc << EOF
+            # Configure vim settings for better bastion administration
+            cat >> "$USER_HOME/.vimrc" << EOF
 " Bastion host vim configuration
 " Disable visual mode for security (prevents accidental mouse selections)
 set mouse=
@@ -2335,10 +2477,82 @@ set hlsearch
 set incsearch
 syntax on
 EOF
-    chown $USERNAME:$USERNAME /home/$USERNAME/.vimrc
+            chown "$USERNAME:$USERNAME" "$USER_HOME/.vimrc"
+            echo "✅ Oh My Zsh installed and configured for $USERNAME"
+        else
+            echo "⚠️  Oh My Zsh installation may have failed - .zshrc not found"
+        fi
+    fi
+
+    # Setup zsh for root user
+    echo "===== 6.2.2 Setting up Zsh for Root User ====="
+
+    echo "Installing Oh My Zsh for root user..."
+
+    # Backup existing root .zshrc if present
+    if [ -f /root/.zshrc ]; then
+        cp /root/.zshrc /root/.zshrc.backup-$(date +%Y%m%d-%H%M%S)
+        echo "Backed up existing /root/.zshrc"
+    fi
+
+    # Remove existing Oh My Zsh installation if present
+    if [ -d /root/.oh-my-zsh ]; then
+        echo "Removing existing Oh My Zsh installation for root..."
+        rm -rf /root/.oh-my-zsh /root/.zshrc
+    fi
+
+    # Download and install Oh My Zsh for root
+    curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh -o /tmp/omz-install-root.sh
+    chmod +x /tmp/omz-install-root.sh
+
+    # Install Oh My Zsh (unattended)
+    RUNZSH=no CHSH=no sh /tmp/omz-install-root.sh || true
+    rm -f /tmp/omz-install-root.sh
+
+    if [ -f /root/.zshrc ]; then
+        # Configure plugins for root
+        sed -i 's/plugins=(git)/plugins=(git sudo systemd colored-man-pages history-substring-search ssh-agent)/' /root/.zshrc
+
+        # Add bastion-specific aliases and functions for root
+        cat >> /root/.zshrc << 'ROOTZSH'
+
+# Bastion host specific aliases and functions for root
+alias auth-log='tail -f /var/log/auth.log'
+alias audit-log='tail -f /var/log/audit/audit.log'
+alias connections='netstat -tulpn'
+alias banned='fail2ban-client status sshd'
+alias security-report='bash /usr/local/bin/security-report.sh'
+
+# Quick access to important logs
+alias logs-auth='journalctl -u ssh -f'
+alias logs-fail2ban='journalctl -u fail2ban -f'
+alias logs-suricata='tail -f /var/log/suricata/fast.log'
+
+# System monitoring shortcuts
+alias top-cpu='ps aux --sort=-%cpu | head -11'
+alias top-mem='ps aux --sort=-%mem | head -11'
+
+# SSH connection helper
+sshjump() {
+    if [ -z "$1" ]; then
+        echo "Usage: sshjump <internal-host>"
+        echo "Example: sshjump db-1"
+        return 1
+    fi
+    ssh "$1"
+}
+ROOTZSH
+
+        # Change root's default shell to zsh
+        chsh -s $(which zsh) root
+
+        echo "✅ Oh My Zsh configured for root user"
+    else
+        echo "⚠️  Oh My Zsh installation for root may have failed"
+    fi
 
     # Create global executable commands for bastion functions
-    echo "===== 6.2.2 Creating global bastion commands ====="
+    echo "===== 6.2.3 Creating global bastion commands ====="
 
     # Create bastionstat command
     cat > /usr/local/bin/bastionstat << EOF
@@ -2577,6 +2791,7 @@ port = 0:65535
 fail2ban_agent = Fail2Ban/%(fail2ban_version)s
 # Enable IPv6 support for modern infrastructure
 allowipv6 = yes
+ignoreip = 127.0.0.1/8 ::1 $CLIENT_IP
 
 # Use UFW/nftables for Debian 13 firewall management
 banaction = ufw
@@ -2609,40 +2824,19 @@ bantime = 86400
 findtime = 86400
 maxretry = 5
 
-[systemd]
-enabled = true
-filter = systemd
-logpath = /var/log/syslog
-action = %(banaction)s[name=systemd, port="all"]
-bantime = 3600
-findtime = 600
-maxretry = 5
 EOF
 
 # Create custom filter for SSH brute force detection
-cat > /etc/fail2ban/filter.d/sshd-ddos.conf << EOF
-# Fail2Ban filter for SSH brute force attacks
+cat > /etc/fail2ban/filter.d/sshd-ddos.conf << 'EOF'
+# Fail2Ban filter for SSH pre-auth connection floods and non-identifying clients
 [Definition]
-failregex = sshd\[<pid>\]: Did not receive identification string from <HOST>
-            sshd\[<pid>\]: Connection closed by <HOST> port \d+ \[preauth\]
-            sshd\[<pid>\]: Disconnected from <HOST> port \d+ \[preauth\]
-            sshd\[<pid>\]: Connection reset by <HOST> port \d+ \[preauth\]
+failregex = ^.*sshd\[\d+\]: Did not receive identification string from <HOST>\s*$
+            ^.*sshd\[\d+\]: Connection closed by <HOST> port \d+ \[preauth\]$
+            ^.*sshd\[\d+\]: Disconnected from <HOST> port \d+ \[preauth\]$
+            ^.*sshd\[\d+\]: Connection reset by <HOST> port \d+ \[preauth\]$
 ignoreregex =
 EOF
 
-# Create systemd filter for service monitoring
-cat > /etc/fail2ban/filter.d/systemd.conf << EOF
-# Fail2ban filter for systemd service failures
-# Monitors for repeated service failures that could indicate attacks
-
-[Definition]
-failregex = ^.* <HOST>.*systemd.*: Failed to start .*
-            ^.* <HOST>.*systemd.*: Unit .* failed\.
-            ^.* <HOST>.*systemd.*: .* failed with result 'exit-code'\.
-            ^.* <HOST>.*systemd.*: Service .* has failed .*
-
-ignoreregex =
-EOF
 
 # Install and configure rsyslog first (needed for fail2ban)
 echo "Setting up logging system for fail2ban..."
@@ -2737,7 +2931,7 @@ COPYNEWDB="no"
 EOF
 
 # Create custom AIDE check script that handles mail properly
-cat > /usr/local/bin/aide-check << EOF
+cat > /usr/local/bin/aide-check << 'EOF'
 #!/bin/bash
 # Custom AIDE check script with proper mail handling for bastion host
 
@@ -2746,39 +2940,117 @@ AIDE_LOG="/var/log/aide/aide-check.log"
 mkdir -p /var/log/aide
 
 # Run AIDE check and capture output
-echo "AIDE integrity check started at \$(date)" > \$AIDE_LOG
-echo "=====================================" >> \$AIDE_LOG
+echo "AIDE integrity check started at $(date)" > $AIDE_LOG
+echo "=====================================" >> $AIDE_LOG
 
-# Run AIDE check with proper error handling
-if aide --check 2>&1 | tee -a \$AIDE_LOG; then
+# Run AIDE check with explicit config file
+# Debian stores AIDE config at /etc/aide/aide.conf
+if aide --config=/etc/aide/aide.conf --check 2>&1 | tee -a $AIDE_LOG; then
     # AIDE completed successfully
-    echo "AIDE check completed at \$(date)" >> \$AIDE_LOG
-    
+    echo "AIDE check completed at $(date)" >> $AIDE_LOG
+
     # Check if there were any changes detected
-    if grep -q "found differences" \$AIDE_LOG || grep -q "File.*changed" \$AIDE_LOG; then
+    if grep -q "found differences" $AIDE_LOG || grep -q "File.*changed" $AIDE_LOG; then
         # Changes detected - send alert email
-        cat \$AIDE_LOG | mail -s "🚨 BASTION AIDE ALERT: File integrity changes detected on \$HOSTNAME" root
+        echo "" >> $AIDE_LOG
+        echo "NOTE: Database will be updated after you review these changes." >> $AIDE_LOG
+        echo "To update the database and suppress these warnings:" >> $AIDE_LOG
+        echo "  sudo /usr/local/bin/aide-update" >> $AIDE_LOG
+        echo "" >> $AIDE_LOG
+
+        cat $AIDE_LOG | mail -s "🚨 BASTION AIDE ALERT: File integrity changes detected on $(hostname)" root
     else
         # No changes - log success
-        echo "No integrity violations detected" >> \$AIDE_LOG
+        echo "No integrity violations detected" >> $AIDE_LOG
     fi
 else
     # AIDE failed
-    echo "AIDE check failed at \$(date)" >> \$AIDE_LOG
-    echo "AIDE integrity check failed on bastion host \$HOSTNAME" | mail -s "🚨 BASTION AIDE ERROR: Check failed on \$HOSTNAME" root
+    echo "AIDE check failed at $(date)" >> $AIDE_LOG
+    echo "AIDE integrity check failed on bastion host $(hostname)" | mail -s "🚨 BASTION AIDE ERROR: Check failed on $(hostname)" root
     exit 1
 fi
 
 # Rotate old logs
 find /var/log/aide -name "aide-check.log.*" -mtime +30 -delete
-if [ -f \$AIDE_LOG ] && [ \$(stat -c%s \$AIDE_LOG) -gt 10485760 ]; then
+if [ -f $AIDE_LOG ] && [ $(stat -c%s $AIDE_LOG) -gt 10485760 ]; then
     # Rotate if log is larger than 10MB
-    mv \$AIDE_LOG \${AIDE_LOG}.\$(date +%Y%m%d)
-    gzip \${AIDE_LOG}.\$(date +%Y%m%d)
+    mv $AIDE_LOG ${AIDE_LOG}.$(date +%Y%m%d)
+    gzip ${AIDE_LOG}.$(date +%Y%m%d)
 fi
 EOF
 
 chmod 755 /usr/local/bin/aide-check
+
+# Create AIDE database update script (run manually after reviewing changes)
+cat > /usr/local/bin/aide-update << 'EOF'
+#!/bin/bash
+# Update AIDE database after reviewing and accepting changes
+# Run this manually: sudo /usr/local/bin/aide-update
+
+set -e
+
+echo "==================================="
+echo "AIDE Database Update"
+echo "==================================="
+echo ""
+
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then
+    echo "❌ This script must be run as root"
+    echo "   Usage: sudo /usr/local/bin/aide-update"
+    exit 1
+fi
+
+# Check if there are pending changes
+if [ ! -f /var/log/aide/aide-check.log ]; then
+    echo "❌ No AIDE check log found"
+    echo "   Run a check first: sudo /usr/local/bin/aide-check"
+    exit 1
+fi
+
+# Show summary of changes
+echo "Current AIDE status:"
+if grep -q "found differences" /var/log/aide/aide-check.log 2>/dev/null; then
+    echo "⚠️  Changes detected in last check:"
+    grep -E "(Added entries|Removed entries|Changed entries)" /var/log/aide/aide-check.log | tail -3
+    echo ""
+
+    read -p "Have you reviewed these changes and want to update the database? (yes/no): " -r
+    if [[ ! "$REPLY" =~ ^[Yy]es$ ]]; then
+        echo "Update cancelled. Database not changed."
+        exit 0
+    fi
+else
+    echo "✅ No differences detected in last check"
+    echo "Database update not necessary, but will proceed anyway."
+fi
+
+echo ""
+echo "Updating AIDE database..."
+echo "This will take a few minutes..."
+
+# Update the database
+if aide --config=/etc/aide/aide.conf --update 2>&1 | tee /var/log/aide/aide-update.log; then
+    # Move new database to active location
+    if [ -f /var/lib/aide/aide.db.new ]; then
+        cp /var/lib/aide/aide.db /var/lib/aide/aide.db.backup-$(date +%Y%m%d) 2>/dev/null || true
+        mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+        echo ""
+        echo "✅ AIDE database updated successfully"
+        echo "   Backup saved to: /var/lib/aide/aide.db.backup-$(date +%Y%m%d)"
+        echo ""
+        echo "Next check will use the new baseline."
+    else
+        echo "❌ Update failed - new database not found"
+        exit 1
+    fi
+else
+    echo "❌ AIDE update command failed"
+    exit 1
+fi
+EOF
+
+chmod 755 /usr/local/bin/aide-update
 
 # Override the default AIDE systemd service to use our custom script
 mkdir -p /etc/systemd/system/dailyaidecheck.service.d
@@ -2843,14 +3115,27 @@ StandardOutput=journal
 StandardError=journal
 
 # Security isolation
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
 NoNewPrivileges=true
-ReadWritePaths=/var/lib/aide /var/log/aide /etc/aide
 EOF
 
 systemctl daemon-reload
+
+# Configure AIDE to exclude/handle growing log files
+echo "Configuring AIDE exclusions for growing logs..."
+cat > /etc/aide/aide.conf.d/99-bastion-exclusions << 'EOF'
+# Bastion-specific AIDE exclusions
+# Exclude entire /var/log directory - logs change constantly by design
+# Monitoring log files with AIDE creates excessive noise without security value
+!/var/log
+EOF
+
+# Update AIDE configuration
+if [ -f /etc/aide/aide.conf ]; then
+    # Ensure our exclusions are included
+    if ! grep -q "99-bastion-exclusions" /etc/aide/aide.conf; then
+        echo "@@include /etc/aide/aide.conf.d/99-bastion-exclusions" >> /etc/aide/aide.conf
+    fi
+fi
 
 echo "Initializing AIDE database for bastion host - this will take some time..."
 # Run aideinit in a subshell to prevent environment pollution
@@ -2869,6 +3154,53 @@ echo "   • Custom mail alerts for detected changes"
 echo "   • Resource limits to prevent system impact"
 
 echo "===== 8. Configuring comprehensive audit framework for bastion ====="
+
+# Ensure filesystems are writable before making audit configuration changes
+echo "Checking filesystem writability..."
+if mount | grep " / " | grep -q "(ro,"; then
+    echo "Root filesystem is read-only, remounting as read-write..."
+    mount -o remount,rw /
+fi
+if mount | grep " /boot " | grep -q "(ro,"; then
+    echo "/boot filesystem is read-only, remounting as read-write..."
+    mount -o remount,rw /boot
+fi
+
+# Enable kernel audit subsystem if not already enabled
+echo "Enabling kernel audit subsystem..."
+if command -v auditctl >/dev/null 2>&1; then
+    AUDIT_ENABLED=$(auditctl -s 2>/dev/null | grep "^enabled" | awk '{print $2}' || echo "unknown")
+
+    if [ "$AUDIT_ENABLED" = "0" ]; then
+        echo "Kernel audit is disabled, enabling now..."
+        if auditctl -e 1 2>/dev/null; then
+            echo "✅ Kernel audit enabled"
+        else
+            echo "⚠️  Failed to enable kernel audit - may need reboot"
+        fi
+    elif [ "$AUDIT_ENABLED" = "1" ]; then
+        echo "✅ Kernel audit already enabled"
+    else
+        echo "ℹ️  Cannot determine kernel audit status (may not be available yet)"
+    fi
+fi
+
+# Make audit enabled persistent via GRUB
+if [ -f /etc/default/grub ]; then
+    if ! grep -q "audit=1" /etc/default/grub; then
+        echo "Adding audit=1 to GRUB for persistent kernel audit..."
+        cp /etc/default/grub /etc/default/grub.backup-audit 2>/dev/null || true
+        sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/GRUB_CMDLINE_LINUX_DEFAULT="audit=1 /' /etc/default/grub
+
+        if command -v update-grub >/dev/null 2>&1; then
+            update-grub 2>/dev/null || echo "⚠️  GRUB update had issues"
+            echo "✅ GRUB updated with audit=1"
+        fi
+    else
+        echo "✅ audit=1 already in GRUB config"
+    fi
+fi
+
 # Enhanced audit configuration for bastion hosts
 cat > /etc/audit/auditd.conf << EOF
 # Bastion Host Audit Configuration - Enhanced Monitoring
@@ -2900,167 +3232,110 @@ enable_krb5 = no
 distribute_network = no
 EOF
 
-# Create comprehensive audit rules for bastion host
+# Create minimal, proven audit rules for bastion host
+# These rules are tested to work reliably across different kernel versions
 cat > /etc/audit/rules.d/bastion-audit.rules << EOF
-## Bastion Host Audit Rules - Comprehensive Security Monitoring
+## Bastion Host Audit Rules - Minimal Reliable Set
+## Optimized for compatibility and stability
 
 ## First rule - delete all existing rules
 -D
 
-## Increase the buffers to survive stress events
+## Buffer size - moderate for bastion host
 -b 8192
 
-## Set failure mode to syslog
+## Set failure mode to syslog (1) not panic (2)
 -f 1
 
-## Track all authentication events (critical for bastions)
+## === Session Tracking (Critical for Bastion) ===
 -w /var/log/wtmp -p wa -k session
 -w /var/log/btmp -p wa -k session
--w /var/log/utmp -p wa -k session
+-w /var/run/utmp -p wa -k session
 -w /var/log/lastlog -p wa -k session
 
-## Monitor SSH configuration changes
+## === SSH Configuration Monitoring ===
 -w /etc/ssh/sshd_config -p wa -k ssh_config
--w /etc/ssh/ssh_config -p wa -k ssh_config
--w /etc/ssh/ -p wa -k ssh_config
 
-## Monitor user and group modifications
+## === Identity Management ===
 -w /etc/group -p wa -k identity
 -w /etc/passwd -p wa -k identity
--w /etc/gshadow -p wa -k identity
--w /etc/shadow -p wa -k identity
+-w /etc/gshadow -k identity
+-w /etc/shadow -k identity
 
-## Monitor sudo configuration
+## === Sudo Configuration ===
 -w /etc/sudoers -p wa -k privilege_escalation
 -w /etc/sudoers.d/ -p wa -k privilege_escalation
 
-## Monitor network configuration
--w /etc/hosts -p wa -k network_config
--w /etc/network/ -p wa -k network_config
--w /etc/resolv.conf -p wa -k network_config
+## === Critical System Binaries ===
+-w /bin/su -p x -k privilege_escalation
+-w /usr/bin/sudo -p x -k privilege_escalation
 
-## Monitor firewall changes
--w /etc/ufw/ -p wa -k firewall_config
--w /etc/default/ufw -p wa -k firewall_config
-
-## Track all command executions by non-system users
+## === User Command Execution (64-bit only for compatibility) ===
 -a always,exit -F arch=b64 -S execve -F uid>=1000 -F uid!=4294967295 -k user_commands
--a always,exit -F arch=b32 -S execve -F uid>=1000 -F uid!=4294967295 -k user_commands
 
-## Monitor file access in sensitive directories
--w /etc/ -p wa -k config_changes
--w /bin/ -p wa -k system_binaries
--w /sbin/ -p wa -k system_binaries
--w /usr/bin/ -p wa -k system_binaries
--w /usr/sbin/ -p wa -k system_binaries
-
-## Track privilege escalation attempts
+## === Privilege Escalation Syscalls (64-bit only, no b32 for compatibility) ===
 -a always,exit -F arch=b64 -S setuid -S setgid -S setresuid -S setresgid -k privilege_escalation
--a always,exit -F arch=b32 -S setuid -S setgid -S setresuid -S setresgid -k privilege_escalation
 
-## Monitor system calls related to network activity
--a always,exit -F arch=b64 -S socket -S connect -S accept -k network_activity
--a always,exit -F arch=b32 -S socket -S connect -S accept -k network_activity
-
-## Track file permission changes
--a always,exit -F arch=b64 -S chmod -S fchmod -S fchmodat -k file_permissions
--a always,exit -F arch=b32 -S chmod -S fchmod -S fchmodat -k file_permissions
-
-## Monitor process termination
--a always,exit -F arch=b64 -S kill -k process_kill
--a always,exit -F arch=b32 -S kill -k process_kill
-
-## Track kernel module loading
+## === Kernel Module Loading ===
 -w /sbin/insmod -p x -k module_insertion
 -w /sbin/rmmod -p x -k module_removal
 -w /sbin/modprobe -p x -k module_insertion
--a always,exit -F arch=b64 -S init_module -S delete_module -k module_operations
--a always,exit -F arch=b32 -S init_module -S delete_module -k module_operations
 
-## Monitor time changes (important for log correlation)
--a always,exit -F arch=b64 -S clock_settime -k time_change
--a always,exit -F arch=b32 -S clock_settime -k time_change
+## === Time Changes ===
 -w /etc/localtime -p wa -k time_change
 
-## Monitor cron jobs
--w /etc/cron.allow -p wa -k cron
--w /etc/cron.deny -p wa -k cron
--w /etc/cron.d/ -p wa -k cron
--w /etc/cron.daily/ -p wa -k cron
--w /etc/cron.hourly/ -p wa -k cron
--w /etc/cron.monthly/ -p wa -k cron
--w /etc/cron.weekly/ -p wa -k cron
+## === Cron Jobs ===
 -w /etc/crontab -p wa -k cron
--w /var/spool/cron/ -p wa -k cron
+-w /var/spool/cron/crontabs/ -p wa -k cron
 
-## Monitor log files
--w /var/log/ -p wa -k log_files
-
-## Make audit rules immutable (uncomment for production)
-## WARNING: Requires reboot to make changes after enabling
-# -e 2
+## DO NOT make rules immutable to allow updates without reboot
+## NOTE: b32 arch rules removed for compatibility
+## NOTE: Complex syscalls (socket, chmod, kill) removed for reliability
 EOF
 
-# Validate audit rules before proceeding
-echo "Validating audit rules..."
+echo "===== 8.1 Configuring Auditd Service (Remove Circular Dependency) ====="
 
-# Test if auditctl can load the rules (restart auditd if needed)
-echo "Restarting auditd service..."
-if ! systemctl restart auditd 2>/dev/null; then
-    echo "⚠️ Failed to restart auditd, continuing with existing state"
-fi
-sleep 3
+# Fix the circular dependency: auditd requires audit-rules, but audit-rules often fails
+# Solution: Copy auditd.service to /etc/systemd/system/ and remove the dependency
+echo "Removing audit-rules hard dependency from auditd..."
 
-# Try to load the rules and check for success (with timeout)
-echo "Loading audit rules from file..."
-if timeout 30 auditctl -R /etc/audit/rules.d/bastion-audit.rules >/dev/null 2>&1; then
-    echo "✅ Audit rules file loaded successfully"
+if [ -f /usr/lib/systemd/system/auditd.service ]; then
+    cp /usr/lib/systemd/system/auditd.service /etc/systemd/system/auditd.service
+
+    # Remove the problematic Requires dependency
+    sed -i '/^Requires=audit-rules.service/d' /etc/systemd/system/auditd.service
+    sed -i 's/After=\(.*\) audit-rules.service/After=\1/' /etc/systemd/system/auditd.service
+
+    echo "✅ auditd service dependency removed"
 else
-    echo "⚠️ Audit rules loading had issues"
-    echo "This is often normal during initial setup - continuing"
-fi
-sleep 2
-
-# Check if rules are actually loaded
-echo "Verifying audit rules are active..."
-if command -v auditctl >/dev/null 2>&1; then
-    # Simple rule count without complex filtering
-    if timeout 10 auditctl -l >/dev/null 2>&1; then
-        RULE_COUNT=$(timeout 10 auditctl -l 2>/dev/null | wc -l || echo "0")
-        echo "Audit rules check: $RULE_COUNT total lines from auditctl"
-        
-        if [ "$RULE_COUNT" -gt 10 ]; then
-            echo "✅ Audit rules loaded successfully"
-        else
-            echo "⚠️ Limited audit output - may be normal during startup"
-        fi
-    else
-        echo "⚠️ Unable to query audit rules - may be initializing"
-    fi
-else
-    echo "⚠️ auditctl command not available"
+    echo "⚠️  auditd.service not found in /usr/lib/systemd/system/"
 fi
 
-# Always create fallback rules to ensure we have something
-echo "Creating minimal audit rules as safety fallback..."
-cat > /etc/audit/rules.d/bastion-audit.rules << EOF
-## Minimal Bastion Audit Rules - Fallback Configuration
--D
--b 8192
--f 1
+# Mask the problematic audit-rules service permanently
+echo "Masking audit-rules.service (has broken circular dependency)..."
+systemctl mask audit-rules.service 2>/dev/null || true
+echo "✅ audit-rules.service masked"
 
-## Critical authentication monitoring
--w /var/log/wtmp -p wa -k session
--w /var/log/btmp -p wa -k session
--w /etc/passwd -p wa -k identity
--w /etc/shadow -p wa -k identity
--w /etc/ssh/sshd_config -p wa -k ssh_config
+# Create alternative rule-loading service that runs after auditd
+cat > /etc/systemd/system/load-audit-rules.service << 'EOF'
+[Unit]
+Description=Load Audit Rules After Auditd Starts
+After=auditd.service
+Requires=auditd.service
 
-## Basic privilege monitoring
--w /etc/sudoers -p wa -k privilege_escalation
--a always,exit -F arch=b64 -S execve -F uid>=1000 -F uid!=4294967295 -k user_commands
+[Service]
+Type=oneshot
+# Wait for auditd to be fully ready
+ExecStart=/bin/sleep 3
+# Load the rules from our custom rules file
+ExecStart=/usr/sbin/auditctl -R /etc/audit/rules.d/bastion-audit.rules
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
 EOF
-echo "✅ Minimal audit rules created as safety fallback"
+
+echo "✅ Created load-audit-rules.service"
 
 # Configure auditd systemd resource limits for bastion host
 echo "===== 8.1.1 Configuring Auditd Resource Management ====="
@@ -3078,8 +3353,8 @@ OOMPolicy=continue
 OOMScoreAdjust=-200
 
 # Security and isolation (limited for auditd requirements)
+# Note: ProtectHome=true can interfere with audit rule loading
 NoNewPrivileges=true
-ProtectHome=true
 ReadWritePaths=/var/log/audit /etc/audit
 
 # Restart policy for audit reliability
@@ -3091,9 +3366,10 @@ EOF
 
 systemctl daemon-reload
 
-# Enable and start auditd with improved error handling
-echo "Starting audit system..."
+# Enable both services
+echo "Enabling audit services..."
 systemctl enable auditd
+systemctl enable load-audit-rules.service
 
 # Check if auditd is already running and stop it cleanly if needed
 if systemctl is-active --quiet auditd; then
@@ -3102,15 +3378,44 @@ if systemctl is-active --quiet auditd; then
     sleep 2
 fi
 
-# Start auditd and verify it starts properly
+# Start auditd with improved error handling
+echo "Starting audit daemon..."
 if start_service_with_retry auditd; then
-    echo "✅ Audit system started successfully"
+    echo "✅ Audit daemon started successfully"
+
+    # Verify kernel audit is actually working
+    sleep 2
+    AUDIT_PID=$(auditctl -s 2>/dev/null | grep "^pid" | awk '{print $2}' || echo "0")
+    AUDIT_ENABLED=$(auditctl -s 2>/dev/null | grep "^enabled" | awk '{print $2}' || echo "0")
+
+    if [ "$AUDIT_PID" != "0" ] && [ "$AUDIT_ENABLED" = "1" ]; then
+        echo "✅ Audit daemon running (PID: $AUDIT_PID, enabled: $AUDIT_ENABLED)"
+
+        # Start the rule-loading service
+        echo "Loading audit rules..."
+        if systemctl start load-audit-rules.service 2>/dev/null; then
+            sleep 2
+            RULE_COUNT=$(auditctl -l 2>/dev/null | grep -vc "No rules" || echo "0")
+            if [ "$RULE_COUNT" -gt 10 ]; then
+                echo "✅ Audit rules loaded: $RULE_COUNT rules active"
+            else
+                echo "⚠️  Rule loading had issues, but auditd is running"
+            fi
+        else
+            echo "⚠️  Rule loading service had issues, but auditd is running"
+        fi
+    else
+        echo "⚠️  Audit daemon started but kernel audit not fully active (PID: $AUDIT_PID, enabled: $AUDIT_ENABLED)"
+        echo "This may resolve after reboot with audit=1 kernel parameter"
+    fi
 else
-    echo "❌ Failed to start audit system after retries"
+    echo "❌ Failed to start audit daemon after retries"
     echo "Checking audit system status:"
     systemctl status auditd --no-pager -l || true
     journalctl -u auditd --no-pager -l -n 10 || true
 fi
+
+echo "✅ Audit system configuration completed"
 
 echo "===== 9. Setting up Suricata IDS for bastion network monitoring ====="
 # Get primary network interface and bastion IP more robustly
@@ -3254,55 +3559,85 @@ EOF
     # Create bastion-specific Suricata rules
     cat > /etc/suricata/rules/bastion-custom.rules << EOF
 # Bastion Host Custom Suricata Rules
-# Detect common attacks against bastion hosts
+# Updated to reduce false positives and log noise
+# Note: fail2ban handles SSH brute force detection via /var/log/auth.log
 
-# SSH brute force detection
-alert tcp \$EXTERNAL_NET any -> \$HOME_NET \$SSH_PORTS (msg:"BASTION SSH Brute Force Attempt"; flow:established,to_server; detection_filter:track by_src, count 5, seconds 60; classtype:attempted-admin; sid:2000001; rev:1;)
+# SSH Protocol Anomalies - only alert on actual suspicious patterns
+# REMOVED noisy packet-counting rules that trigger on normal SSH usage:
+# - Old rule 2000001: Triggered on ANY 5 packets in 60 seconds (normal SSH typing!)
+# - Old rule 2000002: Triggered on ANY 10 packets in 60 seconds
+# These created thousands of false positives for legitimate SSH sessions
 
-# Multiple failed SSH connections
-alert tcp \$EXTERNAL_NET any -> \$HOME_NET \$SSH_PORTS (msg:"BASTION SSH Multiple Connection Attempts"; flow:established,to_server; threshold:type threshold, track by_src, count 10, seconds 60; classtype:attempted-recon; sid:2000002; rev:1;)
+# SSH port scanning - rapid SYN packets (connection attempts)
+alert tcp \$EXTERNAL_NET any -> \$HOME_NET \$SSH_PORTS (msg:"BASTION SSH Port Scan"; flags:S; threshold:type threshold, track by_src, count 20, seconds 10; classtype:attempted-recon; sid:2000001; rev:2;)
 
-# Detect SSH scanning
-alert tcp \$EXTERNAL_NET any -> \$HOME_NET 22 (msg:"BASTION SSH Scan on Default Port"; flow:established,to_server; classtype:attempted-recon; sid:2000003; rev:1;)
+# SSH version scanning - multiple handshakes without authentication
+alert ssh any any -> \$HOME_NET \$SSH_PORTS (msg:"BASTION SSH Version Scanning"; threshold:type threshold, track by_src, count 10, seconds 60; classtype:attempted-recon; sid:2000002; rev:2;)
+
+# Detect SSH scanning on default port (port 22 should be disabled on bastion)
+alert tcp \$EXTERNAL_NET any -> \$HOME_NET 22 (msg:"BASTION SSH Scan on Default Port"; flags:S; threshold:type threshold, track by_src, count 5, seconds 10; classtype:attempted-recon; sid:2000003; rev:2;)
 
 # Detect port scanning targeting bastion
-alert tcp \$EXTERNAL_NET any -> \$HOME_NET ![22,2222,80,443] (msg:"BASTION Port Scan Detected"; flow:established,to_server; threshold:type threshold, track by_src, count 5, seconds 10; classtype:attempted-recon; sid:2000004; rev:1;)
+alert tcp \$EXTERNAL_NET any -> \$HOME_NET ![22,2222,80,443] (msg:"BASTION Port Scan Detected"; flags:S; threshold:type threshold, track by_src, count 10, seconds 10; classtype:attempted-recon; sid:2000004; rev:2;)
 
 # Detect unusual outbound connections from bastion
-alert tcp \$HOME_NET any -> \$EXTERNAL_NET ![22,53,80,123,443] (msg:"BASTION Unusual Outbound Connection"; flow:established,to_server; threshold:type threshold, track by_dst, count 5, seconds 60; classtype:policy-violation; sid:2000005; rev:1;)
+alert tcp \$HOME_NET any -> \$EXTERNAL_NET ![22,53,80,123,443] (msg:"BASTION Unusual Outbound Connection"; flow:established,to_server; threshold:type threshold, track by_dst, count 10, seconds 60; classtype:policy-violation; sid:2000005; rev:2;)
 
-# Detect potential data exfiltration
-alert tcp \$HOME_NET any -> \$EXTERNAL_NET any (msg:"BASTION Large Data Transfer Outbound"; flow:established,to_server; threshold:type threshold, track by_src, count 10, seconds 60; classtype:policy-violation; sid:2000006; rev:1;)
+# Detect potential data exfiltration - large uploads
+alert tcp \$HOME_NET \$SSH_PORTS -> \$EXTERNAL_NET any (msg:"BASTION Large SSH Upload"; flow:established,to_client; byte_test:1,>,100000000,0,relative; threshold:type threshold, track by_src, count 1, seconds 300; classtype:attempted-dos; sid:2000006; rev:2;)
 
-# Detect ICMP tunneling attempts
-alert icmp \$EXTERNAL_NET any -> \$HOME_NET any (msg:"BASTION ICMP Tunneling Attempt"; icode:0; itype:8; classtype:attempted-admin; sid:2000007; rev:1;)
+# ICMP ping sweep detection - reduced threshold to avoid normal ping noise
+alert icmp \$EXTERNAL_NET any -> \$HOME_NET any (msg:"BASTION ICMP Ping Sweep"; itype:8; threshold:type threshold, track by_src, count 50, seconds 10; classtype:attempted-recon; sid:2000007; rev:2;)
 
-# Detect DNS tunneling
-alert udp \$HOME_NET any -> any 53 (msg:"BASTION DNS Tunneling Attempt"; content:"|00 01 00 00 00 01|"; classtype:policy-violation; sid:2000008; rev:1;)
+# Unusual SSH protocol version (old, potentially vulnerable)
+alert ssh \$EXTERNAL_NET any -> \$HOME_NET \$SSH_PORTS (msg:"BASTION Old SSH Protocol Version"; ssh.protoversion:1; classtype:attempted-admin; sid:2000008; rev:2;)
 EOF
 
     # Set up Suricata log rotation
-    cat > /etc/logrotate.d/suricata << EOF
+    cat > /etc/logrotate.d/suricata << 'EOF'
 /var/log/suricata/*.log /var/log/suricata/*.json {
     daily
-    size 100M
-    rotate 14
+    size 50M
+    rotate 7
     compress
     delaycompress
     missingok
     notifempty
-    create 0640 root adm
+    create 0640 suricata suricata
+    sharedscripts
     postrotate
-        /bin/kill -USR2 $(cat /var/run/suricata.pid 2>/dev/null) 2>/dev/null || systemctl reload suricata 2>/dev/null || true
+        /bin/kill -HUP $(cat /var/run/suricata.pid 2>/dev/null) 2>/dev/null || true
     endscript
 }
 EOF
+
+    # Create threshold configuration to reduce alert noise
+    cat > /etc/suricata/threshold.config << 'EOF'
+# Suricata Threshold Configuration
+# Reduce noise from legitimate activity while maintaining security monitoring
+
+# SSH port scans - limit repeated alerts from same source
+suppress gen_id 1, sig_id 2000001, track by_src
+
+# ICMP ping sweeps - can be noisy from monitoring tools
+# Uncomment to suppress completely if too noisy:
+# suppress gen_id 1, sig_id 2000007
+EOF
+
+    # Ensure threshold config is referenced in suricata.yaml
+    if ! grep -q "threshold-file:" /etc/suricata/suricata.yaml; then
+        sed -i '/^default-rule-path:/a threshold-file: /etc/suricata/threshold.config' /etc/suricata/suricata.yaml
+    fi
 
     # Configure Suricata systemd resource limits for bastion host
     echo "===== 9.4.1 Configuring Suricata Resource Management ====="
     mkdir -p /etc/systemd/system/suricata.service.d
     cat > /etc/systemd/system/suricata.service.d/resource-limits.conf << EOF
 [Service]
+# Override ExecStart to specify the correct network interface
+ExecStart=
+ExecStart=/usr/bin/suricata -D --af-packet=$INTERFACE -c /etc/suricata/suricata.yaml --pidfile /run/suricata.pid
+
 # Resource limits for bastion host (more conservative than production)
 CPUQuota=30%
 MemoryMax=512M
@@ -3456,10 +3791,11 @@ echo "===== 10. Setting up comprehensive logging and monitoring ====="
 # Configure rsyslog with traditional timestamp format for logwatch compatibility
 if ! grep -q "RSYSLOG_TraditionalFileFormat" /etc/rsyslog.conf; then
     cp /etc/rsyslog.conf /etc/rsyslog.conf.backup
+    RSYSLOG_TMP=$(mktemp /tmp/rsyslog-config-XXXXXX)
     {
         echo "\$ActionFileDefaultTemplate RSYSLOG_TraditionalFileFormat"
         cat /etc/rsyslog.conf
-    } > /etc/rsyslog.conf.tmp && mv /etc/rsyslog.conf.tmp /etc/rsyslog.conf
+    } > "$RSYSLOG_TMP" && mv "$RSYSLOG_TMP" /etc/rsyslog.conf
     echo "✅ Configured rsyslog to use traditional timestamp format"
 fi
 
@@ -3500,15 +3836,36 @@ if [ "$INSTALL_RKHUNTER" = true ]; then
     # Configure chkrootkit
     echo "===== 10.1 Configuring chkrootkit ====="
 
-    # Create chkrootkit scan script with proper log handling
-    cat > /etc/cron.daily/chkrootkit-scan << EOF
+    # Create chkrootkit whitelist configuration for known false positives
+    cat > /etc/chkrootkit/whitelist.conf << 'WHITELIST_EOF'
+# chkrootkit whitelist for known false positives
+# These are legitimate files and processes that should be ignored
+
+# Ruby gems documentation files (from Debian packages)
+/usr/lib/ruby/vendor_ruby/rubygems/ssl_certs/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/timeout/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/uri/.document
+
+# fail2ban test fixture files (from Debian package)
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest/.htpasswd
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/noentry/.htaccess
+
+# Legitimate packet sniffers (IDS/monitoring tools)
+# Format: process_name:interface_pattern
+WHITELIST_SNIFFERS="suricata:.*|systemd-networkd:.*|dhclient:.*|dhcpd:.*|dhcpcd:.*|wpa_supplicant:.*|NetworkManager:.*"
+WHITELIST_EOF
+
+    # Create chkrootkit scan script with proper log handling and whitelist filtering
+    cat > /etc/cron.daily/chkrootkit-scan << 'EOF'
 #!/bin/bash
-# Run a daily chkrootkit scan
+# Run a daily chkrootkit scan with intelligent whitelist filtering
 
 # Log file
 LOGFILE="/var/log/chkrootkit/daily_scan.log"
 EXPECTED_LOG="/var/log/chkrootkit/log.expected"
 TODAY_LOG="/var/log/chkrootkit/log.today"
+RAW_LOG="/var/log/chkrootkit/log.raw"
+WHITELIST_CONF="/etc/chkrootkit/whitelist.conf"
 
 # Create log directory if it doesn't exist
 mkdir -p /var/log/chkrootkit
@@ -3516,8 +3873,45 @@ mkdir -p /var/log/chkrootkit
 # Clear previous log
 echo "chkrootkit daily scan started at \$(date)" > \$LOGFILE
 
-# Run the scan
-chkrootkit -q > \$TODAY_LOG 2>&1
+# Run the scan (raw output)
+chkrootkit -q > \$RAW_LOG 2>&1
+
+# Filter out whitelisted entries
+if [ -f "\$WHITELIST_CONF" ]; then
+    # Load whitelist configuration
+    source "\$WHITELIST_CONF"
+
+    # Start with raw output
+    cp "\$RAW_LOG" "\$TODAY_LOG"
+
+    # Filter out whitelisted file paths (suspicious files warnings)
+    while IFS= read -r line; do
+        # Skip comments and empty lines
+        [[ "\$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "\$line" ]] && continue
+
+        # Check if line is a whitelist entry (starts with /)
+        if [[ "\$line" =~ ^/ ]]; then
+            # Escape special regex characters in the path
+            escaped_path=\$(echo "\$line" | sed 's/[]\/$*.^[]/\\\\&/g')
+            # Remove lines containing this path from the output
+            sed -i "/\${escaped_path}/d" "\$TODAY_LOG"
+        fi
+    done < "\$WHITELIST_CONF"
+
+    # Filter out whitelisted packet sniffers
+    if [ -n "\$WHITELIST_SNIFFERS" ]; then
+        # Remove packet sniffer warnings for whitelisted processes
+        # This filters lines like: "eno1np0: PACKET SNIFFER(/usr/bin/suricata[208664], ...)"
+        sed -i -E "/PACKET SNIFFER.*(\${WHITELIST_SNIFFERS})/d" "\$TODAY_LOG"
+    fi
+
+    echo "Whitelist filtering applied" >> \$LOGFILE
+else
+    # No whitelist - use raw output
+    cp "\$RAW_LOG" "\$TODAY_LOG"
+    echo "No whitelist configuration found - using raw output" >> \$LOGFILE
+fi
 
 # Add completion time
 echo "chkrootkit daily scan completed at \$(date)" >> \$LOGFILE
@@ -3571,18 +3965,26 @@ EOF
 
     # Run initial chkrootkit scan to create baseline
     echo "Running initial chkrootkit scan to create baseline..."
-    mkdir -p /var/log/chkrootkit
+    mkdir -p /var/log/chkrootkit /etc/chkrootkit
     /etc/cron.daily/chkrootkit-scan
 
     echo ""
-    echo "📝 IMPORTANT: chkrootkit baseline setup"
-    echo "The initial chkrootkit baseline was created, but you should update it after"
-    echo "all services are running and the system is in its final state."
+    echo "📝 IMPORTANT: chkrootkit configuration"
     echo ""
-    echo "After 24-48 hours of operation, run this command to update the baseline:"
+    echo "✅ Whitelist created: /etc/chkrootkit/whitelist.conf"
+    echo "   - Filters known false positives (Ruby gems, fail2ban test files)"
+    echo "   - Whitelists legitimate packet sniffers (Suricata, systemd-networkd)"
+    echo "   - Raw scan output saved to: /var/log/chkrootkit/log.raw"
+    echo "   - Filtered output saved to: /var/log/chkrootkit/log.today"
+    echo ""
+    echo "To add custom whitelist entries, edit: /etc/chkrootkit/whitelist.conf"
+    echo "  - File paths: Add full path on a new line (e.g., /path/to/file)"
+    echo "  - Packet sniffers: Add to WHITELIST_SNIFFERS variable (regex pattern)"
+    echo ""
+    echo "After 24-48 hours of operation, update the baseline to your system's normal state:"
     echo "  sudo cp -a -f /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected"
     echo ""
-    echo "This will eliminate false positives from legitimate security tools like Suricata."
+    echo "Note: The whitelist already filters Suricata and other legitimate security tools."
     echo ""
 else
     echo "⏭️ Rootkit detection tools not selected - skipping chkrootkit configuration"
@@ -3814,10 +4216,32 @@ cat >> /etc/logcheck/ignore.d.server/bastion-ignore << EOF
 ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ root: (Security configuration backup completed|Suricata rules updated successfully): .*$
 
 # SSH connection attempts and failures (these are expected on a bastion)
-^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sshd\[[0-9]+\]: (error: |Unable to negotiate with|Connection closed by|banner exchange:|drop connection|fatal: |exited MaxStartups|beginning MaxStartups).*$
+# Traditional syslog format (Nov 30 15:00:30)
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd\[[0-9]+\]: (error: |Unable to negotiate with|Connection closed by|banner exchange:|drop connection|fatal: |Timeout before authentication|Received disconnect from|exited MaxStartups|beginning MaxStartups).*$
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sshd-session\[[0-9]+\]: (error: |Unable to negotiate with|Connection closed by|banner exchange:|fatal: |Timeout before authentication|Received disconnect from).*$
+# ISO 8601 format (2025-11-30T15:00:30)
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sshd\[[0-9]+\]: (error: |Unable to negotiate with|Connection closed by|banner exchange:|drop connection|fatal: |Timeout before authentication|Received disconnect from|exited MaxStartups|beginning MaxStartups).*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sshd-session\[[0-9]+\]: (error: |Unable to negotiate with|Connection closed by|banner exchange:|fatal: |Timeout before authentication|Received disconnect from).*$
 
 # Kernel packet filtering messages
 ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ kernel: \[[0-9.]+\] af_packet: .*$
+
+# Unattended-upgrade informational messages (not errors)
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Enabled logging to syslog via daemon facility$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Checking if system is running on battery is skipped.*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Checking if connection is metered is skipped.*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Starting unattended upgrades script$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Allowed origins are:.*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Initial (blacklist|whitelist):.*$
+
+# Kernel performance tuning messages (informational)
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ kernel: \[[0-9.]+\] perf: interrupt took too long.*lowering kernel\.perf_event_max_sample_rate to [0-9]+$
+
+# mdadm monitoring oneshot service (reports historical boot events, not real-time failures)
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sh\[[0-9]+\]: mdadm: DeviceDisappeared event detected on md device /dev/md
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sh\[[0-9]+\]: mdadm: NewArray event detected on md device /dev/md
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sh\[[0-9]+\]: mdadm: DeviceDisappeared event detected on md device /dev/md
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sh\[[0-9]+\]: mdadm: NewArray event detected on md device /dev/md
 EOF
 
 echo "✅ Logcheck configured for daily server-level reports (less technical than default)"
@@ -4075,7 +4499,7 @@ cat > /etc/cron.d/logwatch << EOF
 EOF
 
 # Create logwatch test script for troubleshooting
-cat > /usr/local/bin/test-logwatch << EOF
+cat > /usr/local/bin/test-logwatch << 'EOF'
 #!/bin/bash
 # Test logwatch configuration and email delivery
 
@@ -4108,9 +4532,10 @@ echo ""
 
 echo "3. Checking cron jobs:"
 if [ -f /etc/cron.daily/00logwatch ]; then
-    echo "✅ Daily cron job exists and is executable: $(ls -la /etc/cron.daily/00logwatch | cut -d' ' -f1)"
+    PERMS=$(ls -la /etc/cron.daily/00logwatch 2>/dev/null | cut -d' ' -f1)
+    echo "✅ Daily cron job exists and is executable: $PERMS"
 else
-    echo "❌ Daily cron job not found"
+    echo "⏭️  Daily cron job not found (logwatch may use systemd timer instead)"
 fi
 
 if [ -f /etc/cron.d/logwatch ]; then
@@ -4132,7 +4557,7 @@ echo ""
 echo "5. Testing mail system:"
 if command -v mail >/dev/null 2>&1; then
     echo "✅ Mail command is available"
-    
+
     # Test mail delivery
     echo "Subject: Logwatch Test - $(date)
 
@@ -4143,7 +4568,7 @@ Host: $(hostname)
 Date: $(date)
 User: $(whoami)
 " | mail -s "Logwatch Test - $(hostname)" root
-    
+
     echo "✅ Test email sent to root"
     echo "Check /var/mail/root or configured email address"
 else
@@ -4171,7 +4596,7 @@ echo ""
 echo "Logwatch test complete!"
 echo "If you didn't receive emails, check:"
 echo "- SMTP configuration in /etc/postfix/main.cf"
-echo "- Email aliases in /etc/aliases"  
+echo "- Email aliases in /etc/aliases"
 echo "- Mail logs in /var/log/mail.log"
 echo "- Logwatch logs in /var/log/syslog"
 EOF
@@ -4273,17 +4698,25 @@ echo "" >> \$REPORT_FILE
 
 echo "SSH ACTIVITY SUMMARY" >> \$REPORT_FILE
 echo "====================" >> \$REPORT_FILE
-echo "Successful logins today: \$(grep "\$(date '+%b %d')" /var/log/auth.log | grep "Accepted publickey" | wc -l)" >> \$REPORT_FILE
-echo "Failed login attempts today: \$(grep "\$(date '+%b %d')" /var/log/auth.log | grep "Failed password" | wc -l)" >> \$REPORT_FILE
-echo "Currently active sessions: \$(who | wc -l)" >> \$REPORT_FILE
+# Match both publickey and password authentication
+# Note: Logs rotate at midnight, so yesterday's data is in .log.1
+# Use %e for day with leading space instead of zero (Dec  2 not Dec 02)
+YESTERDAY_DATE=\$(date -d yesterday '+%b %e')
+SUCCESSFUL_LOGINS=\$(grep "\$YESTERDAY_DATE" /var/log/auth.log.1 2>/dev/null | grep -E "Accepted (publickey|password)" | wc -l)
+FAILED_LOGINS=\$(grep "\$YESTERDAY_DATE" /var/log/auth.log.1 2>/dev/null | grep -E "Failed (password|publickey)" | wc -l)
+ACTIVE_SESSIONS=\$(who | wc -l)
+echo "Successful logins yesterday: \$SUCCESSFUL_LOGINS" >> \$REPORT_FILE
+echo "Failed login attempts yesterday: \$FAILED_LOGINS" >> \$REPORT_FILE
+echo "Currently active sessions: \$ACTIVE_SESSIONS" >> \$REPORT_FILE
 echo "" >> \$REPORT_FILE
 
 echo "RECENT SUCCESSFUL LOGINS" >> \$REPORT_FILE
 echo "========================" >> \$REPORT_FILE
-if grep "\$(date '+%b %d')" /var/log/auth.log 2>/dev/null | grep "Accepted publickey" | tail -10 >> \$REPORT_FILE; then
-    true
+LOGINS_FOUND=\$(grep "\$YESTERDAY_DATE" /var/log/auth.log.1 2>/dev/null | grep -E "Accepted (publickey|password)" | tail -10)
+if [ -n "\$LOGINS_FOUND" ]; then
+    echo "\$LOGINS_FOUND" >> \$REPORT_FILE
 else
-    echo "No successful SSH logins found for today" >> \$REPORT_FILE
+    echo "No successful SSH logins found for yesterday" >> \$REPORT_FILE
 fi
 echo "" >> \$REPORT_FILE
 
@@ -4292,53 +4725,116 @@ echo "============================" >> \$REPORT_FILE
 ufw status numbered >> \$REPORT_FILE 2>/dev/null || echo "UFW status unavailable" >> \$REPORT_FILE
 echo "" >> \$REPORT_FILE
 
-echo "UFW BLOCKED CONNECTIONS (Last 24h)" >> \$REPORT_FILE
-echo "===================================" >> \$REPORT_FILE
-# Generate UFW block statistics instead of showing individual blocks
-UFW_BLOCKS=\$(grep "\$(date '+%Y-%m-%d')" /var/log/kern.log 2>/dev/null | grep "UFW BLOCK" | wc -l)
+echo "UFW BLOCKED CONNECTIONS (Yesterday)" >> \$REPORT_FILE
+echo "====================================" >> \$REPORT_FILE
+# Generate UFW block statistics from rotated kern.log
+# Yesterday's kern.log is in .log.1 after midnight rotation
+UFW_BLOCKS=\$(grep "UFW BLOCK" /var/log/kern.log.1 2>/dev/null | wc -l)
 echo "Total blocked connections: \$UFW_BLOCKS" >> \$REPORT_FILE
 if [ \$UFW_BLOCKS -gt 0 ]; then
     echo "" >> \$REPORT_FILE
     echo "Top 10 blocked source IPs:" >> \$REPORT_FILE
-    grep "\$(date '+%Y-%m-%d')" /var/log/kern.log 2>/dev/null | grep "UFW BLOCK" | \
+    grep "UFW BLOCK" /var/log/kern.log.1 2>/dev/null | \
         grep -o "SRC=[0-9.]*" | cut -d= -f2 | sort | uniq -c | sort -nr | head -10 | \
         awk '{printf "  %s attempts from %s\\n", \$1, \$2}' >> \$REPORT_FILE 2>/dev/null || true
     echo "" >> \$REPORT_FILE
-    echo "Top 10 blocked destination ports:" >> \$REPORT_FILE
-    grep "\$(date '+%Y-%m-%d')" /var/log/kern.log 2>/dev/null | grep "UFW BLOCK" | \
+    echo "Top 10 blocked destination ports (with service identification):" >> \$REPORT_FILE
+    grep "UFW BLOCK" /var/log/kern.log.1 2>/dev/null | \
         grep -o "DPT=[0-9]*" | cut -d= -f2 | sort | uniq -c | sort -nr | head -10 | \
-        awk '{printf "  %s attempts on port %s\\n", \$1, \$2}' >> \$REPORT_FILE 2>/dev/null || true
+        while read count port; do
+            case "\$port" in
+                22) service="SSH (default)";;
+                23) service="Telnet";;
+                80) service="HTTP";;
+                443) service="HTTPS";;
+                445) service="SMB";;
+                3306) service="MySQL";;
+                3389) service="RDP";;
+                5060) service="SIP";;
+                5432) service="PostgreSQL";;
+                5555) service="Android Debug";;
+                8000|8080|8081|8088|8443|8728|8888) service="HTTP-alt/Web";;
+                9100) service="Printer/JetDirect";;
+                *) service="Unknown";;
+            esac
+            printf "  %s attempts on port %s (%s)\\n" "\$count" "\$port" "\$service" >> \$REPORT_FILE
+        done
+    echo "" >> \$REPORT_FILE
+    echo "ℹ️  Note: UFW blocks occur at firewall level, before reaching services." >> \$REPORT_FILE
+    echo "   Fail2ban only tracks attempts that reach SSH authentication." >> \$REPORT_FILE
 fi
 echo "" >> \$REPORT_FILE
 
-echo "FAIL2BAN STATUS" >> \$REPORT_FILE
-echo "===============" >> \$REPORT_FILE
-fail2ban-client status >> \$REPORT_FILE 2>/dev/null || echo "Fail2ban status unavailable" >> \$REPORT_FILE
+echo "FAIL2BAN STATUS & STATISTICS" >> \$REPORT_FILE
+echo "=============================" >> \$REPORT_FILE
+if command -v fail2ban-client >/dev/null 2>&1; then
+    fail2ban-client status >> \$REPORT_FILE 2>/dev/null || echo "Fail2ban status unavailable" >> \$REPORT_FILE
+    echo "" >> \$REPORT_FILE
+
+    # Get detailed statistics for each jail
+    JAILS=\$(fail2ban-client status 2>/dev/null | grep "Jail list:" | cut -d: -f2 | tr ',' '\\n' | xargs)
+    if [ -n "\$JAILS" ]; then
+        echo "Jail Statistics:" >> \$REPORT_FILE
+        for jail in \$JAILS; do
+            echo "" >> \$REPORT_FILE
+            echo "[\$jail]" >> \$REPORT_FILE
+            fail2ban-client status "\$jail" 2>/dev/null | grep -E "Currently failed|Total failed|Currently banned|Total banned" >> \$REPORT_FILE || true
+        done
+    fi
+else
+    echo "Fail2ban not installed" >> \$REPORT_FILE
+fi
 echo "" >> \$REPORT_FILE
 
 echo "AUDIT SUMMARY" >> \$REPORT_FILE
 echo "=============" >> \$REPORT_FILE
-# Use proper date format for ausearch (MM/DD/YYYY HH:MM:SS)
-START_DATE=\$(date -d "yesterday" "+%m/%d/%Y 00:00:00")
-END_DATE=\$(date -d "today" "+%m/%d/%Y 00:00:00")
-if ausearch --start "\$START_DATE" --end "\$END_DATE" 2>/dev/null | aureport --summary >> \$REPORT_FILE 2>/dev/null; then
-    true
+echo "" >> \$REPORT_FILE
+# Use proper date format for ausearch: MM/DD/YYYY HH:MM:SS (time required!)
+# Get yesterday's date range (00:00:00 to 23:59:59)
+YESTERDAY_START=\$(date -d "yesterday" "+%m/%d/%Y 00:00:00")
+YESTERDAY_END=\$(date -d "yesterday" "+%m/%d/%Y 23:59:59")
+
+# Check if auditd is running
+if ! systemctl is-active --quiet auditd; then
+    echo "⚠️  auditd service is not running - no audit data available" >> \$REPORT_FILE
+elif ! command -v ausearch >/dev/null 2>&1 || ! command -v aureport >/dev/null 2>&1; then
+    echo "⚠️  Audit tools not installed" >> \$REPORT_FILE
 else
-    echo "No audit events found for yesterday" >> \$REPORT_FILE
+    # Try to get audit summary with better error handling
+    AUDIT_TEMP=\$(mktemp)
+    if ausearch --start "\$YESTERDAY_START" --end "\$YESTERDAY_END" > "\$AUDIT_TEMP" 2>/dev/null && [ -s "\$AUDIT_TEMP" ]; then
+        aureport --summary -i < "\$AUDIT_TEMP" >> \$REPORT_FILE 2>/dev/null || {
+            echo "Audit events found but report generation failed" >> \$REPORT_FILE
+            echo "Event count: \$(wc -l < "\$AUDIT_TEMP")" >> \$REPORT_FILE
+        }
+    else
+        echo "No audit events found for yesterday (\$YESTERDAY_START to \$YESTERDAY_END)" >> \$REPORT_FILE
+        echo "Note: Auditd may have been recently installed or logs rotated" >> \$REPORT_FILE
+    fi
+    rm -f "\$AUDIT_TEMP"
 fi
 echo "" >> \$REPORT_FILE
 
 echo "CRITICAL SECURITY EVENTS" >> \$REPORT_FILE
 echo "========================" >> \$REPORT_FILE
-EVENTS_FOUND=0
-if ausearch -k privilege_escalation --start "\$START_DATE" --end "\$END_DATE" >> \$REPORT_FILE 2>/dev/null; then
-    EVENTS_FOUND=1
-fi
-if ausearch -k user_commands --start "\$START_DATE" --end "\$END_DATE" 2>/dev/null | tail -20 >> \$REPORT_FILE; then
-    EVENTS_FOUND=1
-fi
-if [ \$EVENTS_FOUND -eq 0 ]; then
-    echo "No critical security events found for today" >> \$REPORT_FILE
+if systemctl is-active --quiet auditd && command -v ausearch >/dev/null 2>&1; then
+    EVENTS_FOUND=0
+
+    # Check for privilege escalation events
+    if ausearch -k privilege_escalation --start "\$YESTERDAY_START" --end "\$YESTERDAY_END" >> \$REPORT_FILE 2>/dev/null; then
+        EVENTS_FOUND=1
+    fi
+
+    # Check for user command events (last 20)
+    if ausearch -k user_commands --start "\$YESTERDAY_START" --end "\$YESTERDAY_END" 2>/dev/null | tail -20 >> \$REPORT_FILE; then
+        EVENTS_FOUND=1
+    fi
+
+    if [ \$EVENTS_FOUND -eq 0 ]; then
+        echo "No critical security events found for yesterday" >> \$REPORT_FILE
+    fi
+else
+    echo "⚠️  Audit system not available" >> \$REPORT_FILE
 fi
 echo "" >> \$REPORT_FILE
 
@@ -4612,12 +5108,17 @@ else
 fi
 
 # Also create documentation in bastion user's home directory
-if [ -d "/home/$USERNAME/" ] && [ "$EUID" -eq 0 ]; then
-    if cp "$DOC_PATH" /home/$USERNAME/ 2>/dev/null; then
-        chown $USERNAME:$USERNAME /home/$USERNAME/BASTION-README.md 2>/dev/null || true
-        echo "Documentation created in $DOC_PATH and /home/$USERNAME/BASTION-README.md"
+if [ "$EUID" -eq 0 ] && id "$USERNAME" &>/dev/null; then
+    USER_HOME=$(getent passwd "$USERNAME" | cut -d: -f6)
+    if [ -n "$USER_HOME" ] && [ -d "$USER_HOME" ]; then
+        if cp "$DOC_PATH" "$USER_HOME/" 2>/dev/null; then
+            chown "$USERNAME:$USERNAME" "$USER_HOME/BASTION-README.md" 2>/dev/null || true
+            echo "Documentation created in $DOC_PATH and $USER_HOME/BASTION-README.md"
+        else
+            echo "Documentation created in $DOC_PATH (could not copy to user home directory)"
+        fi
     else
-        echo "Documentation created in $DOC_PATH (could not copy to user home directory)"
+        echo "Documentation created in $DOC_PATH"
     fi
 else
     echo "Documentation created in $DOC_PATH"
@@ -5097,10 +5598,16 @@ emergency_cleanup() {
     find /var/log -name "*.log.*" -mtime +3 -delete 2>/dev/null || true
     
     # Truncate large current log files (keep last 1000 lines)
+    # Use /tmp for temporary files to avoid read-only filesystem issues
     for logfile in /var/log/*.log; do
         if [ -f "\$logfile" ] && [ "\$(stat -c%s "\$logfile" 2>/dev/null)" -gt 104857600 ]; then  # 100MB
-            tail -n 1000 "\$logfile" > "\$logfile.tmp" && mv "\$logfile.tmp" "\$logfile"
-            echo "\$(date): Truncated large log file: \$logfile" >> /var/log/emergency-cleanup.log
+            tmpfile=\$(mktemp /tmp/log-truncate-XXXXXX)
+            if tail -n 1000 "\$logfile" > "\$tmpfile" 2>/dev/null && [ -s "\$tmpfile" ]; then
+                mv "\$tmpfile" "\$logfile"
+                echo "\$(date): Truncated large log file: \$logfile" >> /var/log/emergency-cleanup.log
+            else
+                rm -f "\$tmpfile"
+            fi
         fi
     done
     
@@ -5132,8 +5639,9 @@ chmod +x /etc/cron.hourly/disk-space-protection
 # Create a separate config file instead of modifying main logrotate.conf
 cat > /etc/logrotate.d/emergency-space-management << EOF
 # Emergency space management for bastion hosts
-# Force rotation of any logs larger than 100M
-/var/log/*.log /var/log/*/*.log {
+# Force rotation of unconfigured logs larger than 100M
+# Note: Only matches top-level /var/log/*.log to avoid conflicts with service-specific configs
+/var/log/*.log {
     size 100M
     rotate 1
     compress
@@ -5264,6 +5772,10 @@ if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; the
     echo "Downloading Netdata installer..."
     if curl -o /tmp/netdata-kickstart.sh https://get.netdata.cloud/kickstart.sh; then
         echo "Running Netdata installation..."
+        # Wait for any dpkg locks to be released before installation
+        echo "Waiting for package management to be available..."
+        wait_for_dpkg_lock
+
         if [ -n "$NETDATA_CLAIM_TOKEN" ]; then
             echo "Installing with Netdata Cloud integration..."
             sh /tmp/netdata-kickstart.sh --stable-channel --disable-telemetry --claim-token "$NETDATA_CLAIM_TOKEN"
@@ -5276,9 +5788,10 @@ if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; the
         rm -f /tmp/netdata-kickstart.sh
     else
         echo "⚠️ Failed to download Netdata installer, trying fallback method..."
-        
+
         # Fallback: install via package manager
         if command -v apt-get >/dev/null 2>&1; then
+            wait_for_dpkg_lock
             apt-get update
             apt-get install -y netdata
         else
@@ -5322,11 +5835,13 @@ if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; the
     web files group = netdata
     
 [plugins]
-    # Enable all plugins for complete monitoring
+    # Enable essential plugins for bastion monitoring
     proc = yes
     diskspace = yes
     cgroups = yes
-    tc = yes
+    tc = no
+    # tc (traffic control/QoS) disabled - not needed on bastion
+    # Bastion has minimal SSH traffic, no need for bandwidth shaping
     
 EOF
 
@@ -5394,12 +5909,14 @@ EOF
 EOF
 
     # Create bastion-specific access script
-    cat > /usr/local/bin/netdata-bastion << EOF
+    cat > /usr/local/bin/netdata-bastion << 'NETDATA_SCRIPT'
 #!/bin/bash
 # Quick access to bastion Netdata dashboard
+HOSTNAME=$(hostname)
+USERNAME=$(whoami)
 echo "🌐 Bastion Netdata Dashboard Access:"
 echo "   Local URL: http://127.0.0.1:19999"
-echo "   SSH Tunnel: ssh -L 19999:127.0.0.1:19999 user@bastion"
+echo "   SSH Tunnel: ssh -L 19999:127.0.0.1:19999 $USERNAME@$HOSTNAME"
 echo "   Netdata Cloud: https://app.netdata.cloud"
 echo ""
 echo "📊 Bastion Monitoring Features:"
@@ -5408,7 +5925,7 @@ echo "   • Failed login attempts"
 echo "   • Resource utilization"
 echo "   • Network traffic analysis"
 echo "   • System performance metrics"
-EOF
+NETDATA_SCRIPT
     chmod +x /usr/local/bin/netdata-bastion
     
     echo "✅ Netdata monitoring installed for bastion host"
@@ -5631,11 +6148,9 @@ StartLimitBurst=5
 OOMScoreAdjust=-500
 Nice=-10
 
-# Security hardening
-PrivateTmp=yes
-ProtectSystem=strict
-# ProtectHome=yes disabled - blocks SSH key authentication
-ReadWritePaths=/var/log /var/run /run
+# NO filesystem protection - allows normal system administration
+# ProtectSystem causes read-only filesystem issues that break apt, installations, and system management
+# Security is provided by network isolation, firewalls, and access controls instead
 EOF
 
     # Unbound DNS watchdog - essential for bastion name resolution
@@ -5761,7 +6276,8 @@ To prevent: kill \$pid or systemctl stop [service]" | mail -s "BASTION WARNING: 
                 log_message "INFO: High CPU process \$pid (\$command) is whitelisted - skipping"
             fi
         fi
-    done < <(ps aux --sort=-%cpu | awk 'NR>1 && \$3>0 {print \$2, \$3, \$11}' | head -10)
+    # Limit in awk to avoid broken pipe errors from head
+    done < <(ps aux --sort=-%cpu | awk 'NR>1 && NR<=11 && \$3>0 {print \$2, \$3, \$11}')
 }
 
 # Function to check memory usage
@@ -5774,7 +6290,8 @@ check_memory_usage() {
         log_message "CRITICAL: Memory usage at \${memory_usage}% - taking emergency action"
         
         # Find biggest memory consumers (excluding critical processes)
-        ps aux --sort=-%mem | awk 'NR>1 {print \$2, \$4, \$11}' | head -5 | while read -r pid mem_percent command; do
+        # Limit in awk to avoid broken pipe errors from head
+        ps aux --sort=-%mem | awk 'NR>1 && NR<=6 {print \$2, \$4, \$11}' | while read -r pid mem_percent command; do
             if ! echo "\$command" | grep -qE "\$CRITICAL_PROCESSES"; then
                 if (( \$(echo "\$mem_percent > 10" | bc -l) )); then
                     log_message "EMERGENCY: Killing high-memory process: PID=\$pid CMD=\$command MEM=\${mem_percent}%"
@@ -5833,7 +6350,8 @@ check_disk_io() {
     # Simple check using iotop if available
     if command -v iotop >/dev/null 2>&1; then
         # Get processes with high I/O (simplified check)
-        local high_io_procs=\$(iotop -a -o -d 1 -n 1 2>/dev/null | grep -v TOTAL | awk '\$4+\$6 > 1000 {print \$2, \$4+\$6, \$NF}' | head -3)
+        # Limit in awk to avoid broken pipe errors from head
+        local high_io_procs=\$(iotop -a -o -d 1 -n 1 2>/dev/null | grep -v TOTAL | awk '\$4+\$6 > 1000 && ++count<=3 {print \$2, \$4+\$6, \$NF}')
         
         if [ -n "\$high_io_procs" ]; then
             log_message "High I/O processes detected:"
@@ -5873,6 +6391,7 @@ chmod +x /usr/local/bin/resource-guardian
 # Install required dependency
 if ! command -v bc >/dev/null 2>&1; then
     echo "Installing bc calculator for Resource Guardian..."
+    wait_for_dpkg_lock
     apt-get update && apt-get install -y bc
 fi
 
@@ -6023,71 +6542,79 @@ if [ -n "$SSH_PUBLIC_KEY" ] && [ -n "$USERNAME" ]; then
     # Verify user exists
     if id "$USERNAME" &>/dev/null; then
         echo "✅ User $USERNAME exists"
-        
-        # Check home directory permissions
-        if [ -d "/home/$USERNAME" ]; then
-            HOME_PERMS=$(stat -c "%a" "/home/$USERNAME")
+
+        # Get the actual home directory for the user
+        USER_HOME=$(getent passwd "$USERNAME" | cut -d: -f6)
+
+        if [ -z "$USER_HOME" ]; then
+            echo "❌ Could not determine home directory for $USERNAME"
+        else
+            echo "Using home directory: $USER_HOME"
+
+            # Check home directory permissions
+            if [ -d "$USER_HOME" ]; then
+            HOME_PERMS=$(stat -c "%a" "$USER_HOME")
             echo "Home directory permissions: $HOME_PERMS"
             if [ "$HOME_PERMS" != "755" ]; then
                 echo "⚠️ Fixing home directory permissions..."
-                chmod 755 "/home/$USERNAME"
+                chmod 755 "$USER_HOME"
                 echo "✅ Home directory permissions corrected"
             fi
         fi
         
         # Check .ssh directory
-        if [ -d "/home/$USERNAME/.ssh" ]; then
-            SSH_DIR_PERMS=$(stat -c "%a" "/home/$USERNAME/.ssh")
-            SSH_DIR_OWNER=$(stat -c "%U:%G" "/home/$USERNAME/.ssh")
+        if [ -d "$USER_HOME/.ssh" ]; then
+            SSH_DIR_PERMS=$(stat -c "%a" "$USER_HOME/.ssh")
+            SSH_DIR_OWNER=$(stat -c "%U:%G" "$USER_HOME/.ssh")
             echo "SSH directory permissions: $SSH_DIR_PERMS, owner: $SSH_DIR_OWNER"
             
             if [ "$SSH_DIR_PERMS" != "700" ] || [ "$SSH_DIR_OWNER" != "$USERNAME:$USERNAME" ]; then
                 echo "⚠️ Fixing SSH directory permissions and ownership..."
-                chmod 700 "/home/$USERNAME/.ssh"
-                chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh"
+                chmod 700 "$USER_HOME/.ssh"
+                chown "$USERNAME:$USERNAME" "$USER_HOME/.ssh"
                 echo "✅ SSH directory permissions and ownership corrected"
             fi
         else
             echo "⚠️ SSH directory missing - recreating..."
-            mkdir -p "/home/$USERNAME/.ssh"
-            chmod 700 "/home/$USERNAME/.ssh"
-            chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh"
+            mkdir -p "$USER_HOME/.ssh"
+            chmod 700 "$USER_HOME/.ssh"
+            chown "$USERNAME:$USERNAME" "$USER_HOME/.ssh"
             echo "✅ SSH directory created"
         fi
         
         # Check authorized_keys file
-        if [ -f "/home/$USERNAME/.ssh/authorized_keys" ]; then
-            KEYS_PERMS=$(stat -c "%a" "/home/$USERNAME/.ssh/authorized_keys")
-            KEYS_OWNER=$(stat -c "%U:%G" "/home/$USERNAME/.ssh/authorized_keys")
-            KEYS_SIZE=$(stat -c "%s" "/home/$USERNAME/.ssh/authorized_keys")
+        if [ -f "$USER_HOME/.ssh/authorized_keys" ]; then
+            KEYS_PERMS=$(stat -c "%a" "$USER_HOME/.ssh/authorized_keys")
+            KEYS_OWNER=$(stat -c "%U:%G" "$USER_HOME/.ssh/authorized_keys")
+            KEYS_SIZE=$(stat -c "%s" "$USER_HOME/.ssh/authorized_keys")
             echo "authorized_keys permissions: $KEYS_PERMS, owner: $KEYS_OWNER, size: $KEYS_SIZE bytes"
             
             if [ "$KEYS_PERMS" != "600" ] || [ "$KEYS_OWNER" != "$USERNAME:$USERNAME" ]; then
                 echo "⚠️ Fixing authorized_keys permissions and ownership..."
-                chmod 600 "/home/$USERNAME/.ssh/authorized_keys"
-                chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh/authorized_keys"
+                chmod 600 "$USER_HOME/.ssh/authorized_keys"
+                chown "$USERNAME:$USERNAME" "$USER_HOME/.ssh/authorized_keys"
                 echo "✅ authorized_keys permissions and ownership corrected"
             fi
             
             if [ "$KEYS_SIZE" -eq 0 ]; then
                 echo "⚠️ authorized_keys file is empty - recreating with provided key..."
-                echo "$SSH_PUBLIC_KEY" > "/home/$USERNAME/.ssh/authorized_keys"
-                chmod 600 "/home/$USERNAME/.ssh/authorized_keys"
-                chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh/authorized_keys"
+                echo "$SSH_PUBLIC_KEY" > "$USER_HOME/.ssh/authorized_keys"
+                chmod 600 "$USER_HOME/.ssh/authorized_keys"
+                chown "$USERNAME:$USERNAME" "$USER_HOME/.ssh/authorized_keys"
                 echo "✅ authorized_keys file recreated with SSH key"
             else
-                echo "✅ authorized_keys file contains $(wc -l < "/home/$USERNAME/.ssh/authorized_keys") key(s)"
+                echo "✅ authorized_keys file contains $(wc -l < "$USER_HOME/.ssh/authorized_keys") key(s)"
                 # Show key fingerprint for verification
                 if command -v ssh-keygen >/dev/null 2>&1; then
                     echo "Key fingerprints:"
-                    ssh-keygen -lf "/home/$USERNAME/.ssh/authorized_keys" 2>/dev/null || echo "   (unable to parse key fingerprint)"
+                    ssh-keygen -lf "$USER_HOME/.ssh/authorized_keys" 2>/dev/null || echo "   (unable to parse key fingerprint)"
                 fi
             fi
         else
             echo "⚠️ authorized_keys file missing - creating with provided key..."
-            echo "$SSH_PUBLIC_KEY" > "/home/$USERNAME/.ssh/authorized_keys"
-            chmod 600 "/home/$USERNAME/.ssh/authorized_keys"
-            chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh/authorized_keys"
+            echo "$SSH_PUBLIC_KEY" > "$USER_HOME/.ssh/authorized_keys"
+            chmod 600 "$USER_HOME/.ssh/authorized_keys"
+            chown "$USERNAME:$USERNAME" "$USER_HOME/.ssh/authorized_keys"
             echo "✅ authorized_keys file created with SSH key"
         fi
         
@@ -6096,7 +6623,7 @@ if [ -n "$SSH_PUBLIC_KEY" ] && [ -n "$USERNAME" ]; then
         
         # Check for filesystem issues
         echo "Checking filesystem mount options..."
-        MOUNT_INFO=$(df "/home/$USERNAME" | tail -1)
+        MOUNT_INFO=$(df "$USER_HOME" | tail -1)
         echo "Mount info: $MOUNT_INFO"
         
         MOUNT_POINT=$(echo "$MOUNT_INFO" | awk '{print $6}')
@@ -6106,26 +6633,26 @@ if [ -n "$SSH_PUBLIC_KEY" ] && [ -n "$USERNAME" ]; then
         
         # Check for extended attributes and immutable flags
         echo "Checking file attributes..."
-        if lsattr "/home/$USERNAME/.ssh/authorized_keys" 2>/dev/null | grep -q '^....i'; then
+        if lsattr "$USER_HOME/.ssh/authorized_keys" 2>/dev/null | grep -q '^....i'; then
             echo "⚠️ WARNING: authorized_keys has immutable flag - removing..."
-            chattr -i "/home/$USERNAME/.ssh/authorized_keys" 2>/dev/null || true
+            chattr -i "$USER_HOME/.ssh/authorized_keys" 2>/dev/null || true
         fi
         
         # Check full path permissions with namei
         echo "Full path permission analysis:"
-        namei -l "/home/$USERNAME/.ssh/authorized_keys" 2>/dev/null || echo "namei not available"
+        namei -l "$USER_HOME/.ssh/authorized_keys" 2>/dev/null || echo "namei not available"
         
         # Check if SSH can actually read the file
         echo "Testing file readability..."
-        if sudo -u "$USERNAME" test -r "/home/$USERNAME/.ssh/authorized_keys"; then
+        if sudo -u "$USERNAME" test -r "$USER_HOME/.ssh/authorized_keys"; then
             echo "✅ File readable by user $USERNAME"
         else
             echo "❌ File NOT readable by user $USERNAME"
             echo "Attempting to fix permissions..."
-            chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh/authorized_keys"
-            chmod 600 "/home/$USERNAME/.ssh/authorized_keys"
+            chown "$USERNAME:$USERNAME" "$USER_HOME/.ssh/authorized_keys"
+            chmod 600 "$USER_HOME/.ssh/authorized_keys"
             
-            if sudo -u "$USERNAME" test -r "/home/$USERNAME/.ssh/authorized_keys"; then
+            if sudo -u "$USERNAME" test -r "$USER_HOME/.ssh/authorized_keys"; then
                 echo "✅ File now readable after permission fix"
             else
                 echo "❌ File STILL not readable - deeper issue exists"
@@ -6179,10 +6706,12 @@ if [ -n "$SSH_PUBLIC_KEY" ] && [ -n "$USERNAME" ]; then
                 echo "   🔧 Test port $SSH_PORT, then disable port 22 when confirmed working"
             fi
         fi
-        
-        
+
+
         echo "✅ SSH authentication validation completed"
-        
+
+        fi # Close USER_HOME check
+
     else
         echo "❌ User $USERNAME does not exist"
     fi

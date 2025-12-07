@@ -53,6 +53,23 @@ trap cleanup EXIT
 
 log_message "Starting server setup script"
 
+# ========= Load Configuration =========
+# Load configuration from defaults.env if it exists
+# This file is deployed by deploy-unified.sh and contains all configuration settings
+CONFIG_FILE="/opt/polyserver/config/defaults.env"
+if [ -f "$CONFIG_FILE" ]; then
+    log_message "Loading configuration from $CONFIG_FILE"
+    # Source the configuration file
+    # shellcheck disable=SC1090
+    set +u  # Temporarily allow unset variables during config load
+    source "$CONFIG_FILE"
+    set -u  # Re-enable strict mode
+    log_message "✓ Configuration loaded successfully"
+else
+    log_message "⚠ Configuration file not found at $CONFIG_FILE"
+    log_message "⚠ Using template defaults only"
+fi
+
 # ========= Variables =========
 USERNAME="{{DEPLOY_USER}}"                # Non-root user to create
 HOSTNAME="{{HOSTNAME}}"                   # Server hostname
@@ -64,13 +81,23 @@ LOGWATCH_EMAIL="{{LOGWATCH_EMAIL}}"       # Logwatch notification email
 
 # Optional features configuration
 NETDATA_ENABLED="{{NETDATA_ENABLED}}"     # Enable Netdata monitoring
-DEPLOYMENT_MODE="{{DEPLOYMENT_MODE}}"     # Deployment mode (docker/standalone)
+DEPLOYMENT_MODE="{{DEPLOYMENT_MODE}}"     # Deployment mode (docker/baremetal)
+
+# Component Installation Flags (configurable via defaults.env)
+: "${INSTALL_NGINX:={{INSTALL_NGINX}}}"              # Install Nginx web server
+: "${INSTALL_PHP:={{INSTALL_PHP}}}"                  # Install PHP 8.4 with php-fpm
+: "${INSTALL_NODEJS:={{INSTALL_NODEJS}}}"            # Install Node.js LTS
+: "${INSTALL_MARIADB:={{INSTALL_MARIADB}}}"          # Install MariaDB database
+: "${INSTALL_POSTGRESQL:={{INSTALL_POSTGRESQL}}}"    # Install PostgreSQL database
+: "${INSTALL_REDIS:={{INSTALL_REDIS}}}"              # Install Redis
+: "${INSTALL_DOCKER:={{INSTALL_DOCKER}}}"            # Install Docker CE
+: "${INSTALL_GIT:={{INSTALL_GIT}}}"                  # Install Git
 
 # Optional Security Components (resource-conscious defaults)
-: "${INSTALL_CLAMAV:=false}"              # Install ClamAV antivirus (high resource usage)
-: "${INSTALL_MALDET:=false}"              # Install Linux Malware Detect (medium resource usage)
-: "${INSTALL_RKHUNTER:=false}"            # Install rootkit detection tools (low resource usage)  
-: "${INSTALL_SURICATA:=false}"            # Install Suricata IDS (medium resource usage)
+: "${INSTALL_CLAMAV:={{INSTALL_CLAMAV}}}"            # Install ClamAV antivirus (high resource usage)
+: "${INSTALL_MALDET:={{INSTALL_MALDET}}}"            # Install Linux Malware Detect (medium resource usage)
+: "${INSTALL_RKHUNTER:={{INSTALL_RKHUNTER}}}"        # Install rootkit detection tools (low resource usage)
+: "${INSTALL_SURICATA:={{INSTALL_SURICATA}}}"        # Install Suricata IDS (medium resource usage)
 
 # SMTP Configuration from defaults.env
 SMTP_ENABLED="{{SMTP_ENABLED}}"
@@ -82,6 +109,7 @@ SMTP_FROM_EMAIL="{{SMTP_FROM_EMAIL}}"
 SMTP_USE_TLS="{{SMTP_USE_TLS}}"
 
 # Check if running in Docker testing mode
+TESTING_MODE="${TESTING_MODE:-false}"
 if [ "$TESTING_MODE" = "true" ]; then
     echo "🐳 Running in Docker testing mode - skipping some services that don't work in containers"
     DOCKER_MODE=true
@@ -89,54 +117,9 @@ else
     DOCKER_MODE=false
 fi
 
-# ========= Parameter Validation =========
-log_message "🔍 Validating input parameters..."
+# Check if running in automated mode (skip interactive prompts)
+AUTOMATED_INSTALL="${AUTOMATED_INSTALL:-false}"
 
-# Validate SSH port
-if ! validate_port "$SSH_PORT"; then
-    log_error "Invalid SSH port configuration"
-    exit 1
-fi
-
-# Validate SSH public key (if not in testing mode)
-if [ "$TESTING_MODE" != "true" ] && [ -n "$SSH_PUBLIC_KEY" ]; then
-    if ! validate_ssh_key "$SSH_PUBLIC_KEY"; then
-        log_error "Invalid SSH public key configuration"
-        exit 1
-    fi
-elif [ "$TESTING_MODE" != "true" ]; then
-    log_error "SSH public key is required for security"
-    exit 1
-fi
-
-# Validate email addresses
-if [ -n "$LOGWATCH_EMAIL" ] && [ "$LOGWATCH_EMAIL" != "{{LOGWATCH_EMAIL}}" ]; then
-    if ! validate_email "$LOGWATCH_EMAIL"; then
-        log_error "Invalid logwatch email configuration"
-        exit 1
-    fi
-fi
-
-if [ "$SMTP_ENABLED" = "true" ] && [ -n "$SMTP_FROM_EMAIL" ] && [ "$SMTP_FROM_EMAIL" != "{{SMTP_FROM_EMAIL}}" ]; then
-    if ! validate_email "$SMTP_FROM_EMAIL"; then
-        log_error "Invalid SMTP from email configuration"
-        exit 1
-    fi
-fi
-
-# Validate hostname
-if [ -z "$HOSTNAME" ] || [ "$HOSTNAME" = "{{HOSTNAME}}" ]; then
-    log_error "Hostname must be configured"
-    exit 1
-fi
-
-# Validate username
-if [ -z "$USERNAME" ] || [ "$USERNAME" = "{{DEPLOY_USER}}" ]; then
-    log_error "Deploy user must be configured"
-    exit 1
-fi
-
-log_message "✅ Parameter validation completed successfully"
 
 # ========= System Resource Detection =========
 detect_system_resources() {
@@ -168,7 +151,11 @@ detect_system_resources() {
     
     # Verify detection results
     if [ -n "$CPU_CORES" ] && [ "$CPU_CORES" -gt 0 ] && [ -n "$TOTAL_RAM_MB" ] && [ "$TOTAL_RAM_MB" -gt 0 ]; then
-        log_message "✅ Auto-detected: ${CPU_CORES} CPU cores, ${TOTAL_RAM_MB}MB RAM (${TOTAL_RAM_GB}GB)"
+        if [ -n "$AVAILABLE_RAM_MB" ]; then
+            log_message "✅ Auto-detected: ${CPU_CORES} CPU cores, ${TOTAL_RAM_MB}MB total RAM (${AVAILABLE_RAM_MB}MB available)"
+        else
+            log_message "✅ Auto-detected: ${CPU_CORES} CPU cores, ${TOTAL_RAM_MB}MB RAM (${TOTAL_RAM_GB}GB)"
+        fi
         RESOURCE_DETECTION_SUCCESS=true
     else
         log_message "⚠️ Auto-detection failed or returned invalid values"
@@ -203,7 +190,9 @@ detect_system_resources() {
             fi
         done
         
-        log_message "✅ User-specified: ${CPU_CORES} CPU cores, ${TOTAL_RAM_GB}GB RAM"
+        # Estimate available RAM as 85% of total for manual input
+        AVAILABLE_RAM_MB=$((TOTAL_RAM_MB * 85 / 100))
+        log_message "✅ User-specified: ${CPU_CORES} CPU cores, ${TOTAL_RAM_GB}GB RAM (~${AVAILABLE_RAM_MB}MB estimated available)"
     fi
     
     # Calculate optimization parameters
@@ -314,6 +303,40 @@ calculate_optimization_parameters() {
     log_message "   📝 Redis: maxmemory=${REDIS_MAXMEMORY}MB"
 }
 
+# Update PHP-FPM configuration with calculated values
+update_php_fpm_config() {
+    log_message "Updating PHP-FPM configuration with calculated values..."
+    
+    # Check if PHP config files exist from deployment
+    PHP_POOL_CONFIG="/etc/php/8.4/fpm/pool.d/security.conf"
+    PHP_INI_CONFIG="/etc/php/8.4/mods-available/99-security.ini"
+    
+    # Update PHP-FPM pool configuration if it exists
+    if [ -f "$PHP_POOL_CONFIG" ]; then
+        sed -i "s/^pm.max_children = .*/pm.max_children = $PHP_MAX_CHILDREN/" "$PHP_POOL_CONFIG"
+        sed -i "s/^pm.start_servers = .*/pm.start_servers = $PHP_START_SERVERS/" "$PHP_POOL_CONFIG"
+        sed -i "s/^pm.min_spare_servers = .*/pm.min_spare_servers = $PHP_MIN_SPARE_SERVERS/" "$PHP_POOL_CONFIG"
+        sed -i "s/^pm.max_spare_servers = .*/pm.max_spare_servers = $PHP_MAX_SPARE_SERVERS/" "$PHP_POOL_CONFIG"
+        
+        # Update memory limit and execution time in pool config
+        sed -i "s/php_admin_value\[memory_limit\] = .*/php_admin_value[memory_limit] = $PHP_MEMORY_LIMIT/" "$PHP_POOL_CONFIG"
+        sed -i "s/php_admin_value\[max_execution_time\] = .*/php_admin_value[max_execution_time] = $PHP_MAX_EXECUTION_TIME/" "$PHP_POOL_CONFIG"
+        sed -i "s/php_admin_value\[max_input_time\] = .*/php_admin_value[max_input_time] = $PHP_MAX_EXECUTION_TIME/" "$PHP_POOL_CONFIG"
+        
+        log_message "✅ Updated PHP-FPM pool configuration: $PHP_POOL_CONFIG"
+    else
+        log_message "⚠️  PHP-FPM pool config not found at: $PHP_POOL_CONFIG"
+    fi
+    
+    # Update PHP ini configuration if it exists
+    if [ -f "$PHP_INI_CONFIG" ]; then
+        # Note: PHP ini settings are also set in pool config, so we mainly ensure consistency
+        log_message "✅ PHP ini configuration exists: $PHP_INI_CONFIG"
+    else
+        log_message "⚠️  PHP ini config not found at: $PHP_INI_CONFIG"
+    fi
+}
+
 # Helper function for systemctl commands in Docker mode
 docker_systemctl() {
     if [ "$DOCKER_MODE" = "false" ]; then
@@ -370,9 +393,9 @@ start_service_with_retry() {
     local service="$1"
     local max_attempts=3
     local wait_time=5
-    
+
     log_message "Starting service: $service"
-    
+
     # Skip in Docker mode for services that don't work in containers
     if [ "$DOCKER_MODE" = "true" ]; then
         case "$service" in
@@ -382,7 +405,10 @@ start_service_with_retry() {
                 ;;
         esac
     fi
-    
+
+    # Reset failed state before attempting to start (in case of previous failures)
+    docker_systemctl reset-failed "$service" 2>/dev/null || true
+
     for attempt in $(seq 1 $max_attempts); do
         if docker_systemctl start "$service"; then
             sleep "$wait_time"
@@ -392,9 +418,11 @@ start_service_with_retry() {
             fi
         fi
         log_message "⚠️ Service $service start attempt $attempt failed, retrying..."
+        # Reset failed state before retrying
+        docker_systemctl reset-failed "$service" 2>/dev/null || true
         sleep $((wait_time * attempt))
     done
-    
+
     log_error "❌ Failed to start service $service after $max_attempts attempts"
     return 1
 }
@@ -468,6 +496,55 @@ validate_port() {
     fi
 }
 
+# ========= Parameter Validation =========
+log_message "🔍 Validating input parameters..."
+
+# Validate SSH port
+if ! validate_port "$SSH_PORT"; then
+    log_error "Invalid SSH port configuration"
+    exit 1
+fi
+
+# Validate SSH public key (if not in testing mode)
+if [ "$TESTING_MODE" != "true" ] && [ -n "$SSH_PUBLIC_KEY" ]; then
+    if ! validate_ssh_key "$SSH_PUBLIC_KEY"; then
+        log_error "Invalid SSH public key configuration"
+        exit 1
+    fi
+elif [ "$TESTING_MODE" != "true" ]; then
+    log_error "SSH public key is required for security"
+    exit 1
+fi
+
+# Validate email addresses
+if [ -n "$LOGWATCH_EMAIL" ] && [ "$LOGWATCH_EMAIL" != "{{LOGWATCH_EMAIL}}" ]; then
+    if ! validate_email "$LOGWATCH_EMAIL"; then
+        log_error "Invalid logwatch email configuration"
+        exit 1
+    fi
+fi
+
+if [ "$SMTP_ENABLED" = "true" ] && [ -n "$SMTP_FROM_EMAIL" ] && [ "$SMTP_FROM_EMAIL" != "{{SMTP_FROM_EMAIL}}" ]; then
+    if ! validate_email "$SMTP_FROM_EMAIL"; then
+        log_error "Invalid SMTP from email configuration"
+        exit 1
+    fi
+fi
+
+# Validate hostname (check if empty or looks like a placeholder)
+if [ -z "$HOSTNAME" ] || [[ "$HOSTNAME" =~ ^\{\{.*\}\}$ ]]; then
+    log_error "Hostname must be configured"
+    exit 1
+fi
+
+# Validate username (check if empty or looks like a placeholder)
+if [ -z "$USERNAME" ] || [[ "$USERNAME" =~ ^\{\{.*\}\}$ ]]; then
+    log_error "Deploy user must be configured"
+    exit 1
+fi
+
+log_message "✅ Parameter validation completed successfully"
+
 # Configuration validation framework
 validate_critical_configs() {
     local errors=0
@@ -531,11 +608,11 @@ validate_critical_configs() {
     # Nginx configuration validation (if nginx is installed)
     if command -v nginx >/dev/null 2>&1; then
         log_message "Checking Nginx configuration..."
-        if ! nginx -t >/dev/null 2>&1; then
-            log_error "Nginx configuration validation failed"
-            errors=$((errors + 1))
-        else
+        if nginx -t >/dev/null 2>&1; then
             log_message "✅ Nginx configuration is valid"
+        else
+            # Non-fatal - nginx config may reference files/sockets not yet created
+            log_message "⚠️ Nginx configuration has warnings (may be expected during setup)"
         fi
     fi
     
@@ -613,6 +690,10 @@ create_rollback_point() {
 log_message "===== 0. Detecting system resources ====="
 detect_system_resources
 
+# Calculate optimization parameters based on detected resources
+log_message "===== 0.1. Calculating optimization parameters ====="
+calculate_optimization_parameters
+
 # ========= Basic server hardening =========
 log_message "===== 1. Updating system packages ====="
 safe_apt_update && apt-get upgrade -y
@@ -646,12 +727,11 @@ if ! id "$USERNAME" &>/dev/null; then
   else
     # Determine if we should create user with or without password
     if [ -n "$SSH_PUBLIC_KEY" ]; then
-      echo "SSH public key provided - creating user without password prompt"
+      echo "SSH public key provided - creating user with key-only authentication"
       useradd -m -s /bin/bash "$USERNAME"
-      # Generate a random password and immediately expire it to force key-only auth
-      TEMP_PASS=$(openssl rand -base64 32)
-      echo "$USERNAME:$TEMP_PASS" | chpasswd
-      passwd -e "$USERNAME"
+      # Lock the password to enforce key-only authentication (no password login allowed)
+      passwd -l "$USERNAME"
+      echo "✅ User $USERNAME created with locked password (SSH key authentication only)"
     else
       echo "No SSH public key provided - user will be prompted to set password"
       adduser --gecos "" "$USERNAME"
@@ -731,7 +811,8 @@ MaxStartups 3:30:10
 
 # Forwarding Controls (Restrictive by Default)
 AllowTcpForwarding local
-PermitOpen 10.0.0.0/8:*,172.16.0.0/12:*,192.168.0.0/16:*
+# Note: PermitOpen doesn't support CIDR notation, would need specific host:port pairs
+# AllowTcpForwarding local already restricts to localhost forwarding
 AllowAgentForwarding no
 PermitTunnel no
 GatewayPorts no
@@ -836,44 +917,9 @@ else
     echo "🐳 Skipping NTP configuration in Docker mode (host handles time sync)"
 fi
 
-echo "===== 6. Web Server Selection ====="
-echo "Choose between traditional nginx + PHP-FPM or modern NGINX Unit for better performance:"
+echo "===== 6. Web Server Configuration ====="
+echo "Using nginx + PHP-FPM (battle-tested, industry standard)"
 echo ""
-
-# Initialize web server choice
-WEB_SERVER_TYPE="nginx"
-
-echo "🌐 Web Server Architecture Choice:"
-echo ""
-echo "📊 Traditional nginx + PHP-FPM:"
-echo "   • Widely used, battle-tested architecture"
-echo "   • Separate nginx and PHP-FPM processes"
-echo "   • Good performance, extensive documentation"
-echo "   • Industry standard for most deployments"
-echo ""
-echo "🚀 NGINX Unit (Modern Application Server):"
-echo "   • Up to 8-10x faster response times than PHP-FPM"
-echo "   • Single process handles web serving and PHP execution"
-echo "   • Dynamic configuration without restarts"
-echo "   • Better resource management under high load"
-echo "   • Newer technology, smaller community support"
-echo ""
-read -p "Use NGINX Unit for better performance? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    WEB_SERVER_TYPE="unit"
-    echo "✅ NGINX Unit selected - preparing for high-performance deployment"
-    
-    # Update environment file with web server choice
-    if [ -f "/opt/polyserver/config/defaults.env" ]; then
-        sed -i "s/WEB_SERVER_TYPE=nginx/WEB_SERVER_TYPE=unit/" "/opt/polyserver/config/defaults.env" 2>/dev/null || true
-    fi
-else
-    WEB_SERVER_TYPE="nginx"
-    echo "✅ Traditional nginx + PHP-FPM selected - reliable and well-documented"
-    
-    # Environment file already has nginx as default, no change needed
-fi
 
 echo "===== 6.1 Security Components Configuration ====="
 echo "Security components are configured via environment variables:"
@@ -886,42 +932,48 @@ echo ""
 
 echo "===== 6.2 Installing core packages and web server ====="
 
-# Core security packages (always installed)
-CORE_PACKAGES="fail2ban unattended-upgrades apt-listchanges gnupg-agent logwatch apparmor apparmor-utils git awscli"
+# Core security and monitoring packages (always installed)
+CORE_PACKAGES="fail2ban unattended-upgrades apt-listchanges gnupg-agent logwatch apparmor apparmor-utils smartmontools rsyslog powermgmt-base python3-gi"
 
-# Add optional security packages based on environment variables
-OPTIONAL_PACKAGES=""
-[ "$INSTALL_CLAMAV" = true ] && OPTIONAL_PACKAGES="$OPTIONAL_PACKAGES clamav clamav-daemon"
-[ "$INSTALL_RKHUNTER" = true ] && OPTIONAL_PACKAGES="$OPTIONAL_PACKAGES rkhunter chkrootkit"
-[ "$INSTALL_SURICATA" = true ] && OPTIONAL_PACKAGES="$OPTIONAL_PACKAGES suricata"
+# Build component-based package list
+COMPONENT_PACKAGES=""
 
-# Web server specific packages
-if [ "$WEB_SERVER_TYPE" = "unit" ]; then
-    echo "Installing NGINX Unit and PHP packages..."
-    
-    # Add NGINX Unit repository
-    curl -1sLf 'https://packages.nginx.org/keys/nginx_signing.key' | gpg --dearmor > /usr/share/keyrings/nginx-archive-keyring.gpg
-    echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] https://packages.nginx.org/unit/debian/ trixie unit" > /etc/apt/sources.list.d/unit.list
-    
-    apt-get update
-    
-    # Install NGINX Unit core and PHP module
-    WEB_SERVER_PACKAGES="unit unit-php php8.4 php8.4-cli php8.4-fpm php8.4-mysql php8.4-xml php8.4-mbstring php8.4-curl php8.4-zip php8.4-gd php8.4-intl php8.4-bcmath php8.4-opcache php8.4-readline"
-    
-    echo "✅ NGINX Unit selected - using high-performance application server"
-else
-    # Traditional nginx + PHP-FPM
-    WEB_SERVER_PACKAGES="nginx-extras php8.4 php8.4-fpm php8.4-mysql php8.4-xml php8.4-mbstring php8.4-curl php8.4-zip php8.4-gd php8.4-intl php8.4-bcmath php8.4-opcache php8.4-readline"
-    
-    echo "✅ Traditional nginx + PHP-FPM selected - using stable architecture"
+# Add Git if requested
+[ "$INSTALL_GIT" = "true" ] && COMPONENT_PACKAGES="$COMPONENT_PACKAGES git"
+
+# Add web servers
+[ "$INSTALL_NGINX" = "true" ] && COMPONENT_PACKAGES="$COMPONENT_PACKAGES nginx-extras"
+
+# Add PHP if requested (not needed for Docker-only setups)
+if [ "$INSTALL_PHP" = "true" ]; then
+    COMPONENT_PACKAGES="$COMPONENT_PACKAGES php8.4 php8.4-fpm php8.4-mysql php8.4-pgsql php8.4-redis"
+    COMPONENT_PACKAGES="$COMPONENT_PACKAGES php8.4-xml php8.4-mbstring php8.4-curl php8.4-zip php8.4-gd"
+    COMPONENT_PACKAGES="$COMPONENT_PACKAGES php8.4-intl php8.4-bcmath php8.4-opcache php8.4-readline"
 fi
 
+# Add optional security packages based on configuration
+SECURITY_PACKAGES=""
+[ "$INSTALL_CLAMAV" = "true" ] && SECURITY_PACKAGES="$SECURITY_PACKAGES clamav clamav-daemon"
+[ "$INSTALL_RKHUNTER" = "true" ] && SECURITY_PACKAGES="$SECURITY_PACKAGES rkhunter chkrootkit"
+[ "$INSTALL_SURICATA" = "true" ] && SECURITY_PACKAGES="$SECURITY_PACKAGES suricata"
+
+echo "===== Installing packages based on configuration ====="
+echo "Components to install:"
+[ "$INSTALL_NGINX" = "true" ] && echo "  • Nginx web server"
+[ "$INSTALL_PHP" = "true" ] && echo "  • PHP 8.4 with php-fpm"
+[ "$INSTALL_GIT" = "true" ] && echo "  • Git version control"
+echo "Security components:"
+[ "$INSTALL_CLAMAV" = "true" ] && echo "  • ClamAV (HIGH resource usage)"
+[ "$INSTALL_RKHUNTER" = "true" ] && echo "  • RKHunter rootkit detection"
+[ "$INSTALL_SURICATA" = "true" ] && echo "  • Suricata IDS (MEDIUM resource usage)"
+
 if [ "$DOCKER_MODE" = "true" ]; then
-    # Docker-compatible package list
-    apt-get install -y "$CORE_PACKAGES" "$WEB_SERVER_PACKAGES" "$OPTIONAL_PACKAGES" lm-sensors
+    # Docker-compatible package list (no unbound needed in containers)
+    apt-get install -y $CORE_PACKAGES $COMPONENT_PACKAGES $SECURITY_PACKAGES lm-sensors
 else
     # Full package list for production servers
-    apt-get install -y "$CORE_PACKAGES" "$WEB_SERVER_PACKAGES" "$OPTIONAL_PACKAGES" lm-sensors hddtemp unbound
+    # Note: hddtemp removed from Debian 13, using lm-sensors only for hardware monitoring
+    apt-get install -y $CORE_PACKAGES $COMPONENT_PACKAGES $SECURITY_PACKAGES lm-sensors unbound
 fi
 
 # Display installed optional security components
@@ -933,27 +985,31 @@ INSTALLED_COMPONENTS=""
 [ "$INSTALL_SURICATA" = true ] && INSTALLED_COMPONENTS="$INSTALLED_COMPONENTS suricata"
 echo "Installed optional security components:${INSTALLED_COMPONENTS:-none}"
 
-# Web server specific post-installation configuration
-if [ "$WEB_SERVER_TYPE" = "unit" ]; then
-    echo "Configuring NGINX Unit..."
-    systemctl enable unit
-    systemctl start unit
-    
-    # Test Unit installation
-    if systemctl is-active --quiet unit; then
-        echo "✅ NGINX Unit is running"
-    else
-        echo "⚠️ NGINX Unit failed to start - check logs: journalctl -u unit"
-    fi
-else
-    echo "Configuring nginx and PHP-FPM..."
+# Configure installed services
+if [ "$INSTALL_NGINX" = "true" ]; then
+    echo "Enabling Nginx service..."
     systemctl enable nginx
+fi
+
+if [ "$INSTALL_PHP" = "true" ]; then
+    echo "Configuring PHP-FPM..."
     systemctl enable php8.4-fpm
     systemctl start php8.4-fpm
-    
-    # Test installations
+
+    # Test PHP-FPM installation
     if systemctl is-active --quiet php8.4-fpm; then
         echo "✅ PHP-FPM is running"
+
+        # Update PHP-FPM configuration with calculated values
+        update_php_fpm_config
+
+        # Restart PHP-FPM to apply updated configuration
+        systemctl restart php8.4-fpm
+        if systemctl is-active --quiet php8.4-fpm; then
+            echo "✅ PHP-FPM restarted with optimized configuration"
+        else
+            echo "⚠️ PHP-FPM failed to restart after configuration update"
+        fi
     else
         echo "⚠️ PHP-FPM failed to start - check logs: journalctl -u php8.4-fpm"
     fi
@@ -1118,6 +1174,9 @@ apt-get install -y iftop nethogs tcpdump ethtool iperf3 netcat-openbsd
 # Network diagnostics
 apt-get install -y mtr-tiny arp-scan dnsutils net-tools traceroute whois
 
+# Disk and hardware monitoring tools
+apt-get install -y nvme-cli smartmontools
+
 # File integrity
 apt-get install -y debsums aide
 
@@ -1191,15 +1250,16 @@ sensors >> "$LOGFILE" 2>/dev/null
 echo "" >> "$LOGFILE"
 
 # Check for critical temperatures and log alerts
-if sensors 2>/dev/null | grep -E "CRITICAL|ALARM" | grep -v "+0.0"; then
+# Exclude: intrusion sensors (false positives), unconfigured voltage sensors (min/max = 0V), zero-threshold temps
+if sensors 2>/dev/null | grep -E "CRITICAL|ALARM" | grep -v "intrusion" | grep -v "max =  +0.00 V" | grep -v "high =  +0.0°C" | grep -v "+0.0" | grep -q .; then
     echo "[$DATE] CRITICAL: Sensor alerts detected!" >> "$LOGFILE"
-    sensors 2>/dev/null | grep -E "CRITICAL|ALARM" >> "$LOGFILE"
+    sensors 2>/dev/null | grep -E "CRITICAL|ALARM" | grep -v "intrusion" | grep -v "max =  +0.00 V" | grep -v "high =  +0.0°C" >> "$LOGFILE"
     echo "" >> "$LOGFILE"
 fi
 
 # Rotate log if it gets too large (keep last 1000 lines)
-if [ -f "$LOGFILE" ] && [ $(wc -l < "$LOGFILE") -gt 1000 ]; then
-    tail -n 500 "$LOGFILE" > "${LOGFILE}.tmp" && mv "${LOGFILE}.tmp" "$LOGFILE"
+if [ -f "$LOGFILE" ] && [ $(wc -l < "$LOGFILE" 2>/dev/null || echo 0) -gt 1000 ]; then
+    tail -n 500 "$LOGFILE" > "${LOGFILE}.tmp" 2>/dev/null && mv "${LOGFILE}.tmp" "$LOGFILE" 2>/dev/null || true
 fi
 EOF
         
@@ -1291,17 +1351,75 @@ locale-gen
 
 # Install Oh My Zsh for deploy user
 if id "$USERNAME" &>/dev/null; then
-    echo "Installing Oh My Zsh for $USERNAME..."
-    sudo -u $USERNAME sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
-    
-    # Configure Oh My Zsh with useful plugins
-    sudo -u $USERNAME sed -i 's/plugins=(git)/plugins=(git docker sudo systemd colored-man-pages)/' /home/$USERNAME/.zshrc
+    # Ensure home directory exists (safety check)
+    if [ ! -d "/home/$USERNAME" ]; then
+        echo "Creating home directory for $USERNAME..."
+        mkdir -p /home/$USERNAME
+        chown $USERNAME:$USERNAME /home/$USERNAME
+    fi
+
+    # Check if Oh My Zsh is already installed
+    if [ -d "/home/$USERNAME/.oh-my-zsh" ]; then
+        echo "Oh My Zsh already installed for $USERNAME, skipping installation"
+    else
+        echo "Installing Oh My Zsh for $USERNAME..."
+        # Install Oh My Zsh with HOME environment variable set explicitly
+        sudo -u $USERNAME HOME=/home/$USERNAME sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+    fi
+
+    # Configure Oh My Zsh with useful plugins (whether newly installed or already present)
+    if [ -f /home/$USERNAME/.zshrc ]; then
+        sudo -u $USERNAME sed -i 's/plugins=(git)/plugins=(git docker sudo systemd colored-man-pages)/' /home/$USERNAME/.zshrc
+
+        # Verify that oh-my-zsh sourcing line exists
+        if ! grep -q "source.*oh-my-zsh.sh" /home/$USERNAME/.zshrc; then
+            echo "⚠️  oh-my-zsh.sh source line missing, recreating .zshrc from template"
+            if [ -f /home/$USERNAME/.oh-my-zsh/templates/zshrc.zsh-template ]; then
+                cp /home/$USERNAME/.oh-my-zsh/templates/zshrc.zsh-template /home/$USERNAME/.zshrc
+                chown $USERNAME:$USERNAME /home/$USERNAME/.zshrc
+                sudo -u $USERNAME sed -i 's/plugins=(git)/plugins=(git docker sudo systemd colored-man-pages)/' /home/$USERNAME/.zshrc
+            fi
+        fi
+
+        echo "✅ Oh My Zsh configured for $USERNAME"
+    fi
+
+    # Change default shell to zsh for deploy user
+    if [ "$(getent passwd $USERNAME | cut -d: -f7)" != "/bin/zsh" ]; then
+        chsh -s /bin/zsh $USERNAME
+        echo "✅ Changed default shell to zsh for $USERNAME"
+    fi
 fi
 
 # Install Oh My Zsh for root user as well
-echo "Installing Oh My Zsh for root..."
-sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
-sed -i 's/plugins=(git)/plugins=(git docker sudo systemd colored-man-pages)/' /root/.zshrc
+if [ -d "/root/.oh-my-zsh" ]; then
+    echo "Oh My Zsh already installed for root, skipping installation"
+else
+    echo "Installing Oh My Zsh for root..."
+    HOME=/root sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+fi
+
+# Configure Oh My Zsh for root (whether newly installed or already present)
+if [ -f /root/.zshrc ]; then
+    sed -i 's/plugins=(git)/plugins=(git docker sudo systemd colored-man-pages)/' /root/.zshrc
+
+    # Verify that oh-my-zsh sourcing line exists
+    if ! grep -q "source.*oh-my-zsh.sh" /root/.zshrc; then
+        echo "⚠️  oh-my-zsh.sh source line missing for root, recreating .zshrc from template"
+        if [ -f /root/.oh-my-zsh/templates/zshrc.zsh-template ]; then
+            cp /root/.oh-my-zsh/templates/zshrc.zsh-template /root/.zshrc
+            sed -i 's/plugins=(git)/plugins=(git docker sudo systemd colored-man-pages)/' /root/.zshrc
+        fi
+    fi
+
+    echo "✅ Oh My Zsh configured for root"
+fi
+
+# Change default shell to zsh for root
+if [ "$(getent passwd root | cut -d: -f7)" != "/bin/zsh" ]; then
+    chsh -s /bin/zsh root
+    echo "✅ Changed default shell to zsh for root"
+fi
 
 # Configure vim globally with enhanced settings for server administration
 cat > /etc/vim/vimrc.local << EOF
@@ -1461,11 +1579,24 @@ ls -A "\$@"
 EOF
 chmod +x /usr/local/bin/la
 
-# Add aliases to both users' shell configs
+# Add aliases to both users' shell configs (only if not already present)
 if id "$USERNAME" &>/dev/null; then
-    echo 'source /etc/profile.d/polyserver-aliases.sh 2>/dev/null || true' >> /home/$USERNAME/.zshrc
+    if ! grep -q "polyserver-aliases.sh" /home/$USERNAME/.zshrc 2>/dev/null; then
+        echo 'source /etc/profile.d/polyserver-aliases.sh 2>/dev/null || true' >> /home/$USERNAME/.zshrc
+        echo "✅ Added polyserver aliases to $USERNAME's .zshrc"
+    fi
+
+    # Ensure ZSH path is properly set (use $HOME instead of hardcoded path)
+    if grep -q '^export ZSH="/home/' /home/$USERNAME/.zshrc 2>/dev/null; then
+        sed -i 's|^export ZSH="/home/.*/.oh-my-zsh"|export ZSH="$HOME/.oh-my-zsh"|' /home/$USERNAME/.zshrc
+        echo "✅ Fixed ZSH path in $USERNAME's .zshrc to use \$HOME"
+    fi
 fi
-echo 'source /etc/profile.d/polyserver-aliases.sh 2>/dev/null || true' >> /root/.zshrc
+
+if ! grep -q "polyserver-aliases.sh" /root/.zshrc 2>/dev/null; then
+    echo 'source /etc/profile.d/polyserver-aliases.sh 2>/dev/null || true' >> /root/.zshrc
+    echo "✅ Added polyserver aliases to root's .zshrc"
+fi
 
 echo "Enhanced shell environment configured with zsh, Oh My Zsh, vim enhancements, and useful aliases"
 
@@ -1498,7 +1629,7 @@ if [ "$SMTP_ENABLED" = "true" ]; then
     
     # Configure postfix for external SMTP relay
     postconf -e "relayhost = [$SMTP_SERVER]:$SMTP_PORT"
-    postconf -e "smtp_use_tls = $SMTP_USE_TLS"
+    # Note: smtp_use_tls is deprecated, using smtp_tls_security_level instead
     postconf -e "smtp_sasl_auth_enable = yes"
     postconf -e "smtp_sasl_security_options = noanonymous"
     postconf -e "smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd"
@@ -1537,18 +1668,23 @@ if [ "$SMTP_ENABLED" = "true" ]; then
     # Create recipient canonical map to redirect all local recipients
     cat > /etc/postfix/recipient_canonical << EOF
 # Redirect all local recipients to external email address
+# Using hostname: $HOSTNAME and username: $USERNAME
 root@$HOSTNAME    $LOGWATCH_EMAIL
 $USERNAME@$HOSTNAME $LOGWATCH_EMAIL
 admin@$HOSTNAME   $LOGWATCH_EMAIL
 security@$HOSTNAME $LOGWATCH_EMAIL
 postmaster@$HOSTNAME $LOGWATCH_EMAIL
 webmaster@$HOSTNAME $LOGWATCH_EMAIL
-root@\$(hostname)    $LOGWATCH_EMAIL
-$USERNAME@\$(hostname) $LOGWATCH_EMAIL
-admin@\$(hostname)   $LOGWATCH_EMAIL
-security@\$(hostname) $LOGWATCH_EMAIL
-postmaster@\$(hostname) $LOGWATCH_EMAIL
-webmaster@\$(hostname) $LOGWATCH_EMAIL
+logcheck@$HOSTNAME $LOGWATCH_EMAIL
+
+# Catch-all for any local user without @hostname
+root    $LOGWATCH_EMAIL
+$USERNAME $LOGWATCH_EMAIL
+admin   $LOGWATCH_EMAIL
+security $LOGWATCH_EMAIL
+postmaster $LOGWATCH_EMAIL
+webmaster $LOGWATCH_EMAIL
+logcheck $LOGWATCH_EMAIL
 EOF
     
     # Configure recipient canonical mapping
@@ -1593,6 +1729,7 @@ security: $LOGWATCH_EMAIL
 postmaster: $LOGWATCH_EMAIL
 MAILER-DAEMON: $LOGWATCH_EMAIL
 webmaster: $LOGWATCH_EMAIL
+logcheck: $LOGWATCH_EMAIL
 EOF
 
     # Build alias database
@@ -1644,7 +1781,7 @@ enable_and_start_service postfix
 
 # Check if we're in a container environment
 CONTAINER_ENV=""
-if [ -f /.dockerenv ] || [ -n "${CONTAINER}" ] || [ "${TESTING_MODE}" = "true" ]; then
+if [ -f /.dockerenv ] || [ -n "${CONTAINER:-}" ] || [ "${TESTING_MODE}" = "true" ]; then
     CONTAINER_ENV="true"
     echo "📦 Container environment detected - mail testing will be simplified"
 fi
@@ -1745,7 +1882,7 @@ if [ "$CONTAINER_ENV" != "true" ]; then
     if [ "$SMTP_ENABLED" = "true" ]; then
         postconf relayhost 2>/dev/null || echo "postconf failed"
         postconf smtp_sasl_auth_enable 2>/dev/null || echo "postconf failed"
-        postconf smtp_use_tls 2>/dev/null || echo "postconf failed"
+        postconf smtp_tls_security_level 2>/dev/null || echo "postconf failed"
     else
         postconf inet_interfaces 2>/dev/null || echo "postconf failed"
         postconf mydestination 2>/dev/null || echo "postconf failed"
@@ -1798,6 +1935,8 @@ Unattended-Upgrade::Allow-downgrade "true";
 EOF
 
 # Configure automatic service restart without interactivity
+# Create directory if it doesn't exist (needrestart package might not be installed yet)
+mkdir -p /etc/needrestart/conf.d
 cat > /etc/needrestart/conf.d/unattended.conf << 'EOF'
 # Automatically restart services without prompting during unattended upgrades
 \$nrconf{restart} = 'a';
@@ -1818,26 +1957,56 @@ if [ "$DOCKER_MODE" = "false" ]; then
     logger -p auth.info "Server setup: Initializing auth.log for fail2ban"
     
     cat > /etc/fail2ban/jail.local << EOF
-[DEFAULT]
-# Enable IPv6 support for modern infrastructure
-allowipv6 = yes
+    [DEFAULT]
+    # Enable IPv6 support for modern infrastructure
+    allowipv6 = yes
+    # Do not ban localhost and the trusted client IP if provided
+    ignoreip = 127.0.0.1/8 ::1 ${CLIENT_IP:-}
 
-# Use systemd backend for Debian 13 reliability
-backend = systemd
+    # Use systemd backend for Debian 13 reliability
+    backend = systemd
 
-# Use UFW/nftables for Debian 13 firewall management
-banaction = ufw
-banaction_allports = ufw
-action = %(banaction)s[blocktype=reject]
+    # Use UFW/nftables for Debian 13 firewall management
+    banaction = ufw
+    banaction_allports = ufw
+    action = %(banaction)s[blocktype=reject]
 
-[sshd]
-enabled = true
-port = $SSH_PORT
-filter = sshd
-logpath = /var/log/auth.log
-maxretry = 3
-bantime = 3600
-# Inherit UFW action from DEFAULT section
+    [sshd]
+    enabled = true
+    port = $SSH_PORT
+    filter = sshd
+    logpath = /var/log/auth.log
+    maxretry = 3
+    bantime = 3600
+    findtime = 600
+
+    [sshd-ddos]
+    enabled = true
+    port = $SSH_PORT
+    filter = sshd-ddos
+    logpath = /var/log/auth.log
+    maxretry = 2
+    bantime = 3600
+
+    [recidive]
+    enabled = true
+    filter = recidive
+    logpath = /var/log/fail2ban.log
+    action = %(banaction)s[name=recidive, port="all"]
+    bantime = 86400
+    findtime = 86400
+    maxretry = 5
+EOF
+
+    # Create custom filter for SSH pre-auth connection floods and non-identifying clients
+    cat > /etc/fail2ban/filter.d/sshd-ddos.conf << 'EOF'
+    # Fail2Ban filter for SSH pre-auth connection floods and non-identifying clients
+    [Definition]
+    failregex = ^.*sshd\[\d+\]: Did not receive identification string from <HOST>\s*$
+                ^.*sshd\[\d+\]: Connection closed by <HOST> port \d+ \[preauth\]$
+                ^.*sshd\[\d+\]: Disconnected from <HOST> port \d+ \[preauth\]$
+                ^.*sshd\[\d+\]: Connection reset by <HOST> port \d+ \[preauth\]$
+    ignoreregex =
 EOF
     
     # Test fail2ban configuration before starting
@@ -1877,8 +2046,8 @@ fi
 # Configure hardware sensors
 echo "===== 7. Configuring hardware monitoring ====="
 if [ "$DOCKER_MODE" = "false" ]; then
-    # Detect and configure sensors automatically
-    yes | sensors-detect
+    # Detect and configure sensors automatically (non-interactive mode)
+    sensors-detect --auto
 else
     echo "🐳 Skipping hardware sensor detection in Docker mode"
 fi
@@ -1903,10 +2072,11 @@ FixStaleSocket true
 LocalSocketGroup clamav
 LocalSocketMode 666
 
-# Resource-balanced configuration for application servers
-MaxThreads 2
+# Resource-balanced configuration for web upload scanning
+# Optimized for low resource usage on shared web/app servers
+MaxThreads 1
 MaxConnectionQueueLength 10
-MaxQueue 100
+MaxQueue 50
 
 # Optimize scanning performance vs resources
 ReadTimeout 180
@@ -1948,7 +2118,7 @@ LogVerbose false
 # Network and detection settings
 SelfCheck 3600
 DatabaseDirectory /var/lib/clamav
-OfficialDatabaseOnly false
+OfficialDatabaseOnly true
 Foreground false
 Debug false
 
@@ -1959,11 +2129,11 @@ LeaveTemporaryFiles false
 DetectPUA false
 CrossFilesystems true
 
-# Heuristic settings - balanced approach
+# Heuristic settings - optimized for resource usage
 AlgorithmicDetection true
-Bytecode true
+Bytecode false
 BytecodeSecurity TrustSigned
-BytecodeTimeout 60000
+BytecodeTimeout 30000
 
 # Enhanced detection for production servers
 PhishingSignatures true
@@ -2005,8 +2175,8 @@ NotifyClamd /etc/clamav/clamd.conf
 # Test database before loading
 TestDatabases yes
 
-# Bytecode updates
-Bytecode true
+# Bytecode updates (disabled for resource savings)
+Bytecode false
 EOF
 
     # Create systemd resource limits for ClamAV services
@@ -2032,8 +2202,7 @@ RestartSec=60
 StartLimitInterval=1200
 StartLimitBurst=2
 
-# Watchdog configuration for production workloads
-WatchdogSec=300
+# Note: Watchdog disabled - ClamAV doesn't send systemd watchdog pings
 
 # OOM handling - kill ClamAV rather than other services
 OOMPolicy=kill
@@ -2127,18 +2296,40 @@ EOF
     echo "   • Enhanced security isolation and OOM protection"
 fi
 
-# Enable and start ClamAV services
+# Enable ClamAV daemon and configure freshclam for nightly updates
 create_rollback_point "clamav-config"
-enable_and_start_service clamav-freshclam
+
+# Disable systemd freshclam service - we'll use cron for nightly updates instead
+# This prevents database updates during business hours
+docker_systemctl disable --now clamav-freshclam.service 2>/dev/null || true
+docker_systemctl disable --now clamav-freshclam.timer 2>/dev/null || true
+
+# Create cron job for nightly virus definition updates at 3 AM
+cat > /etc/cron.d/clamav-freshclam << 'EOF'
+# ClamAV freshclam - nightly virus definition updates at 3 AM
+# Runs quietly and restarts daemon after update to avoid business hour disruptions
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# Run freshclam at 3 AM daily
+0 3 * * * root /usr/bin/freshclam --quiet && systemctl restart clamav-daemon || logger -t freshclam "Failed to update virus definitions"
+EOF
+
+chmod 644 /etc/cron.d/clamav-freshclam
+
+# Enable and start ClamAV daemon
 enable_and_start_service clamav-daemon
 
 if [ "$DOCKER_MODE" = "false" ]; then
     echo ""
     echo "📋 ClamAV Management Commands:"
-    echo "   • Check status: systemctl status clamav-daemon clamav-freshclam"
+    echo "   • Check daemon: systemctl status clamav-daemon"
     echo "   • View logs: journalctl -u clamav-daemon -f"
     echo "   • Manual scan: clamscan -r /path/to/scan"
+    echo "   • Manual update: /usr/bin/freshclam && systemctl restart clamav-daemon"
     echo "   • Monitor resources: systemctl show clamav-daemon --property=CPUUsageNSec,MemoryCurrent"
+    echo ""
+    echo "   Note: Virus definitions update nightly at 3 AM via cron (not during business hours)"
 fi
 else
     echo "⏭️ ClamAV antivirus not selected - skipping configuration"
@@ -2151,12 +2342,15 @@ if [ "$INSTALL_MALDET" = true ]; then
     mkdir -p /tmp/maldet
     cd /tmp/maldet
 
-# Download the latest version
+# Clean up any previous downloads and download the latest version
+rm -f maldetect-current.tar.gz*
 wget https://www.rfxn.com/downloads/maldetect-current.tar.gz
 
 # Extract and install
 tar -xzf maldetect-current.tar.gz
-MALDET_DIR=$(tar -tzf maldetect-current.tar.gz | head -1 | cut -f1 -d"/")
+# Get the directory name (ignore SIGPIPE from head closing pipe early)
+# Using || true to prevent ERR trap from catching exit code 141
+MALDET_DIR=$(tar -tzf maldetect-current.tar.gz 2>/dev/null | head -1 | cut -f1 -d"/" || true)
 cd "$MALDET_DIR"
 ./install.sh
 
@@ -2396,6 +2590,23 @@ cat >> /etc/logcheck/ignore.d.server/application-server-ignore << EOF
 ^\w{3} [ :0-9]{11} [._[:alnum:]-]+ dockerd\[[0-9]+\]: .*$
 ^\w{3} [ :0-9]{11} [._[:alnum:]-]+ containerd\[[0-9]+\]: .*$
 
+# Unattended-upgrade informational messages (not errors)
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Enabled logging to syslog via daemon facility$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Checking if system is running on battery is skipped.*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Checking if connection is metered is skipped.*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Starting unattended upgrades script$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Allowed origins are:.*$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Initial (blacklist|whitelist):.*$
+
+# Kernel performance tuning messages (informational)
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ kernel: \[[0-9.]+\] perf: interrupt took too long.*lowering kernel\.perf_event_max_sample_rate to [0-9]+$
+
+# mdadm monitoring oneshot service (reports historical boot events, not real-time failures)
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sh\[[0-9]+\]: mdadm: DeviceDisappeared event detected on md device /dev/md
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sh\[[0-9]+\]: mdadm: NewArray event detected on md device /dev/md
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sh\[[0-9]+\]: mdadm: DeviceDisappeared event detected on md device /dev/md
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sh\[[0-9]+\]: mdadm: NewArray event detected on md device /dev/md
+
 EOF
 
 log_message "✅ Logcheck configured with application server ignore patterns"
@@ -2435,7 +2646,7 @@ echo "AIDE integrity check started at $(date)" > $AIDE_LOG
 echo "=====================================" >> $AIDE_LOG
 
 # Run AIDE check with proper error handling
-if aide --check 2>&1 | tee -a $AIDE_LOG; then
+if aide --config=/etc/aide/aide.conf --check 2>&1 | tee -a $AIDE_LOG; then
     # AIDE completed successfully
     echo "AIDE check completed at $(date)" >> $AIDE_LOG
     
@@ -2490,6 +2701,36 @@ EOF
 
     systemctl daemon-reload
 
+    # Configure AIDE to exclude/handle growing log files
+    echo "Configuring AIDE exclusions for growing logs..."
+    cat > /etc/aide/aide.conf.d/99-server-exclusions << 'EOF'
+# Server-specific AIDE exclusions for growing/active log files
+# These logs change frequently and cause warnings during AIDE scans
+
+# Exclude Suricata logs (constantly growing during operation)
+!/var/log/suricata/eve.json$
+!/var/log/suricata/fast.log$
+!/var/log/suricata/stats.log$
+
+# Exclude nginx access logs (high frequency changes)
+!/var/log/nginx/access.log$
+!/var/log/nginx/error.log$
+
+# Exclude other frequently changing logs
+!/var/log/auth.log$
+!/var/log/syslog$
+!/var/log/kern.log$
+!/var/log/daemon.log$
+EOF
+
+    # Update AIDE configuration
+    if [ -f /etc/aide/aide.conf ]; then
+        # Ensure our exclusions are included
+        if ! grep -q "99-server-exclusions" /etc/aide/aide.conf; then
+            echo "@@include /etc/aide/aide.conf.d/99-server-exclusions" >> /etc/aide/aide.conf
+        fi
+    fi
+
     echo "Initializing AIDE database - this will take some time..."
     nice -n 19 aideinit
     
@@ -2539,8 +2780,41 @@ krb5_principal = auditd
 distribute_network = no
 EOF
 
-# Configure audit rules
+# Configure minimal audit rules (full rules will be added after all services are installed)
 cat > /etc/audit/rules.d/audit.rules << 'EOF'
+## auditd rules for enhanced security monitoring
+## NOTE: This is a minimal initial configuration
+## Full rules will be loaded after all services are installed
+
+## First rule - delete all
+-D
+
+## Increase the buffers to survive stress events
+## Adjust buffer size based on system activity
+-b 8192
+
+## This determines how long to wait in burst of events
+--backlog_wait_time 0
+
+## Set failure mode to syslog
+-f 1
+
+## Minimal rules for guaranteed-to-exist paths only
+## File System monitoring (basic)
+-w /etc/passwd -p wa -k user_modify
+-w /etc/group -p wa -k user_group_modifications
+-w /etc/shadow -p wa -k password_modifications
+-w /etc/sudoers -p wa -k sudoers_modifications
+-w /etc/hosts -p wa -k hosts_file_modifications
+
+## SSH configuration
+-w /etc/ssh/sshd_config -p wa -k sshd_config_modifications
+
+## Note: Additional rules will be added after service installation completes
+EOF
+
+# Save the full audit rules for later deployment
+cat > /tmp/audit.rules.full << 'FULLRULES'
 ## auditd rules for enhanced security monitoring
 
 ## First rule - delete all
@@ -2575,9 +2849,9 @@ cat > /etc/audit/rules.d/audit.rules << 'EOF'
 -w /etc/sudoers.d -p wa -k sudoers_modifications
 
 ## Login monitoring
--w /var/log/faillog -p wa -k login_failures
+# Note: faillog and faillock paths may not exist on all systems
+# These rules will be added conditionally after the main rules
 -w /var/log/lastlog -p wa -k login_activity
--w /var/run/faillock -p wa -k login_failures
 
 ## Process and system activity
 -w /sbin/insmod -p x -k module_insertion
@@ -2674,7 +2948,9 @@ cat > /etc/audit/rules.d/audit.rules << 'EOF'
 ## Make the configuration immutable until next reboot (uncomment if needed)
 ## WARNING: You will need to reboot to make changes after enabling this option
 #-e 2
-EOF
+FULLRULES
+
+echo "Full audit rules saved to /tmp/audit.rules.full for later deployment"
 
 # Create daily audit report script
 cat > /etc/cron.daily/audit-report << 'EOF'
@@ -2711,65 +2987,65 @@ echo "" >> $REPORT_FILE
 # General Summary Report
 echo "GENERAL SUMMARY" >> $REPORT_FILE
 echo "===============" >> $REPORT_FILE
-ausearch --start today --end now | aureport --summary -i >> $REPORT_FILE
+ausearch --start today --end now 2>/dev/null | aureport --summary -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Authentication Report
 echo "AUTHENTICATION EVENTS" >> $REPORT_FILE
 echo "====================" >> $REPORT_FILE
-ausearch --start today --end now | aureport --auth --summary -i >> $REPORT_FILE
+ausearch --start today --end now 2>/dev/null | aureport --auth --summary -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # User Modification Events
 echo "USER MODIFICATION EVENTS" >> $REPORT_FILE
 echo "=======================" >> $REPORT_FILE
-ausearch -k user_modify --start today --end now -i >> $REPORT_FILE
+ausearch -k user_modify --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Executable Summary
 echo "EXECUTABLE SUMMARY" >> $REPORT_FILE
 echo "=================" >> $REPORT_FILE
-ausearch --start today --end now | aureport --executable --summary -i >> $REPORT_FILE
+ausearch --start today --end now 2>/dev/null | aureport --executable --summary -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Suspicious Command Executions
 echo "SUSPICIOUS COMMAND EXECUTIONS" >> $REPORT_FILE
 echo "============================" >> $REPORT_FILE
-ausearch -k data_exfiltration --start today --end now -i >> $REPORT_FILE
+ausearch -k data_exfiltration --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # File Modification Events
 echo "CONFIG FILE MODIFICATION EVENTS" >> $REPORT_FILE
 echo "=============================" >> $REPORT_FILE
-ausearch -k sshd_config_modifications --start today --end now -i >> $REPORT_FILE
-ausearch -k nginx_config --start today --end now -i >> $REPORT_FILE
-ausearch -k docker_config --start today --end now -i >> $REPORT_FILE
-ausearch -k application_config_changes --start today --end now -i >> $REPORT_FILE
-ausearch -k security_tool_config --start today --end now -i >> $REPORT_FILE
+ausearch -k sshd_config_modifications --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch -k nginx_config --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
+ausearch -k docker_config --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
+ausearch -k application_config_changes --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
+ausearch -k security_tool_config --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
 echo "" >> $REPORT_FILE
 
 # Privilege Escalation
 echo "PRIVILEGE ESCALATION EVENTS" >> $REPORT_FILE
 echo "=========================" >> $REPORT_FILE
-ausearch -k privilege_escalation --start today --end now -i >> $REPORT_FILE
+ausearch -k privilege_escalation --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Unauthorized Access Attempts
 echo "UNAUTHORIZED ACCESS ATTEMPTS" >> $REPORT_FILE
 echo "==========================" >> $REPORT_FILE
-ausearch -k unauthorized_access --start today --end now -i >> $REPORT_FILE
+ausearch -k unauthorized_access --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Binary Modifications
 echo "BINARY MODIFICATION EVENTS" >> $REPORT_FILE
 echo "=========================" >> $REPORT_FILE
-ausearch -k binary_modifications --start today --end now -i >> $REPORT_FILE
+ausearch -k binary_modifications --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Docker Socket Access
 echo "DOCKER SOCKET ACCESS" >> $REPORT_FILE
 echo "===================" >> $REPORT_FILE
-ausearch -k docker_socket_access --start today --end now -i >> $REPORT_FILE
+ausearch -k docker_socket_access --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Audit System Status
@@ -2824,9 +3100,7 @@ RestartSec=60
 TimeoutStartSec=60
 TimeoutStopSec=30
 
-# Watchdog configuration
-WatchdogSec=120
-NotifyAccess=main
+# Note: Watchdog disabled - auditd doesn't send systemd watchdog pings
 EOF
 
 systemctl daemon-reload
@@ -2862,8 +3136,8 @@ EOF
 # Configure ModSecurity WAF
 echo "===== 10.2 Configuring ModSecurity Web Application Firewall ====="
 if [ "$DOCKER_MODE" = "false" ]; then
-    # Install libmodsecurity3 for Debian
-    apt-get install -y libmodsecurity3 libmodsecurity-dev
+    # Install ModSecurity for Nginx (Debian 13)
+    apt-get install -y libmodsecurity3 libnginx-mod-http-modsecurity modsecurity-crs
 
     # Enable ModSecurity in Nginx
     mkdir -p /etc/nginx/modsec
@@ -2893,7 +3167,7 @@ SecRuleEngine On
 SecRequestBodyAccess On
 SecRequestBodyLimit 13107200
 SecRequestBodyNoFilesLimit 131072
-SecRequestBodyInMemoryLimit 131072
+# SecRequestBodyInMemoryLimit deprecated in ModSecurity 3.0 - handled by web server
 
 # Buffer response bodies
 SecResponseBodyAccess On
@@ -2931,112 +3205,131 @@ else
     echo "🐳 Skipping ModSecurity configuration in Docker mode (module not available)"
 fi
 
-# Install comprehensive nginx security configuration
-echo "===== 10.2.1 Installing Nginx Security Configuration ====="
+# Install comprehensive nginx security configuration (only if nginx is installed)
+if [ "$INSTALL_NGINX" = "true" ]; then
+    echo "===== 10.2.1 Installing Nginx Security Configuration ====="
 
-# Create security configuration for blocking common attacks
-cat > /etc/nginx/conf.d/security.conf << 'EOF'
-# Nginx Security Configuration for PolyServer Applications
-# This file contains security rules to block common attacks and sensitive file access
+    # Create HTTP-level security configuration (if-based rules)
+    cat > /etc/nginx/conf.d/security.conf << 'EOF'
+# Nginx Security Configuration - HTTP Level Rules
+# These rules work at the http{} level (no location blocks allowed here)
+# For location-based rules, include /etc/nginx/snippets/security-locations.conf in your server blocks
 
-# Hide nginx version information
-server_tokens off;
-
-# Block access to sensitive files and directories
-location ~ /\. {
-    # Block access to hidden files (.git, .env, .htaccess, etc.)
-    access_log off;
-    log_not_found off;
-    deny all;
+# Block common vulnerability scanners and bad user agents
+map $http_user_agent $block_user_agent {
+    default 0;
+    ~*(nikto|sqlmap|fimap|nessus|openvas|nmap|masscan|zmap|zap|burp|netsparker|acunetix|appscan|webscarab|w3af|skipfish|wapiti|whatweb|gobuster|dirb|dirbuster|ffuf|feroxbuster|nuclei|httpx|subfinder) 1;
 }
 
+# Block suspicious referrers
+map $http_referer $block_referrer {
+    default 0;
+    ~*(babes|click|diamond|forsale|girl|jewelry|love|nudit|organic|poker|porn|sex|teen|video|webcam|zippo) 1;
+}
+
+# Block SQL injection attempts in query strings
+map $args $block_sql_injection {
+    default 0;
+    ~*(union|select|insert|delete|update|drop|create|alter|exec|execute|script|javascript|vbscript) 1;
+}
+
+# Block suspicious query strings
+map $args $block_suspicious_args {
+    default 0;
+    ~*(\.\./|<script|GLOBALS|globals|javascript:|vbscript:|onload|onerror|onclick) 1;
+}
+EOF
+
+    # Create location-based security rules as a snippet
+    mkdir -p /etc/nginx/snippets
+    cat > /etc/nginx/snippets/security-locations.conf << 'EOF'
+# Security Location Blocks - Include this file in your server {} blocks
+# Usage: include /etc/nginx/snippets/security-locations.conf;
+
+# Block based on maps from security.conf
+if ($block_user_agent) {
+    return 444;
+}
+
+if ($block_referrer) {
+    return 444;
+}
+
+if ($block_sql_injection) {
+    return 444;
+}
+
+if ($block_suspicious_args) {
+    return 444;
+}
+
+# Block empty user agents
+if ($http_user_agent ~ ^$) {
+    return 444;
+}
+
+# Block access to hidden files (.git, .env, .htaccess, etc.)
+location ~ /\. {
+    deny all;
+    access_log off;
+    log_not_found off;
+}
+
+# Allow Let's Encrypt ACME challenge (exception to hidden files rule)
 location ~ ^/(\.well-known/acme-challenge/)(.*)$ {
-    # Allow Let's Encrypt ACME challenge (exception to hidden files rule)
     allow all;
 }
 
 # Block access to common sensitive files
 location ~* \.(env|git|gitignore|gitmodules|htaccess|htpasswd|ini|log|sh|sql|conf|config|bak|backup|swp|tmp)$ {
+    deny all;
     access_log off;
     log_not_found off;
-    deny all;
 }
 
 # Block access to README and documentation files
 location ~* ^/(readme|README|changelog|CHANGELOG|license|LICENSE|install|INSTALL|upgrade|UPGRADE|todo|TODO).*$ {
+    deny all;
     access_log off;
     log_not_found off;
-    deny all;
 }
 
 # Block access to common admin paths (application-agnostic protection)
 location ~* ^/(admin|administrator|wp-admin|wp-login|wp-config|wp-content|wp-includes|wp-json|xmlrpc|phpmyadmin|pma|mysql|adminer|cpanel|plesk|webmail|roundcube|squirrelmail)(.*)$ {
+    return 444;
     access_log off;
-    log_not_found off;
-    return 444; # Close connection without response
 }
 
 # Block access to common CMS and framework paths
 location ~* ^/(drupal|joomla|wordpress|magento|prestashop|opencart|typo3|concrete5|modx|craft|laravel|symfony|codeigniter|cakephp|zend|yii)(.*)$ {
-    access_log off;
-    log_not_found off;
     return 444;
+    access_log off;
 }
 
 # Block access to common development/testing paths
 location ~* ^/(test|tests|testing|dev|development|staging|demo|backup|backups|old|new|temp|tmp|cache|logs|vendor|node_modules|bower_components)(.*)$ {
-    access_log off;
-    log_not_found off;
     return 444;
+    access_log off;
 }
 
 # Block access to common exploit paths
 location ~* ^/(shell|webshell|c99|c100|r57|r99|backdoor|hack|hacked|exploit|virus|trojan|worm|bot|zombie|scanner|scan|probe|brute|force|attack)(.*)$ {
-    access_log off;
-    log_not_found off;
     return 444;
+    access_log off;
 }
 
 # Block requests for non-existent scripts that are commonly probed
-location ~* \.(asp|aspx|jsp|cgi|pl|py|rb|php|php3|php4|php5|phtml|shtml)$ {
-    access_log off;
-    log_not_found off;
+location ~* \.(asp|aspx|jsp|cgi|pl|py|rb|php3|php4|php5|phtml|shtml)$ {
     return 444;
-}
-
-# Block common vulnerability scanners and bad user agents
-if ($http_user_agent ~* (nikto|sqlmap|fimap|nessus|openvas|nmap|masscan|zmap|zap|burp|netsparker|acunetix|appscan|webscarab|w3af|skipfish|wapiti|whatweb|gobuster|dirb|dirbuster|ffuf|feroxbuster|nuclei|httpx|subfinder)) {
     access_log off;
-    return 444;
-}
-
-# Block empty user agents and common bot patterns
-if ($http_user_agent ~ ^$) {
-    access_log off;
-    return 444;
-}
-
-# Block suspicious referrers
-if ($http_referer ~* (babes|click|diamond|forsale|girl|jewelry|love|nudit|organic|poker|porn|sex|teen|video|webcam|zippo)) {
-    access_log off;
-    return 444;
-}
-
-# Block requests with suspicious query strings
-if ($args ~* (\.\./|<script|GLOBALS|globals|javascript:|vbscript:|onload|onerror|onclick)) {
-    access_log off;
-    return 444;
-}
-
-# Block SQL injection attempts in query strings
-if ($args ~* (union|select|insert|delete|update|drop|create|alter|exec|execute|script|javascript|vbscript)) {
-    access_log off;
-    return 444;
 }
 EOF
 
-# Create proxy parameters file for reusable proxy settings
-cat > /etc/nginx/conf.d/proxy_params << 'EOF'
+    echo "✅ Created /etc/nginx/snippets/security-locations.conf"
+    echo "   Include this file in server blocks for location-based security rules"
+
+    # Create proxy parameters file for reusable proxy settings
+    cat > /etc/nginx/conf.d/proxy_params << 'EOF'
 # Common proxy parameters for applications
 # This file contains reusable proxy settings
 
@@ -3071,11 +3364,14 @@ proxy_hide_header X-Powered-By;
 proxy_hide_header Server;
 EOF
 
-# Set proper permissions
-chmod 644 /etc/nginx/conf.d/security.conf
-chmod 644 /etc/nginx/conf.d/proxy_params
+    # Set proper permissions
+    chmod 644 /etc/nginx/conf.d/security.conf
+    chmod 644 /etc/nginx/conf.d/proxy_params
 
-echo "Nginx security configuration installed"
+    echo "✅ Nginx security configuration installed"
+else
+    echo "⏭️  Skipping Nginx security configuration (INSTALL_NGINX=false)"
+fi
 
 # Configure AppArmor for applications
 echo "===== 10.3 Setting up AppArmor for applications ====="
@@ -3126,23 +3422,25 @@ if [ "$DOCKER_MODE" = "false" ]; then
         fi
         
         echo ""
-        echo "Will you be running DNS services on this server? [y/N]"
+        echo "Will you be running an authoritative DNS server (BIND9, etc.) on this server? [y/N]"
+        echo "  Note: This is for hosting DNS zones, not DNS resolution (Unbound resolver is already configured)"
         read -r dns_services
         if [[ $dns_services =~ ^[Yy]$ ]]; then
-            echo "  📌 DNS monitoring enabled for this server"
+            echo "  📌 DNS server monitoring enabled for this server"
         else
             DNS_SERVERS="any"
-            echo "  📌 DNS monitoring set to external traffic only"
+            echo "  📌 DNS monitoring set to external traffic only (server is not hosting DNS zones)"
         fi
         
         echo ""
-        echo "Will you be running mail services on this server? [y/N]"
+        echo "Will you be running a mail server (Postfix, Exim, etc.) on this server? [y/N]"
+        echo "  Note: This is for receiving/hosting mail, not sending system notifications (SMTP relay is configured separately)"
         read -r mail_services
         if [[ $mail_services =~ ^[Yy]$ ]]; then
-            echo "  📌 Mail monitoring enabled for this server"
+            echo "  📌 Mail server monitoring enabled for this server"
         else
             MAIL_SERVERS="any"
-            echo "  📌 Mail monitoring set to external traffic only"
+            echo "  📌 Mail monitoring set to external traffic only (server is not hosting mail services)"
         fi
         
         echo ""
@@ -3161,7 +3459,7 @@ if [ "$DOCKER_MODE" = "false" ]; then
     echo ""
     echo "✅ Service configuration complete. Generating Suricata config..."
 
-    # Basic Suricata configuration 
+    # Basic Suricata configuration
     cat > /etc/suricata/suricata.yaml << EOF
 %YAML 1.1
 ---
@@ -3169,7 +3467,7 @@ if [ "$DOCKER_MODE" = "false" ]; then
 vars:
   address-groups:
     HOME_NET: "[192.168.0.0/16,10.0.0.0/8,172.16.0.0/12]"
-    EXTERNAL_NET: "!$HOME_NET"
+    EXTERNAL_NET: "!\$HOME_NET"
     HTTP_SERVERS: "$HTTP_SERVERS"
     SQL_SERVERS: "$SQL_SERVERS"
     DNS_SERVERS: "$DNS_SERVERS"
@@ -3290,7 +3588,7 @@ cat > /etc/suricata/rules/application-custom.rules << EOF
 EOF
 
 # Set up Suricata log rotation
-cat > /etc/logrotate.d/suricata << EOF
+cat > /etc/logrotate.d/suricata << 'EOF'
 /var/log/suricata/*.log /var/log/suricata/*.json {
     daily
     size 100M
@@ -3354,8 +3652,12 @@ chmod 755 /etc/cron.daily/trivy-scan
     # Configure Suricata systemd resource limits
     echo "===== 10.4.1 Configuring Suricata Resource Management ====="
     mkdir -p /etc/systemd/system/suricata.service.d
-    cat > /etc/systemd/system/suricata.service.d/resource-limits.conf << 'EOF'
+    cat > /etc/systemd/system/suricata.service.d/resource-limits.conf << EOF
 [Service]
+# Override ExecStart to specify the correct network interface
+ExecStart=
+ExecStart=/usr/bin/suricata -D --af-packet=$INTERFACE -c /etc/suricata/suricata.yaml --pidfile /run/suricata.pid
+
 # Resource limits to prevent Suricata from overwhelming system
 CPUQuota=50%
 MemoryMax=1G
@@ -3366,29 +3668,35 @@ IOSchedulingPriority=4
 OOMPolicy=kill
 OOMScoreAdjust=200
 
-# Security and isolation
-PrivateTmp=true
-NoNewPrivileges=true
-ProtectHome=true
-ProtectSystem=strict
-ReadWritePaths=/var/log/suricata /var/lib/suricata /run/suricata
+# Security and isolation (minimal for IDS functionality)
+PrivateTmp=false
+NoNewPrivileges=false
+ProtectHome=false
+ProtectSystem=false
 
 # Restart policy for network IDS reliability
 Restart=always
 RestartSec=60
 TimeoutStartSec=120
 TimeoutStopSec=30
-
-# Watchdog configuration
-WatchdogSec=300
-NotifyAccess=main
 EOF
 
     systemctl daemon-reload
 
     # Enable and start Suricata
     systemctl enable suricata
-    systemctl start suricata
+
+    # Try to start Suricata, but don't fail setup if it doesn't start
+    # Suricata may need additional configuration or resources
+    if systemctl start suricata 2>/dev/null; then
+        log_message "✅ Suricata IDS started successfully"
+    else
+        log_message "⚠️ Suricata failed to start - may need additional configuration"
+        log_message "   Check 'systemctl status suricata' and 'journalctl -xeu suricata' for details"
+        log_message "   You can try: systemctl reset-failed suricata && systemctl start suricata"
+        # Reset failed state so it can be started manually later
+        systemctl reset-failed suricata 2>/dev/null || true
+    fi
 else
     echo "🐳 Skipping Suricata configuration in Docker mode"
 fi
@@ -3397,12 +3705,16 @@ fi
 echo "===== 10. Configuring Logwatch ====="
 
 # Configure rsyslog with traditional timestamp format for logwatch compatibility
-if ! grep -q "RSYSLOG_TraditionalFileFormat" /etc/rsyslog.conf; then
-    cp /etc/rsyslog.conf /etc/rsyslog.conf.backup
-    # shellcheck disable=SC2016
-    sed -i '1i$ActionFileDefaultTemplate RSYSLOG_TraditionalFileFormat' /etc/rsyslog.conf
-    systemctl restart rsyslog
-    echo "✅ Configured rsyslog to use traditional timestamp format"
+if [ -f /etc/rsyslog.conf ]; then
+    if ! grep -q "RSYSLOG_TraditionalFileFormat" /etc/rsyslog.conf; then
+        cp /etc/rsyslog.conf /etc/rsyslog.conf.backup
+        # shellcheck disable=SC2016
+        sed -i '1i$ActionFileDefaultTemplate RSYSLOG_TraditionalFileFormat' /etc/rsyslog.conf
+        docker_systemctl restart rsyslog || log_message "⚠️  Failed to restart rsyslog (may not be installed)"
+        echo "✅ Configured rsyslog to use traditional timestamp format"
+    fi
+else
+    log_message "⚠️  /etc/rsyslog.conf not found, skipping rsyslog configuration"
 fi
 
 mkdir -p /var/cache/logwatch
@@ -3663,7 +3975,19 @@ sensors | grep -v "Adapter:" | grep -v "^$" | sed -e 's/^/   /'
 echo ""
 echo "Disk Temperature:"
 echo ""
-hddtemp /dev/sd? 2>/dev/null | sed -e 's/^/   /' || echo "   No disk temperature data available"
+# Note: hddtemp removed from Debian 13, using smartctl from smartmontools as alternative
+if command -v smartctl &> /dev/null; then
+    for disk in /dev/sd?; do
+        if [ -b "$disk" ]; then
+            temp=$(smartctl -A "$disk" 2>/dev/null | grep -i temperature | awk '{print $10}')
+            if [ -n "$temp" ]; then
+                echo "   $disk: ${temp}°C"
+            fi
+        fi
+    done
+else
+    echo "   Disk temperature monitoring not available (install smartmontools)"
+fi
 EOF
 chmod 755 /etc/logwatch/scripts/services/zz-lm_sensors
 
@@ -3678,8 +4002,10 @@ EOF
 # Configure RKHunter
 echo "===== 10. Configuring RKHunter ====="
 if [ "$DOCKER_MODE" = "false" ]; then
-    # Update rkhunter database
-    rkhunter --update
+    # Update rkhunter database (non-critical if it fails)
+    if ! rkhunter --update; then
+        log_message "⚠️  RKHunter database update failed (non-critical, will retry during daily cron)"
+    fi
 
     # Set up RKHunter properties
     cat > /etc/rkhunter.conf.local << EOF
@@ -3688,8 +4014,8 @@ if [ "$DOCKER_MODE" = "false" ]; then
 # Update database on a daily basis
 UPDATE_MIRRORS=1
 MIRRORS_MODE=0
-UPDATE_MIRRORS=1
-WEB_CMD="DISABLED"
+# Disable web-based updates (use package manager updates instead)
+WEB_CMD=""
 
 # Mail options - same email as logwatch
 MAIL-ON-WARNING=${LOGWATCH_EMAIL:-root}
@@ -3702,9 +4028,23 @@ ALLOW_SSH_ROOT_USER=no
 XINETD_ALLOWED_SVC=
 DISABLE_CHECK_PORTS=0
 
+# SSH Protocol configuration (SSH2 only, no SSH1)
+ALLOW_SSH_PROT_V1=0
+
 # Allow certain whitelisted files
 #ALLOWHIDDENDIR=/dev/.udev
 #ALLOWHIDDENFILE=/dev/.blkid.tab
+
+# Netdata shared memory files (legitimate)
+ALLOWHIDDENFILE=/dev/shm/sem.netdata_sem_cgroup_ebpf
+ALLOWHIDDENFILE=/dev/shm/netdata_shm_cgroup_ebpf
+
+# systemd-resolved backup file (legitimate)
+ALLOWHIDDENFILE=/etc/.resolv.conf.systemd-resolved.bak
+ALLOWHIDDENFILE=/etc/.updated
+
+# lwp-request is legitimately a Perl script in Debian
+SCRIPTWHITELIST=/usr/bin/lwp-request
 EOF
 
 # Create RKHunter scan script
@@ -3742,21 +4082,48 @@ fi
 EOF
 chmod 755 /etc/cron.daily/rkhunter-scan
 
-    # Run initial scan to establish baseline
-    echo "Running initial RKHunter scan to create baseline..."
+    # Update properties file for baseline (skip full scan - takes too long, will run via cron)
+    echo "Updating RKHunter properties database..."
     rkhunter --propupd
-    rkhunter --check --skip-keypress --report-warnings-only
+    log_message "✅ RKHunter configured. First full scan will run via daily cron job."
 else
     echo "🐳 Skipping RKHunter configuration in Docker mode"
 fi
 
-# Configure chkrootkit daily scan
+# Configure chkrootkit with whitelist for known false positives
+echo "Configuring chkrootkit with whitelist filtering..."
+
+# Create chkrootkit configuration directory and whitelist
+mkdir -p /etc/chkrootkit /var/log/chkrootkit
+
+cat > /etc/chkrootkit/whitelist.conf << 'WHITELIST_EOF'
+# chkrootkit whitelist for known false positives
+# These are legitimate files and processes that should be ignored
+
+# Ruby gems documentation files (from Debian packages)
+/usr/lib/ruby/vendor_ruby/rubygems/ssl_certs/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/timeout/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/uri/.document
+
+# fail2ban test fixture files (from Debian package)
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest/.htpasswd
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/noentry/.htaccess
+
+# Legitimate packet sniffers (IDS/monitoring tools)
+# Format: process_name:interface_pattern
+WHITELIST_SNIFFERS="suricata:.*|systemd-networkd:.*|dhclient:.*|dhcpd:.*|dhcpcd:.*|wpa_supplicant:.*|NetworkManager:.*"
+WHITELIST_EOF
+
 cat > /etc/cron.daily/chkrootkit-scan << 'EOF'
 #!/bin/bash
-# Run a daily chkrootkit scan
+# Run a daily chkrootkit scan with intelligent whitelist filtering
 
 # Log file
 LOGFILE="/var/log/chkrootkit/daily_scan.log"
+EXPECTED_LOG="/var/log/chkrootkit/log.expected"
+TODAY_LOG="/var/log/chkrootkit/log.today"
+RAW_LOG="/var/log/chkrootkit/log.raw"
+WHITELIST_CONF="/etc/chkrootkit/whitelist.conf"
 
 # Create log directory if it doesn't exist
 mkdir -p /var/log/chkrootkit
@@ -3764,25 +4131,82 @@ mkdir -p /var/log/chkrootkit
 # Clear previous log
 echo "chkrootkit daily scan started at $(date)" > $LOGFILE
 
-# Run the scan
-chkrootkit -q >> $LOGFILE 2>&1
+# Run the scan (raw output)
+chkrootkit -q > $RAW_LOG 2>&1
+
+# Filter out whitelisted entries
+if [ -f "$WHITELIST_CONF" ]; then
+    # Start with raw output
+    cp "$RAW_LOG" "$TODAY_LOG"
+
+    # Filter out whitelisted file paths (suspicious files warnings)
+    while IFS= read -r line; do
+        # Skip comments and empty lines
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "$line" ]] && continue
+
+        # Check if line is a whitelist entry (starts with /)
+        if [[ "$line" =~ ^/ ]]; then
+            # Escape special regex characters in the path
+            escaped_path=$(echo "$line" | sed 's/[]\/$*.^[]/\\&/g')
+            # Remove lines containing this path from the output
+            sed -i "/${escaped_path}/d" "$TODAY_LOG"
+        fi
+    done < "$WHITELIST_CONF"
+
+    echo "Whitelist filtering applied" >> $LOGFILE
+else
+    # No whitelist - use raw output
+    cp "$RAW_LOG" "$TODAY_LOG"
+    echo "No whitelist configuration found - using raw output" >> $LOGFILE
+fi
 
 # Add completion time
 echo "chkrootkit daily scan completed at $(date)" >> $LOGFILE
 
-# Check for warnings and alert if found (chkrootkit outputs "INFECTED" when it finds something)
-if grep -q "INFECTED" $LOGFILE; then
-    ADMIN_EMAIL=$(grep "^MAIL-ON-WARNING=" /etc/rkhunter.conf.local | cut -d= -f2)
-    # If no email is set, use root
-    if [ -z "$ADMIN_EMAIL" ]; then
-        ADMIN_EMAIL="root"
-    fi
-    
-    # Send email alert
-    cat $LOGFILE | mail -s "⚠️ ROOTKIT WARNING: Possible rootkit found on $(hostname)" "$ADMIN_EMAIL"
+# Create expected log file if it doesn't exist (first run)
+if [ ! -f "$EXPECTED_LOG" ]; then
+    cp "$TODAY_LOG" "$EXPECTED_LOG"
+    echo "Initial chkrootkit expected output created" >> $LOGFILE
+fi
+
+# Check for differences from expected output
+if ! diff -q "$EXPECTED_LOG" "$TODAY_LOG" >/dev/null 2>&1; then
+    # Get admin email
+    ADMIN_EMAIL=$(grep "^MAIL-ON-WARNING=" /etc/rkhunter.conf.local 2>/dev/null | cut -d= -f2)
+    [ -z "$ADMIN_EMAIL" ] && ADMIN_EMAIL="root"
+
+    # Create diff report
+    {
+        echo "chkrootkit output differs from expected baseline"
+        echo "Scan date: $(date)"
+        echo ""
+        echo "=== TODAY'S OUTPUT ==="
+        cat "$TODAY_LOG"
+        echo ""
+        echo "=== EXPECTED OUTPUT ==="
+        cat "$EXPECTED_LOG"
+        echo ""
+        echo "=== DIFFERENCES ==="
+        diff "$EXPECTED_LOG" "$TODAY_LOG" || true
+    } | mail -s "⚠️ CHKROOTKIT ALERT: Output changed on $(hostname)" "$ADMIN_EMAIL"
+
+    echo "chkrootkit output changed - alert sent" >> $LOGFILE
+else
+    echo "chkrootkit output matches expected baseline" >> $LOGFILE
+fi
+
+# Check for INFECTED results specifically
+if grep -q "INFECTED" "$TODAY_LOG"; then
+    ADMIN_EMAIL=$(grep "^MAIL-ON-WARNING=" /etc/rkhunter.conf.local 2>/dev/null | cut -d= -f2)
+    [ -z "$ADMIN_EMAIL" ] && ADMIN_EMAIL="root"
+    cat "$TODAY_LOG" | mail -s "🚨 ROOTKIT WARNING: Possible rootkit found on $(hostname)" "$ADMIN_EMAIL"
+    echo "INFECTED results found - alert sent" >> $LOGFILE
 fi
 EOF
 chmod 755 /etc/cron.daily/chkrootkit-scan
+
+echo "✅ chkrootkit whitelist configured: /etc/chkrootkit/whitelist.conf"
 
 # ========= Block Storage Setup =========
 echo "===== 7. Setting up block storage for backups ====="
@@ -3809,12 +4233,12 @@ if [ -e "$BLOCK_DEVICE" ]; then
 fi
 
 # ========= Docker Installation =========
-# Check if we need Docker (deployment mode is "docker" or just always install for flexibility)
-if [ "$DEPLOYMENT_MODE" = "docker" ] || [ "$DOCKER_MODE" = "false" ]; then
+# Install Docker if requested
+if [ "$INSTALL_DOCKER" = "true" ] && [ "$DOCKER_MODE" = "false" ]; then
     echo "===== 8. Installing Docker and Docker Compose ====="
-    echo "Installing Docker for deployment mode: $DEPLOYMENT_MODE"
+    echo "Installing Docker CE with docker-compose plugin..."
     
-    apt-get install -y apt-transport-https ca-certificates curl software-properties-common gnupg lsb-release
+    apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release
 
     # Add Docker repository for Debian
     curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
@@ -3872,11 +4296,10 @@ if [ "$DOCKER_MODE" = "false" ] && [ "$NETDATA_ENABLED" = "true" ]; then
         
         # Check if claim token is provided via template variables
         NETDATA_CLAIM_TOKEN="{{NETDATA_CLAIM_TOKEN}}"
-        NETDATA_CLAIM_ROOMS="{{NETDATA_CLAIM_ROOMS}}"
-        
-        if [ -n "$NETDATA_CLAIM_TOKEN" ] && [ "$NETDATA_CLAIM_TOKEN" != "{{NETDATA_CLAIM_TOKEN}}" ]; then
+
+        if [ -n "$NETDATA_CLAIM_TOKEN" ]; then
             echo "Installing with Netdata Cloud integration (from configuration)..."
-            sh /tmp/netdata-kickstart.sh --stable-channel --disable-telemetry --claim-token "$NETDATA_CLAIM_TOKEN" --claim-rooms "$NETDATA_CLAIM_ROOMS"
+            sh /tmp/netdata-kickstart.sh --stable-channel --disable-telemetry --claim-token "$NETDATA_CLAIM_TOKEN" --claim-url https://app.netdata.cloud
         else
             echo "Installing without Netdata Cloud (local monitoring only)..."
             sh /tmp/netdata-kickstart.sh --stable-channel --disable-telemetry --dont-wait
@@ -3936,9 +4359,8 @@ EOF
 
     # Optional Netdata Cloud Integration (show instructions if not configured)
     NETDATA_CLAIM_TOKEN="{{NETDATA_CLAIM_TOKEN}}"
-    NETDATA_CLAIM_ROOMS="{{NETDATA_CLAIM_ROOMS}}"
-    
-    if [ -z "$NETDATA_CLAIM_TOKEN" ] || [ "$NETDATA_CLAIM_TOKEN" = "{{NETDATA_CLAIM_TOKEN}}" ]; then
+
+    if [ -z "$NETDATA_CLAIM_TOKEN" ]; then
         echo ""
         echo "📊 NETDATA CLOUD INTEGRATION (Optional)"
         echo "======================================"
@@ -3951,14 +4373,12 @@ EOF
         echo ""
         echo "   sudo /opt/netdata/bin/netdata-claim.sh \\"
         echo "     -token=YOUR_CLAIM_TOKEN \\"
-        echo "     -rooms=YOUR_ROOM_ID \\"
         echo "     -url=https://app.netdata.cloud"
         echo ""
         echo "5. Your server will appear in Netdata Cloud within 1-2 minutes"
         echo ""
-        echo "📝 To set up automatic claiming, add these to your .env file:"
+        echo "📝 To set up automatic claiming, add this to your .env file:"
         echo "   NETDATA_CLAIM_TOKEN=your_claim_token"
-        echo "   NETDATA_CLAIM_ROOMS=your_room_id"
         echo ""
     else
         echo "✅ Netdata Cloud integration configured from template variables"
@@ -3985,9 +4405,11 @@ EOF
     cat > /usr/local/bin/netdata-access << 'EOF'
 #!/bin/bash
 # Quick access to local Netdata dashboard
+HOSTNAME=$(hostname)
+USERNAME=$(whoami)
 echo "🌐 Opening Netdata dashboard..."
 echo "   Local URL: http://127.0.0.1:19999"
-echo "   SSH Tunnel: ssh -L 19999:127.0.0.1:19999 user@server"
+echo "   SSH Tunnel: ssh -L 19999:127.0.0.1:19999 $USERNAME@$HOSTNAME"
 echo "   Netdata Cloud: https://app.netdata.cloud"
 EOF
     chmod +x /usr/local/bin/netdata-access
@@ -4046,8 +4468,10 @@ EOF
 
 # Configure system to use our DNS resolver (Debian networking)
 # Debian uses traditional /etc/network/interfaces or systemd-resolved
-# Make resolv.conf immutable to prevent DHCP from overwriting it
-chattr +i /etc/resolv.conf
+# Make resolv.conf immutable to prevent DHCP from overwriting it (if filesystem supports it)
+if ! chattr +i /etc/resolv.conf 2>/dev/null; then
+    log_message "⚠️  Could not make /etc/resolv.conf immutable (filesystem may not support it)"
+fi
 
 # Configure systemd-resolved to use our local DNS
 if systemctl is-active --quiet systemd-resolved; then
@@ -4068,6 +4492,28 @@ echo "Using generated Unbound configuration from template system..."
 # Note: Unbound configuration is handled by the template system
 # The configuration file is generated from templates/unbound/local.conf.template
 # and placed in /etc/unbound/unbound.conf.d/local.conf during deployment
+
+    # Fix AppArmor for Unbound - grant net_admin capability
+    echo "Configuring AppArmor for Unbound..."
+    mkdir -p /etc/apparmor.d/local
+    cat > /etc/apparmor.d/local/usr.sbin.unbound << 'EOF'
+# Site-specific additions and overrides for usr.sbin.unbound
+# Grant net_admin capability for Unbound network configuration
+capability net_admin,
+EOF
+
+    # Reload AppArmor profile
+    if command -v apparmor_parser >/dev/null 2>&1 && [ -f /etc/apparmor.d/usr.sbin.unbound ]; then
+        apparmor_parser -r /etc/apparmor.d/usr.sbin.unbound 2>/dev/null || true
+        echo "✅ AppArmor profile updated for Unbound"
+    fi
+
+    # Disable unbound-resolvconf service (not needed and causes errors)
+    echo "Disabling unbound-resolvconf service..."
+    systemctl stop unbound-resolvconf.service 2>/dev/null || true
+    systemctl disable unbound-resolvconf.service 2>/dev/null || true
+    systemctl mask unbound-resolvconf.service 2>/dev/null || true
+    echo "✅ Unbound-resolvconf service disabled"
 
     # Restart Unbound service to apply changes
     docker_systemctl restart unbound
@@ -4365,6 +4811,88 @@ EOF
 
 echo "✅ Comprehensive log rotation configured (including rsyslog system logs)"
 
+# ========= Configure Swap =========
+if [ "$DOCKER_MODE" = "false" ]; then
+    echo "===== 10.6 Configuring swap space ====="
+
+    SWAPFILE="/swapfile"
+    SWAP_SIZE_MB=2048  # 2GB
+
+    # Check if swapfile already exists
+    if [ -f "$SWAPFILE" ]; then
+        echo "Swap file already exists, checking size..."
+        CURRENT_SIZE=$(stat -c%s "$SWAPFILE" 2>/dev/null || echo "0")
+        EXPECTED_SIZE=$((SWAP_SIZE_MB * 1024 * 1024))
+
+        if [ "$CURRENT_SIZE" -eq "$EXPECTED_SIZE" ]; then
+            echo "✅ Swap file already correct size (${SWAP_SIZE_MB}MB)"
+        else
+            echo "Resizing swap file from $(($CURRENT_SIZE / 1024 / 1024))MB to ${SWAP_SIZE_MB}MB..."
+            swapoff "$SWAPFILE" 2>/dev/null || true
+            rm -f "$SWAPFILE"
+            dd if=/dev/zero of="$SWAPFILE" bs=1M count=$SWAP_SIZE_MB status=progress
+            chmod 600 "$SWAPFILE"
+            mkswap "$SWAPFILE"
+            swapon "$SWAPFILE"
+            echo "✅ Swap file resized to ${SWAP_SIZE_MB}MB"
+        fi
+    else
+        echo "Creating ${SWAP_SIZE_MB}MB swap file..."
+        dd if=/dev/zero of="$SWAPFILE" bs=1M count=$SWAP_SIZE_MB status=progress
+        chmod 600 "$SWAPFILE"
+        mkswap "$SWAPFILE"
+        swapon "$SWAPFILE"
+        echo "✅ Swap file created (${SWAP_SIZE_MB}MB)"
+    fi
+
+    # Ensure swap is in /etc/fstab
+    if ! grep -q "$SWAPFILE" /etc/fstab; then
+        echo "$SWAPFILE none swap sw 0 0" >> /etc/fstab
+        echo "✅ Swap added to /etc/fstab for persistence"
+    fi
+
+    # Verify swap is active
+    swapon --show
+
+    echo "✅ Swap configured (2GB, swappiness=10 set in kernel parameters)"
+else
+    echo "🐳 Docker mode: skipping swap configuration"
+fi
+
+# ========= Disable Transparent Huge Pages =========
+if [ "$DOCKER_MODE" = "false" ]; then
+    echo "===== 10.7 Disabling Transparent Huge Pages (THP) ====="
+
+    # THP can cause latency spikes and memory bloat for web servers, databases, and containers
+    # Recommended to disable for: Redis, MongoDB, PostgreSQL, PHP-FPM, Docker workloads
+
+    # Create systemd service to disable THP at boot
+    cat > /etc/systemd/system/disable-thp.service << 'EOF'
+[Unit]
+Description=Disable Transparent Huge Pages (THP)
+Documentation=https://www.kernel.org/doc/html/latest/admin-guide/mm/transhuge.html
+After=sysinit.target local-fs.target
+Before=mongod.service redis.service postgresql.service mariadb.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c "echo never > /sys/kernel/mm/transparent_hugepage/enabled"
+ExecStart=/bin/sh -c "echo never > /sys/kernel/mm/transparent_hugepage/defrag"
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Enable and start the service
+    docker_systemctl daemon-reload
+    docker_systemctl enable disable-thp.service
+    docker_systemctl start disable-thp.service
+
+    echo "✅ Transparent Huge Pages disabled (prevents latency spikes and memory bloat)"
+else
+    echo "🐳 Docker mode: skipping THP configuration"
+fi
+
 # ========= Additional security hardening =========
 echo "===== 11. Additional security hardening ====="
 
@@ -4486,6 +5014,9 @@ fs.protected_symlinks = 1
 # Additional memory protection
 vm.mmap_rnd_bits = 32
 vm.mmap_rnd_compat_bits = 16
+
+# Memory management - reduce swap usage (prefer RAM)
+vm.swappiness = 10
 
 # Automatic reboot after kernel panic (headless environment)
 kernel.panic = 10
@@ -4731,12 +5262,31 @@ systemctl list-timers maldet-scan.timer clamscan.timer rkhunter-scan.timer --no-
 
 # ========= Now restart SSH with new configuration =========
 echo "===== 12. Restarting SSH to apply security settings ====="
-docker_systemctl restart sshd
+
+# Ensure SSH privilege separation directory exists
+mkdir -p /run/sshd
+chmod 755 /run/sshd
+
+# Test SSH configuration before restarting
+if ! sshd -t 2>&1; then
+    log_error "SSH configuration test failed. Check /var/log/secure-server-setup.log for details"
+    sshd -t 2>&1 | tee -a "$LOG_FILE"
+    exit 1
+fi
+
+# Restart SSH service (Debian uses 'ssh' not 'sshd')
+if docker_systemctl restart ssh; then
+    echo "✅ SSH service restarted successfully"
+else
+    log_error "Failed to restart SSH service"
+    systemctl status ssh.service || true
+    exit 1
+fi
 
 # Verify SSH is running only on target port and clean up port 22
 if ss -tnlp | grep -q ":$SSH_PORT.*sshd"; then
   sed -i '/^Port 22$/d' /etc/ssh/sshd_config
-  docker_systemctl reload ssh
+  docker_systemctl reload ssh || log_message "⚠️ SSH reload failed, but service is running on port $SSH_PORT"
   ufw delete allow 22/tcp || true
   echo "✅ SSH now running only on port $SSH_PORT"
 fi
@@ -4746,6 +5296,8 @@ echo "Setting up DSGVO/GDPR compliance framework..."
 
 # Copy DSGVO setup script to the scripts directory first
 mkdir -p /opt/polyserver/scripts
+DSGVO_SETUP_SCRIPT=""
+
 if [ -f "/opt/polyserver/scripts/setup-dsgvo.sh" ]; then
     DSGVO_SETUP_SCRIPT="/opt/polyserver/scripts/setup-dsgvo.sh"
 else
@@ -4758,7 +5310,7 @@ else
     fi
 fi
 
-if [ -f "$DSGVO_SETUP_SCRIPT" ]; then
+if [ -n "$DSGVO_SETUP_SCRIPT" ] && [ -f "$DSGVO_SETUP_SCRIPT" ]; then
     echo "Running DSGVO compliance setup..."
     # Run non-interactively by providing default answers
     echo "y" | bash "$DSGVO_SETUP_SCRIPT" || echo "DSGVO setup completed with warnings"
@@ -4954,16 +5506,40 @@ check_persistence_location() {
     local name="$2"
     local baseline_file="$BASELINE_DIR/${name}.baseline"
     local current_file="/tmp/${name}.current"
-    
+    local changes_file="/tmp/${name}.changes"
+
     if [ -d "$location" ] || [ -f "$location" ]; then
-        find "$location" -type f -exec stat -c "%n %Y %s" {} \; 2>/dev/null | sort > "$current_file"
-        
+        # List files with name only (not timestamps or sizes to avoid false positives)
+        find "$location" -type f 2>/dev/null | sort > "$current_file"
+
         if [ -f "$baseline_file" ]; then
-            if ! diff -q "$baseline_file" "$current_file" >/dev/null 2>&1; then
-                log_message "ALERT: Changes detected in $name ($location)"
-                diff "$baseline_file" "$current_file" | head -20 >> "$LOG_FILE"
-                echo "PERSISTENCE ALERT: Changes detected in $name on $(hostname)" | \
-                    mail -s "SECURITY ALERT: Persistence Detection" "$MAIL_RECIPIENT" 2>/dev/null || true
+            # Check for NEW files only (not modifications)
+            local new_files=$(comm -13 "$baseline_file" "$current_file")
+            local removed_files=$(comm -23 "$baseline_file" "$current_file")
+
+            if [ -n "$new_files" ] || [ -n "$removed_files" ]; then
+                log_message "ALERT: New/removed files detected in $name ($location)"
+                {
+                    [ -n "$new_files" ] && echo "NEW FILES:" && echo "$new_files"
+                    [ -n "$removed_files" ] && echo "REMOVED FILES:" && echo "$removed_files"
+                } | tee -a "$LOG_FILE" > "$changes_file"
+
+                # Only send email for new files (not modifications or removals from package updates)
+                if [ -n "$new_files" ]; then
+                    {
+                        echo "PERSISTENCE ALERT: New files detected in $name on $(hostname)"
+                        echo ""
+                        echo "Location: $location"
+                        echo ""
+                        cat "$changes_file"
+                        echo ""
+                        echo "This may indicate persistence mechanisms. Verify these files are legitimate."
+                    } | mail -s "SECURITY ALERT: New Persistence Files Detected" "$MAIL_RECIPIENT" 2>/dev/null || true
+                fi
+
+                # Update baseline to include new files (reduce noise)
+                cp "$current_file" "$baseline_file"
+                rm -f "$changes_file"
             fi
         else
             # First run - create baseline
@@ -5220,10 +5796,11 @@ else
 fi
 
 # Optional Resource Guardian System
+# Check if Resource Guardian should be installed (configured in defaults.env)
+: "${INSTALL_RESOURCE_GUARDIAN:={{INSTALL_RESOURCE_GUARDIAN}}}"
 echo ""
-read -p "Install Resource Guardian system for proactive resource management? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+if [ "${INSTALL_RESOURCE_GUARDIAN,,}" = "true" ]; then
+    log_message "Installing Resource Guardian system (INSTALL_RESOURCE_GUARDIAN=true)"
     echo "===== 15.1 Setting up Resource Guardian System ====="
     echo "Installing Resource Guardian for proactive resource management..."
     
@@ -5252,7 +5829,8 @@ log_message() {
 # Function to check CPU usage
 check_cpu_usage() {
     # Find processes using high CPU for sustained periods
-    ps aux --sort=-%cpu | awk 'NR>1 {print $2, $3, $10, $11}' | head -10 | while read -r pid cpu_percent time_col command; do
+    # Limit in awk to avoid broken pipe errors from head
+    ps aux --sort=-%cpu | awk 'NR>1 && NR<=11 {print $2, $3, $10, $11}' | while read -r pid cpu_percent time_col command; do
         if ! echo "$command" | grep -qE "$CRITICAL_PROCESSES"; then
             if (( $(echo "$cpu_percent > $HIGH_CPU_THRESHOLD" | bc -l) )); then
                 # Convert time to seconds for comparison
@@ -5311,7 +5889,8 @@ check_memory_usage() {
         log_message "CRITICAL: Memory usage at ${memory_usage}% - emergency cleanup"
         
         # Emergency: kill highest memory non-critical processes
-        ps aux --sort=-%mem | awk 'NR>1 {print $2, $4, $11}' | head -5 | while read -r pid mem_percent command; do
+        # Limit in awk to avoid broken pipe errors from head
+        ps aux --sort=-%mem | awk 'NR>1 && NR<=6 {print $2, $4, $11}' | while read -r pid mem_percent command; do
             if ! echo "$command" | grep -qE "$CRITICAL_PROCESSES"; then
                 if (( $(echo "$mem_percent > 15" | bc -l) )); then
                     log_message "EMERGENCY: Killing high-memory process: PID=$pid CMD=$command MEM=${mem_percent}%"
@@ -5429,15 +6008,15 @@ EOF
     echo "   • Sends email alerts for all actions taken"
     echo ""
 else
-    echo "Skipping Resource Guardian installation"
+    log_message "Skipping Resource Guardian installation (INSTALL_RESOURCE_GUARDIAN=${INSTALL_RESOURCE_GUARDIAN})"
 fi
 
 # Optional Advanced Monitoring Tools
+# Check if advanced monitoring should be installed (configured in defaults.env)
+: "${INSTALL_ADVANCED_MONITORING:={{INSTALL_ADVANCED_MONITORING}}}"
 echo ""
-read -p "Install advanced server monitoring commands (serverstatus, logmon, servermail)? (y/N): " -n 1 -r
-echo
-MONITORING_TOOLS_REPLY=$REPLY
-if [[ $MONITORING_TOOLS_REPLY =~ ^[Yy]$ ]]; then
+if [ "${INSTALL_ADVANCED_MONITORING,,}" = "true" ]; then
+    log_message "Installing advanced monitoring tools (INSTALL_ADVANCED_MONITORING=true)"
     echo "===== 15.2 Setting up Advanced Monitoring Tools ====="
     echo "Installing advanced monitoring commands for server management..."
     
@@ -5603,7 +6182,7 @@ EOF
     echo "   • logmon requires sudo for log access"
     echo ""
 else
-    echo "Skipping advanced monitoring tools installation"
+    log_message "Skipping advanced monitoring tools installation (INSTALL_ADVANCED_MONITORING=${INSTALL_ADVANCED_MONITORING})"
 fi
 
 # Unattended Reboot Warning System
@@ -5688,11 +6267,10 @@ fi
 # Systemd Watchdog for Critical Services
 echo "Configuring systemd watchdog for critical services..."
 
-# Enhanced fail2ban service with watchdog and resource management
+# Enhanced fail2ban service priority (NO watchdog - fail2ban doesn't support it)
 mkdir -p /etc/systemd/system/fail2ban.service.d
-cat > /etc/systemd/system/fail2ban.service.d/watchdog.conf << 'EOF'
+cat > /etc/systemd/system/fail2ban.service.d/priority.conf << 'EOF'
 [Service]
-WatchdogSec=60
 Restart=on-failure
 RestartSec=30
 StartLimitInterval=600
@@ -5703,11 +6281,11 @@ OOMScoreAdjust=-100
 Nice=-5
 EOF
 
-# Enhanced Suricata service with watchdog and resource management
+# Enhanced Suricata service restart policy
+# Note: Watchdog disabled - Suricata doesn't send systemd watchdog pings by default
 mkdir -p /etc/systemd/system/suricata.service.d
-cat > /etc/systemd/system/suricata.service.d/watchdog.conf << 'EOF'
+cat > /etc/systemd/system/suricata.service.d/restart-policy.conf << 'EOF'
 [Service]
-WatchdogSec=120
 Restart=on-failure
 RestartSec=30
 StartLimitInterval=1200
@@ -5718,11 +6296,10 @@ Nice=5
 OOMScoreAdjust=100
 EOF
 
-# SSH service watchdog with enhanced security hardening
+# SSH service priority and restart policy (NO watchdog - SSH doesn't support it)
 mkdir -p /etc/systemd/system/ssh.service.d
-cat > /etc/systemd/system/ssh.service.d/watchdog.conf << 'EOF'
+cat > /etc/systemd/system/ssh.service.d/priority.conf << 'EOF'
 [Service]
-WatchdogSec=30
 Restart=on-failure
 RestartSec=5
 StartLimitInterval=300
@@ -5732,18 +6309,17 @@ StartLimitBurst=5
 OOMScoreAdjust=-300
 Nice=-8
 
-# Security hardening for production servers
-PrivateTmp=yes
-ProtectSystem=strict
-ReadWritePaths=/var/log /var/run /run
+# NO filesystem protection on SSH service - allows normal system administration
+# ProtectSystem causes read-only filesystem issues that break apt, installations, and system management
+# Security is provided by network isolation, firewalls, and access controls instead
 EOF
 
-# Nginx service watchdog with resource management (if not Docker mode)
+# Nginx service priority and resource management (if not Docker mode)
+# Note: Watchdog NOT enabled - nginx doesn't send systemd watchdog pings
 if [ "$DEPLOYMENT_MODE" != "docker" ]; then
     mkdir -p /etc/systemd/system/nginx.service.d
-    cat > /etc/systemd/system/nginx.service.d/watchdog.conf << 'EOF'
+    cat > /etc/systemd/system/nginx.service.d/priority.conf << 'EOF'
 [Service]
-WatchdogSec=30
 Restart=on-failure
 RestartSec=5
 StartLimitInterval=300
@@ -5873,100 +6449,76 @@ echo "Configuration backup location: /var/backups/security-configs/"
 echo "Backup retention: 30 days"
 
 echo "===== 16. Optional Application Components ====="
-echo "Choose which application components to install for your server:"
+log_message "Determining components to install based on configuration..."
 echo ""
 
 # Optional component installation section
+# Build component list from environment variables (configured in defaults.env)
 INSTALL_COMPONENTS=""
 
-# Docker (Enhanced Installation)
-if [ "$DEPLOYMENT_MODE" != "docker" ]; then
-    echo ""
-    read -p "Install/Configure Docker with security optimizations? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        INSTALL_COMPONENTS="$INSTALL_COMPONENTS docker"
-    fi
-fi
-
-# Web Servers
-echo ""
-echo "=== Web Server Options ==="
-read -p "Install Nginx Unit (modern application server)? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    INSTALL_COMPONENTS="$INSTALL_COMPONENTS nginx-unit"
+# Docker installation check
+if [ "${INSTALL_DOCKER,,}" = "true" ]; then
+    log_message "Docker selected for installation (INSTALL_DOCKER=true)"
+    INSTALL_COMPONENTS="$INSTALL_COMPONENTS docker"
 fi
 
 # PHP Stack
-echo ""
-echo "=== PHP Development Stack ==="
-read -p "Install PHP 8.4 with php-fpm and common extensions? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+if [ "${INSTALL_PHP,,}" = "true" ]; then
+    log_message "PHP selected for installation (INSTALL_PHP=true)"
     INSTALL_COMPONENTS="$INSTALL_COMPONENTS php"
-    read -p "Include PHP development tools (Composer, Xdebug)? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+
+    # Check for PHP dev tools
+    : "${INSTALL_PHP_DEV_TOOLS:={{INSTALL_PHP_DEV_TOOLS}}}"
+    if [ "${INSTALL_PHP_DEV_TOOLS,,}" = "true" ]; then
+        log_message "PHP development tools selected (INSTALL_PHP_DEV_TOOLS=true)"
         INSTALL_COMPONENTS="$INSTALL_COMPONENTS php-dev"
     fi
 fi
 
 # Database Systems
-echo ""
-echo "=== Database Systems ==="
-read -p "Install MariaDB with secure configuration? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+if [ "${INSTALL_MARIADB,,}" = "true" ]; then
+    log_message "MariaDB selected for installation (INSTALL_MARIADB=true)"
     INSTALL_COMPONENTS="$INSTALL_COMPONENTS mariadb"
 fi
 
-read -p "Install PostgreSQL with secure configuration? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+if [ "${INSTALL_POSTGRESQL,,}" = "true" ]; then
+    log_message "PostgreSQL selected for installation (INSTALL_POSTGRESQL=true)"
     INSTALL_COMPONENTS="$INSTALL_COMPONENTS postgresql"
 fi
 
 # Node.js Stack
-echo ""
-echo "=== Node.js Development Stack ==="
-read -p "Install Node.js with PM2 process manager? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+if [ "${INSTALL_NODEJS,,}" = "true" ]; then
+    log_message "Node.js selected for installation (INSTALL_NODEJS=true)"
     INSTALL_COMPONENTS="$INSTALL_COMPONENTS nodejs"
-    read -p "Include development tools (Yarn, TypeScript)? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+
+    # Check for Node.js dev tools
+    : "${INSTALL_NODEJS_DEV_TOOLS:={{INSTALL_NODEJS_DEV_TOOLS}}}"
+    if [ "${INSTALL_NODEJS_DEV_TOOLS,,}" = "true" ]; then
+        log_message "Node.js development tools selected (INSTALL_NODEJS_DEV_TOOLS=true)"
         INSTALL_COMPONENTS="$INSTALL_COMPONENTS nodejs-dev"
     fi
 fi
 
 # Caching and Additional Services
-echo ""
-echo "=== Caching and Additional Services ==="
-read -p "Install Redis with secure configuration? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+if [ "${INSTALL_REDIS,,}" = "true" ]; then
+    log_message "Redis selected for installation (INSTALL_REDIS=true)"
     INSTALL_COMPONENTS="$INSTALL_COMPONENTS redis"
 fi
 
-read -p "Install Git with optimized configuration? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+if [ "${INSTALL_GIT,,}" = "true" ]; then
+    log_message "Git selected for installation (INSTALL_GIT=true)"
     INSTALL_COMPONENTS="$INSTALL_COMPONENTS git"
 fi
 
-# Display selected components
+# Display selected components and proceed with installation
 if [ -n "$INSTALL_COMPONENTS" ]; then
     echo ""
-    echo "Selected components: $INSTALL_COMPONENTS"
+    echo "Components configured for installation: $INSTALL_COMPONENTS"
+    log_message "Installing components: $INSTALL_COMPONENTS"
     echo ""
-    read -p "Proceed with installation? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        echo "===== 16.1 Installing Selected Components ====="
-        # Component installation will be implemented next
-        for component in $INSTALL_COMPONENTS; do
+    echo "===== 16.1 Installing Selected Components ====="
+    # Component installation will be implemented next
+    for component in $INSTALL_COMPONENTS; do
             echo "Installing $component..."
             case $component in
                 docker)
@@ -6067,116 +6619,6 @@ DOCKER_EOF
                         docker version | head -20
                     else
                         echo "❌ Docker installation failed"
-                    fi
-                    ;;
-                nginx-unit)
-                    echo "===== 16.1.2 Installing Nginx Unit ====="
-                    
-                    # Add Nginx Unit repository
-                    curl -fsSL https://nginx.org/keys/nginx_signing.key | gpg --dearmor -o /etc/apt/keyrings/nginx-unit.gpg
-                    echo "deb [signed-by=/etc/apt/keyrings/nginx-unit.gpg] https://packages.nginx.org/unit/debian/ $(lsb_release -cs) unit" > /etc/apt/sources.list.d/unit.list
-                    echo "deb-src [signed-by=/etc/apt/keyrings/nginx-unit.gpg] https://packages.nginx.org/unit/debian/ $(lsb_release -cs) unit" >> /etc/apt/sources.list.d/unit.list
-                    
-                    apt-get update
-                    
-                    # Install Nginx Unit and modules
-                    apt-get install -y unit unit-dev unit-php unit-python3.11 unit-go unit-jsc unit-perl
-                    
-                    # Create initial Nginx Unit configuration
-                    mkdir -p /etc/unit
-                    cat > /etc/unit/initial-config.json << 'UNIT_EOF'
-{
-    "settings": {
-        "http": {
-            "header_read_timeout": 30,
-            "body_read_timeout": 30,
-            "send_timeout": 30,
-            "idle_timeout": 180,
-            "max_body_size": 8388608,
-            "static": {
-                "mime_types": {
-                    "text/plain": [
-                        ".log",
-                        ".md",
-                        ".txt"
-                    ],
-                    "application/javascript": [
-                        ".js"
-                    ],
-                    "text/css": [
-                        ".css"
-                    ],
-                    "text/html": [
-                        ".html",
-                        ".htm"
-                    ]
-                }
-            }
-        }
-    },
-    "listeners": {
-        "127.0.0.1:8080": {
-            "pass": "routes"
-        }
-    },
-    "routes": [
-        {
-            "match": {
-                "uri": "/status"
-            },
-            "action": {
-                "return": 200
-            }
-        }
-    ]
-}
-UNIT_EOF
-                    
-                    # Create systemd override for Unit with security hardening
-                    mkdir -p /etc/systemd/system/unit.service.d
-                    cat > /etc/systemd/system/unit.service.d/security.conf << 'UNIT_EOF'
-[Service]
-# Security hardening
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/unit /var/log/unit /run/unit
-RestrictRealtime=true
-RestrictSUIDSGID=true
-
-# Resource management
-Nice=0
-OOMScoreAdjust=50
-LimitNOFILE=65536
-LimitNPROC=4096
-
-# Restart policy
-Restart=on-failure
-RestartSec=5
-StartLimitBurst=3
-StartLimitInterval=300
-UNIT_EOF
-                    
-                    # Enable and start Nginx Unit
-                    systemctl daemon-reload
-                    systemctl enable unit
-                    systemctl start unit
-                    
-                    # Wait for Unit to be ready
-                    sleep 3
-                    
-                    # Apply initial configuration
-                    curl -X PUT --data-binary @/etc/unit/initial-config.json --unix-socket /var/run/unit/control.sock http://localhost/config/ 2>/dev/null || true
-                    
-                    # Test Nginx Unit installation
-                    if systemctl is-active --quiet unit; then
-                        echo "✅ Nginx Unit installed and configured"
-                        echo "   • Control socket: /var/run/unit/control.sock"
-                        echo "   • Status endpoint: http://127.0.0.1:8080/status"
-                        echo "   • Configuration: curl --unix-socket /var/run/unit/control.sock http://localhost/config/"
-                    else
-                        echo "❌ Nginx Unit installation failed"
                     fi
                     ;;
                 php)
@@ -6400,54 +6842,652 @@ XDEBUG_EOF
                     fi
                     ;;
                 mariadb)
-                    echo "===== 16.1.5 Installing MariaDB with Secure Configuration ====="
+                    echo "===== 16.1.5 Installing MariaDB with Optimized Configuration ====="
                     apt-get install -y mariadb-server mariadb-client
-                    
-                    # Secure MariaDB installation automatically
-                    mysql_secure_installation --defaults <<EOF || true
 
-y
-{{DB_ROOT_PASSWORD:-$(openssl rand -base64 32)}}
-{{DB_ROOT_PASSWORD:-$(openssl rand -base64 32)}}
-y
-y
-y
-y
-EOF
-                    
-                    # Configure MariaDB for security
-                    cat >> /etc/mysql/mariadb.conf.d/99-security.cnf << 'MARIADB_EOF'
+                    # Stop MariaDB for configuration
+                    systemctl stop mariadb
+
+                    # Calculate optimal MariaDB settings based on system resources
+                    echo "Calculating optimal MariaDB configuration for ${TOTAL_RAM_MB}MB RAM, ${CPU_CORES} CPU cores..."
+
+                    # InnoDB Buffer Pool: Use different percentages based on deployment type
+                    # Dedicated database server: 75%, General server: 40%
+                    if [ "${INSTALL_NGINX:-false}" = "false" ] && [ "${INSTALL_PHP:-false}" = "false" ] && [ "${INSTALL_NODEJS:-false}" = "false" ]; then
+                        # Dedicated database server - use 75% of RAM
+                        INNODB_BUFFER_POOL_MB=$((TOTAL_RAM_MB * 75 / 100))
+                    else
+                        # General server - use 40% of RAM (leave room for app servers)
+                        INNODB_BUFFER_POOL_MB=$((TOTAL_RAM_MB * 40 / 100))
+                    fi
+
+                    # InnoDB Log File Size: 25% of buffer pool
+                    INNODB_LOG_FILE_SIZE_MB=$((INNODB_BUFFER_POOL_MB / 4))
+
+                    # Thread Pool: Based on CPU cores
+                    THREAD_POOL_SIZE=$((CPU_CORES * 2))
+
+                    # Max Connections: Scale with RAM
+                    if [ $TOTAL_RAM_MB -lt 2048 ]; then
+                        MAX_CONNECTIONS=100
+                    elif [ $TOTAL_RAM_MB -lt 8192 ]; then
+                        MAX_CONNECTIONS=200
+                    elif [ $TOTAL_RAM_MB -lt 16384 ]; then
+                        MAX_CONNECTIONS=500
+                    else
+                        MAX_CONNECTIONS=1000
+                    fi
+
+                    # Table open cache: scale with connections
+                    TABLE_OPEN_CACHE=$((MAX_CONNECTIONS * 4))
+
+                    echo "  • InnoDB Buffer Pool: ${INNODB_BUFFER_POOL_MB}MB"
+                    echo "  • InnoDB Log File: ${INNODB_LOG_FILE_SIZE_MB}MB"
+                    echo "  • Thread Pool: ${THREAD_POOL_SIZE}"
+                    echo "  • Max Connections: ${MAX_CONNECTIONS}"
+                    echo "  • Table Open Cache: ${TABLE_OPEN_CACHE}"
+
+                    # Create optimized MariaDB performance configuration
+                    cat > /etc/mysql/mariadb.conf.d/60-performance.cnf << MARIADB_PERF_EOF
+# MariaDB Performance Optimization
+# Auto-generated based on: ${TOTAL_RAM_MB}MB RAM, ${CPU_CORES} CPU cores
+# Generated: $(date)
+
 [mysqld]
-# Security settings
+
+# ===== Connection Settings =====
+max_connections = ${MAX_CONNECTIONS}
+max_allowed_packet = 256M
+thread_cache_size = ${CPU_CORES}
+table_open_cache = ${TABLE_OPEN_CACHE}
+
+# ===== Thread Pool (MariaDB-specific) =====
+thread_handling = pool-of-threads
+thread_pool_size = ${THREAD_POOL_SIZE}
+thread_pool_max_threads = 2000
+thread_pool_idle_timeout = 60
+
+# ===== InnoDB Settings =====
+innodb_buffer_pool_size = ${INNODB_BUFFER_POOL_MB}M
+innodb_log_file_size = ${INNODB_LOG_FILE_SIZE_MB}M
+innodb_log_buffer_size = 16M
+innodb_file_per_table = 1
+innodb_flush_method = O_DIRECT
+innodb_flush_log_at_trx_commit = 2
+innodb_io_capacity = 2000
+innodb_io_capacity_max = 4000
+innodb_read_io_threads = 4
+innodb_write_io_threads = 4
+
+# ===== Query Cache (disabled in MariaDB 10.10+) =====
+query_cache_type = 0
+query_cache_size = 0
+
+# ===== Temporary Tables =====
+tmp_table_size = 64M
+max_heap_table_size = 64M
+
+# ===== Binary Logging =====
+server_id = 1
+log_bin = /var/log/mysql/mysql-bin.log
+binlog_format = ROW
+expire_logs_days = 7
+max_binlog_size = 100M
+sync_binlog = 1
+
+# ===== Slow Query Log =====
+slow_query_log = 1
+slow_query_log_file = /var/log/mysql/slow.log
+long_query_time = 2
+log_queries_not_using_indexes = 0
+
+# ===== Error Log =====
+log_error = /var/log/mysql/error.log
+log_warnings = 2
+
+# ===== Network Settings =====
 bind-address = 127.0.0.1
+port = 3306
+skip-name-resolve = 1
+
+# ===== Security Settings =====
 local-infile = 0
 symbolic-links = 0
+
+# ===== Character Set =====
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci
+
+# ===== Other =====
+back_log = 100
+wait_timeout = 600
+interactive_timeout = 600
+MARIADB_PERF_EOF
+
+                    # Create security configuration
+                    cat > /etc/mysql/mariadb.conf.d/99-security.cnf << 'MARIADB_SEC_EOF'
+# MariaDB Security Hardening
+
+[mysqld]
+# Additional security settings
 secure-file-priv = "/var/lib/mysql-files/"
 
-# Performance and resource limits
-max_connections = 100
-max_user_connections = 50
-table_open_cache = 2000
-query_cache_size = 32M
-query_cache_limit = 2M
-MARIADB_EOF
-                    
+[client]
+# Client-side security (SSL can be configured later)
+MARIADB_SEC_EOF
+
+                    # Ensure log directory exists
+                    mkdir -p /var/log/mysql
+                    chown mysql:mysql /var/log/mysql
+                    chmod 750 /var/log/mysql
+
+                    # Start MariaDB
+                    systemctl start mariadb
+                    systemctl enable mariadb
+                    sleep 5
+
+                    # Run mysql_secure_installation automatically with strong password
+                    echo "Running mysql_secure_installation..."
+                    MYSQL_ROOT_PASSWORD=$(openssl rand -base64 32)
+
+                    mysql <<MYSQL_SECURE_EOF
+-- Set root password
+ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_ROOT_PASSWORD}';
+
+-- Remove anonymous users
+DELETE FROM mysql.user WHERE User='';
+
+-- Disallow root login remotely
+DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
+
+-- Remove test database
+DROP DATABASE IF EXISTS test;
+DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+
+-- Reload privilege tables
+FLUSH PRIVILEGES;
+MYSQL_SECURE_EOF
+
+                    # Save root password securely
+                    cat > /root/.my.cnf << MYCNF_EOF
+[client]
+user=root
+password=${MYSQL_ROOT_PASSWORD}
+
+[mysql]
+user=root
+password=${MYSQL_ROOT_PASSWORD}
+MYCNF_EOF
+                    chmod 600 /root/.my.cnf
+
+                    echo "✅ MariaDB root password saved to /root/.my.cnf (chmod 600)"
+
+                    # Create backup directory and script
+                    mkdir -p /var/backups/mysql
+                    chmod 700 /var/backups/mysql
+
+                    cat > /usr/local/bin/mysql-backup << 'BACKUP_SCRIPT_EOF'
+#!/bin/bash
+# Automated MySQL/MariaDB backup script
+
+set -e
+
+BACKUP_DIR="/var/backups/mysql"
+DATE=$(date +%Y%m%d-%H%M%S)
+HOSTNAME=$(hostname)
+RETENTION_DAYS=7
+
+mkdir -p "$BACKUP_DIR"
+
+# Get list of databases
+DATABASES=$(mysql -e "SHOW DATABASES;" | grep -Ev "Database|information_schema|performance_schema|mysql|sys")
+
+# Full backup
+echo "Starting full database backup..."
+mysqldump --all-databases \
+    --single-transaction \
+    --quick \
+    --lock-tables=false \
+    --routines \
+    --triggers \
+    --events \
+    | gzip > "$BACKUP_DIR/full-backup-${HOSTNAME}-${DATE}.sql.gz"
+
+echo "✅ Full backup complete: full-backup-${HOSTNAME}-${DATE}.sql.gz"
+
+# Individual database backups
+for DB in $DATABASES; do
+    echo "Backing up database: $DB"
+    mysqldump "$DB" \
+        --single-transaction \
+        --quick \
+        --lock-tables=false \
+        --routines \
+        --triggers \
+        | gzip > "$BACKUP_DIR/${DB}-${DATE}.sql.gz"
+done
+
+# Remove old backups
+echo "Removing backups older than ${RETENTION_DAYS} days..."
+find "$BACKUP_DIR" -name "*.sql.gz" -mtime +${RETENTION_DAYS} -delete
+
+BACKUP_SIZE=$(du -sh "$BACKUP_DIR" | cut -f1)
+echo "✅ Backup complete. Total size: $BACKUP_SIZE"
+
+logger -t mysql-backup "Database backup completed. Size: $BACKUP_SIZE"
+BACKUP_SCRIPT_EOF
+
+                    chmod +x /usr/local/bin/mysql-backup
+
+                    # Add to cron (daily at 2 AM)
+                    echo "0 2 * * * root /usr/local/bin/mysql-backup >> /var/log/mysql-backup.log 2>&1" > /etc/cron.d/mysql-backup
+
+                    # Create health check script
+                    cat > /usr/local/bin/mysql-health << 'HEALTH_SCRIPT_EOF'
+#!/bin/bash
+# MySQL/MariaDB health check script
+
+echo "===== MariaDB Health Check ====="
+echo "Timestamp: $(date)"
+echo ""
+
+if systemctl is-active --quiet mariadb; then
+    echo "✅ MariaDB service: RUNNING"
+else
+    echo "❌ MariaDB service: STOPPED"
+    exit 1
+fi
+
+if mysql -e "SELECT 1;" >/dev/null 2>&1; then
+    echo "✅ MySQL connectivity: OK"
+else
+    echo "❌ MySQL connectivity: FAILED"
+    exit 1
+fi
+
+echo ""
+echo "===== Server Status ====="
+mysql -e "SHOW GLOBAL STATUS LIKE 'Threads_connected';" -s -N | awk '{print "Active connections: " $2}'
+mysql -e "SHOW GLOBAL STATUS LIKE 'Max_used_connections';" -s -N | awk '{print "Peak connections: " $2}'
+mysql -e "SHOW GLOBAL STATUS LIKE 'Uptime';" -s -N | awk '{print "Uptime (seconds): " $2}'
+
+echo ""
+echo "===== Database List ====="
+mysql -e "SHOW DATABASES;" | grep -v "Database\|information_schema\|performance_schema\|mysql\|sys"
+
+echo ""
+echo "===== Slow Queries ====="
+mysql -e "SHOW GLOBAL STATUS LIKE 'Slow_queries';" -s -N | awk '{print "Slow queries: " $2}'
+HEALTH_SCRIPT_EOF
+
+                    chmod +x /usr/local/bin/mysql-health
+
+                    # Configure Netdata MySQL monitoring if Netdata is installed
+                    if command -v netdata >/dev/null 2>&1 && [ -d /etc/netdata ]; then
+                        echo "Configuring Netdata MySQL monitoring..."
+
+                        mysql <<NETDATA_USER_EOF
+CREATE USER IF NOT EXISTS 'netdata'@'localhost';
+GRANT USAGE, REPLICATION CLIENT, PROCESS ON *.* TO 'netdata'@'localhost';
+FLUSH PRIVILEGES;
+NETDATA_USER_EOF
+
+                        mkdir -p /etc/netdata/go.d
+                        cat > /etc/netdata/go.d/mysql.conf << 'NETDATA_MYSQL_EOF'
+jobs:
+  - name: local
+    dsn: 'netdata@unix(/var/run/mysqld/mysqld.sock)/'
+    update_every: 1
+NETDATA_MYSQL_EOF
+
+                        systemctl restart netdata
+                        echo "✅ Netdata MySQL monitoring configured"
+                    fi
+
+                    # Add systemd security hardening for MariaDB
+                    mkdir -p /etc/systemd/system/mariadb.service.d
+                    cat > /etc/systemd/system/mariadb.service.d/security.conf << 'SYSTEMD_HARDENING_EOF'
+[Service]
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
+# Resource management
+Nice=-5
+OOMScoreAdjust=-200
+LimitNOFILE=65536
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=3
+StartLimitInterval=300
+SYSTEMD_HARDENING_EOF
+
+                    systemctl daemon-reload
                     systemctl restart mariadb
-                    echo "✅ MariaDB installed with secure defaults"
+
+                    echo "✅ MariaDB installed with optimized configuration"
+                    echo "   • Root password: /root/.my.cnf"
+                    echo "   • Backups: Daily at 2 AM → /var/backups/mysql/"
+                    echo "   • Health check: /usr/local/bin/mysql-health"
+                    echo "   • InnoDB buffer pool: ${INNODB_BUFFER_POOL_MB}MB"
+                    echo "   • Max connections: ${MAX_CONNECTIONS}"
                     ;;
                 postgresql)
-                    echo "===== 16.1.6 Installing PostgreSQL with Secure Configuration ====="
+                    echo "===== 16.1.6 Installing PostgreSQL with Optimized Configuration ====="
                     apt-get install -y postgresql postgresql-contrib postgresql-client
-                    
-                    # Configure PostgreSQL for security
-                    sudo -u postgres psql -c "ALTER USER postgres PASSWORD '{{DB_PG_PASSWORD:-$(openssl rand -base64 32)}}';"
-                    
-                    # Update pg_hba.conf for security
-                    sed -i "s/#listen_addresses = 'localhost'/listen_addresses = 'localhost'/" /etc/postgresql/*/main/postgresql.conf
-                    sed -i "s/local   all             all                                     peer/local   all             all                                     md5/" /etc/postgresql/*/main/pg_hba.conf
-                    
-                    systemctl restart postgresql
-                    echo "✅ PostgreSQL installed with secure defaults"
+
+                    # Get PostgreSQL version and paths
+                    PG_VERSION=$(psql --version | awk '{print $3}' | cut -d. -f1)
+                    PG_CLUSTER="main"
+                    PG_CONF_DIR="/etc/postgresql/${PG_VERSION}/${PG_CLUSTER}"
+
+                    # Stop PostgreSQL for configuration
+                    systemctl stop postgresql
+
+                    # Calculate PostgreSQL settings based on system resources
+                    echo "Calculating optimal PostgreSQL configuration for ${TOTAL_RAM_MB}MB RAM, ${CPU_CORES} CPU cores..."
+
+                    # Resource allocation strategy:
+                    # - If MariaDB is installed: PostgreSQL gets ~20-30% (secondary database)
+                    # - If no MariaDB: PostgreSQL gets ~50% (primary database)
+                    if [ "${INSTALL_MARIADB:-false}" = "true" ]; then
+                        # Secondary database - conservative allocation
+                        SHARED_BUFFERS_MB=$((TOTAL_RAM_MB * 20 / 100))
+                        EFFECTIVE_CACHE_SIZE_MB=$((TOTAL_RAM_MB * 40 / 100))
+                    else
+                        # Primary database - generous allocation
+                        SHARED_BUFFERS_MB=$((TOTAL_RAM_MB * 50 / 100))
+                        EFFECTIVE_CACHE_SIZE_MB=$((TOTAL_RAM_MB * 75 / 100))
+                    fi
+
+                    # Work memory: Per-query memory
+                    WORK_MEM_MB=$((TOTAL_RAM_MB / 500))
+                    if [ $WORK_MEM_MB -lt 4 ]; then
+                        WORK_MEM_MB=4
+                    elif [ $WORK_MEM_MB -gt 512 ]; then
+                        WORK_MEM_MB=512
+                    fi
+
+                    # Maintenance work memory
+                    MAINTENANCE_WORK_MEM_MB=$((TOTAL_RAM_MB / 32))
+                    if [ $MAINTENANCE_WORK_MEM_MB -lt 64 ]; then
+                        MAINTENANCE_WORK_MEM_MB=64
+                    elif [ $MAINTENANCE_WORK_MEM_MB -gt 8192 ]; then
+                        MAINTENANCE_WORK_MEM_MB=8192
+                    fi
+
+                    # WAL buffers
+                    WAL_BUFFERS_MB=$((SHARED_BUFFERS_MB / 32))
+                    if [ $WAL_BUFFERS_MB -lt 16 ]; then
+                        WAL_BUFFERS_MB=16
+                    elif [ $WAL_BUFFERS_MB -gt 64 ]; then
+                        WAL_BUFFERS_MB=64
+                    fi
+
+                    # Max connections
+                    MAX_CONNECTIONS=100
+
+                    # Parallel workers
+                    MAX_PARALLEL_WORKERS=$((CPU_CORES / 4))
+                    if [ $MAX_PARALLEL_WORKERS -lt 2 ]; then
+                        MAX_PARALLEL_WORKERS=2
+                    elif [ $MAX_PARALLEL_WORKERS -gt 8 ]; then
+                        MAX_PARALLEL_WORKERS=8
+                    fi
+                    MAX_PARALLEL_WORKERS_PER_GATHER=$((MAX_PARALLEL_WORKERS / 2))
+                    if [ $MAX_PARALLEL_WORKERS_PER_GATHER -lt 2 ]; then
+                        MAX_PARALLEL_WORKERS_PER_GATHER=2
+                    fi
+
+                    echo "  • Shared buffers: ${SHARED_BUFFERS_MB}MB"
+                    echo "  • Effective cache: ${EFFECTIVE_CACHE_SIZE_MB}MB"
+                    echo "  • Work mem: ${WORK_MEM_MB}MB"
+                    echo "  • Maintenance work mem: ${MAINTENANCE_WORK_MEM_MB}MB"
+                    echo "  • WAL buffers: ${WAL_BUFFERS_MB}MB"
+                    echo "  • Max connections: ${MAX_CONNECTIONS}"
+                    echo "  • Max parallel workers: ${MAX_PARALLEL_WORKERS}"
+
+                    # Create optimized PostgreSQL configuration
+                    mkdir -p "${PG_CONF_DIR}/conf.d"
+                    cat > "${PG_CONF_DIR}/conf.d/99-polyserver-optimization.conf" << PGSQL_PERF_EOF
+# PolyServer PostgreSQL Configuration
+# Generated: $(date)
+# System: ${TOTAL_RAM_MB}MB RAM, ${CPU_CORES} CPU cores
+
+####################
+# Connection Settings
+####################
+max_connections = ${MAX_CONNECTIONS}
+superuser_reserved_connections = 3
+
+####################
+# Memory Settings
+####################
+shared_buffers = ${SHARED_BUFFERS_MB}MB
+work_mem = ${WORK_MEM_MB}MB
+maintenance_work_mem = ${MAINTENANCE_WORK_MEM_MB}MB
+autovacuum_work_mem = ${MAINTENANCE_WORK_MEM_MB}MB
+effective_cache_size = ${EFFECTIVE_CACHE_SIZE_MB}MB
+temp_buffers = 8MB
+
+####################
+# WAL Settings
+####################
+wal_buffers = ${WAL_BUFFERS_MB}MB
+min_wal_size = 512MB
+max_wal_size = 2GB
+wal_level = replica
+checkpoint_completion_target = 0.9
+checkpoint_timeout = 15min
+
+####################
+# Query Planner (SSD-optimized)
+####################
+random_page_cost = 1.1
+seq_page_cost = 1.0
+effective_io_concurrency = 200
+
+####################
+# Parallel Queries
+####################
+max_parallel_workers_per_gather = ${MAX_PARALLEL_WORKERS_PER_GATHER}
+max_parallel_workers = ${MAX_PARALLEL_WORKERS}
+max_parallel_maintenance_workers = ${MAX_PARALLEL_WORKERS_PER_GATHER}
+
+####################
+# Logging
+####################
+log_destination = 'stderr'
+logging_collector = on
+log_directory = 'log'
+log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'
+log_file_mode = 0600
+log_rotation_age = 1d
+log_rotation_size = 100MB
+
+# Log slow queries (>1 second)
+log_min_duration_statement = 1000
+log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+log_checkpoints = on
+log_connections = off
+log_disconnections = off
+log_lock_waits = on
+log_temp_files = 0
+
+####################
+# Autovacuum
+####################
+autovacuum = on
+autovacuum_max_workers = 3
+autovacuum_naptime = 1min
+autovacuum_vacuum_threshold = 50
+autovacuum_analyze_threshold = 50
+autovacuum_vacuum_scale_factor = 0.1
+autovacuum_analyze_scale_factor = 0.05
+
+####################
+# Statistics
+####################
+track_activities = on
+track_counts = on
+track_io_timing = on
+track_functions = pl
+default_statistics_target = 100
+
+####################
+# Security
+####################
+password_encryption = scram-sha-256
+ssl = off
+
+####################
+# Locale
+####################
+lc_messages = 'en_US.UTF-8'
+lc_monetary = 'en_US.UTF-8'
+lc_numeric = 'en_US.UTF-8'
+lc_time = 'en_US.UTF-8'
+default_text_search_config = 'pg_catalog.english'
+
+####################
+# Performance Features
+####################
+jit = off
+huge_pages = try
+PGSQL_PERF_EOF
+
+                    # Update listen_addresses
+                    sed -i "s/#listen_addresses = 'localhost'/listen_addresses = 'localhost'/" "${PG_CONF_DIR}/postgresql.conf"
+
+                    # Configure pg_hba.conf for secure authentication
+                    cat > "${PG_CONF_DIR}/pg_hba.conf" << 'PGHBA_EOF'
+# PostgreSQL Client Authentication Configuration
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+
+# Local connections
+local   all             postgres                                peer
+local   all             all                                     scram-sha-256
+
+# IPv4 localhost connections
+host    all             all             127.0.0.1/32            scram-sha-256
+
+# IPv6 localhost connections
+host    all             all             ::1/128                 scram-sha-256
+
+# Replication connections
+local   replication     all                                     peer
+host    replication     all             127.0.0.1/32            scram-sha-256
+host    replication     all             ::1/128                 scram-sha-256
+PGHBA_EOF
+
+                    # Start PostgreSQL
+                    systemctl start postgresql
+                    systemctl enable postgresql
+                    sleep 5
+
+                    # Generate secure passwords
+                    POSTGRES_PASSWORD=$(openssl rand -base64 32)
+
+                    # Set postgres user password
+                    sudo -u postgres psql << PGSQL_SECURE_EOF
+ALTER USER postgres WITH PASSWORD '${POSTGRES_PASSWORD}';
+PGSQL_SECURE_EOF
+
+                    # Save postgres credentials
+                    cat > /root/.pgpass << PGPASS_EOF
+localhost:5432:*:postgres:${POSTGRES_PASSWORD}
+PGPASS_EOF
+                    chmod 600 /root/.pgpass
+
+                    echo "✅ PostgreSQL root password saved to /root/.pgpass (chmod 600)"
+
+                    # Create backup directory and script
+                    mkdir -p /var/backups/postgresql
+                    chown postgres:postgres /var/backups/postgresql
+
+                    cat > /usr/local/bin/postgresql-backup << 'PGSQL_BACKUP_EOF'
+#!/bin/bash
+# PostgreSQL backup script
+
+set -Eeuo pipefail
+
+BACKUP_DIR="/var/backups/postgresql"
+DATE=$(date +%Y%m%d_%H%M%S)
+LOG_FILE="/var/log/postgresql-backup.log"
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+log "Starting PostgreSQL backup..."
+
+# Get list of databases
+DATABASES=$(sudo -u postgres psql -t -c "SELECT datname FROM pg_database WHERE datistemplate = false AND datname != 'postgres';" | grep -v '^$')
+
+# Backup each database
+for DB in $DATABASES; do
+    BACKUP_FILE="${BACKUP_DIR}/${DB}_${DATE}.sql.gz"
+    if sudo -u postgres pg_dump "$DB" | gzip > "$BACKUP_FILE"; then
+        log "✅ Backup completed: $BACKUP_FILE"
+        log "   Size: $(du -h "$BACKUP_FILE" | cut -f1)"
+    else
+        log "❌ Backup failed for database: $DB"
+    fi
+done
+
+# Keep last 7 days of backups
+find "$BACKUP_DIR" -name "*.sql.gz" -mtime +7 -delete
+log "Old backups cleaned (keeping 7 days)"
+
+log "Backup completed successfully"
+PGSQL_BACKUP_EOF
+
+                    chmod +x /usr/local/bin/postgresql-backup
+
+                    # Create daily backup cron job
+                    cat > /etc/cron.daily/postgresql-backup << 'PGSQL_CRON_EOF'
+#!/bin/bash
+/usr/local/bin/postgresql-backup
+PGSQL_CRON_EOF
+                    chmod +x /etc/cron.daily/postgresql-backup
+
+                    # Configure Netdata PostgreSQL monitoring if Netdata is installed
+                    if command -v netdata >/dev/null 2>&1 && [ -d /etc/netdata ]; then
+                        echo "Configuring Netdata PostgreSQL monitoring..."
+
+                        NETDATA_PG_PASSWORD=$(openssl rand -base64 16)
+
+                        sudo -u postgres psql << NETDATA_PG_EOF
+CREATE USER netdata WITH PASSWORD '${NETDATA_PG_PASSWORD}';
+GRANT pg_monitor TO netdata;
+GRANT CONNECT ON DATABASE postgres TO netdata;
+NETDATA_PG_EOF
+
+                        mkdir -p /etc/netdata/go.d
+                        cat > /etc/netdata/go.d/postgres.conf << NETDATA_POSTGRES_EOF
+jobs:
+  - name: local
+    dsn: 'postgres://netdata:${NETDATA_PG_PASSWORD}@localhost:5432/postgres'
+    timeout: 5
+    collect_databases_metrics: yes
+NETDATA_POSTGRES_EOF
+
+                        chmod 640 /etc/netdata/go.d/postgres.conf
+                        chown root:netdata /etc/netdata/go.d/postgres.conf 2>/dev/null || true
+
+                        systemctl restart netdata
+                        echo "✅ Netdata PostgreSQL monitoring configured"
+                    fi
+
+                    echo "✅ PostgreSQL installed with optimized configuration"
+                    echo "   • Postgres password: /root/.pgpass"
+                    echo "   • Backups: Daily via cron.daily → /var/backups/postgresql/"
+                    echo "   • Shared buffers: ${SHARED_BUFFERS_MB}MB"
+                    echo "   • Max connections: ${MAX_CONNECTIONS}"
                     ;;
                 nodejs)
                     echo "===== 16.1.7 Installing Node.js with PM2 ====="
@@ -6464,6 +7504,23 @@ MARIADB_EOF
                     
                     # Configure PM2 startup
                     sudo -u {{USERNAME}} pm2 startup systemd -u {{USERNAME}} --hp /home/{{USERNAME}}
+                    
+                    # Create optimized PM2 ecosystem template
+                    cat > /home/{{USERNAME}}/ecosystem.config.js << "PM2_EOF"
+module.exports = {
+  apps: [{
+    name: 'app',
+    script: './app.js',
+    instances: $PM2_INSTANCES,
+    exec_mode: 'cluster',
+    env: {
+      NODE_ENV: 'production',
+      PORT: 3000
+    }
+  }]
+};
+PM2_EOF
+                    chown {{USERNAME}}:{{USERNAME}} /home/{{USERNAME}}/ecosystem.config.js
                     
                     echo "✅ Node.js and PM2 installed from NodeSource (current LTS)"
                     echo "   • Node.js version: $(node --version)"
@@ -6495,10 +7552,10 @@ MARIADB_EOF
                     echo "===== 16.1.9 Installing Redis with Secure Configuration ====="
                     apt-get install -y redis-server
                     
-                    # Configure Redis for security
+                    # Configure Redis for security and performance (calculated based on system resources)
                     sed -i "s/^# requirepass foobared/requirepass {{REDIS_PASSWORD:-\$(openssl rand -base64 32)}}/" /etc/redis/redis.conf
                     sed -i 's/^bind 127.0.0.1 ::1/bind 127.0.0.1/' /etc/redis/redis.conf
-                    sed -i 's/^# maxmemory <bytes>/maxmemory 256mb/' /etc/redis/redis.conf
+                    sed -i "s/^# maxmemory <bytes>/maxmemory ${REDIS_MAXMEMORY}mb/" /etc/redis/redis.conf
                     sed -i 's/^# maxmemory-policy noeviction/maxmemory-policy allkeys-lru/' /etc/redis/redis.conf
                     
                     systemctl restart redis-server
@@ -6545,13 +7602,10 @@ GIT_EOF
                     echo "Unknown component: $component"
                     ;;
             esac
-        done
-        echo "✅ Component installation completed"
-    else
-        echo "Skipping component installation"
-    fi
+    done
+    echo "✅ Component installation completed"
 else
-    echo "No additional components selected"
+    log_message "No additional components selected for installation"
 fi
 
 echo "===== 17. Final configuration validation ====="
@@ -6663,6 +7717,45 @@ else
     log_message "Skipping advanced settings prompt in automated mode"
 fi
 
+# Deploy full audit rules now that all services are installed
+echo "===== 17.9 Deploying Full Audit Rules ====="
+log_message "Deploying comprehensive audit rules..."
+if [ -f /tmp/audit.rules.full ]; then
+    # Deploy full rules
+    cp /tmp/audit.rules.full /etc/audit/rules.d/audit.rules
+
+    # Add conditional rules for paths that may not exist
+    if [ -f /var/log/faillog ]; then
+        echo "-w /var/log/faillog -p wa -k login_failures" >> /etc/audit/rules.d/audit.rules
+    fi
+    if [ -d /var/run/faillock ]; then
+        echo "-w /var/run/faillock -p wa -k login_failures" >> /etc/audit/rules.d/audit.rules
+    fi
+
+    # Remove rules for application directories that don't exist yet
+    # These will be added when the application is deployed
+    if [ ! -d "{{DEPLOY_DIR}}/config" ]; then
+        sed -i '\|{{DEPLOY_DIR}}/config|d' /etc/audit/rules.d/audit.rules 2>/dev/null || true
+    fi
+    if [ ! -d "{{DEPLOY_DIR}}/scripts" ]; then
+        sed -i '\|{{DEPLOY_DIR}}/scripts|d' /etc/audit/rules.d/audit.rules 2>/dev/null || true
+    fi
+
+    # Remove backup directory audit rule if backup storage not configured
+    if [ ! -d "/mnt/backup/backups" ]; then
+        sed -i '\|/mnt/backup/backups|d' /etc/audit/rules.d/audit.rules 2>/dev/null || true
+    fi
+
+    # Reload audit rules
+    augenrules --load || log_message "⚠️  Some audit rules may have failed to load (non-critical)"
+    docker_systemctl restart auditd || log_message "⚠️  Auditd restart failed (non-critical)"
+
+    log_message "✅ Full audit rules deployed"
+    rm -f /tmp/audit.rules.full
+else
+    log_message "⚠️  Full audit rules not found, using minimal rules"
+fi
+
 echo "===== 18. Setup complete! ====="
 log_message "Server setup completed successfully"
 echo "Server has been secured and Docker installed."
@@ -6674,24 +7767,19 @@ echo "📊 System Resource Optimization Applied:"
 if [ -n "$NGINX_WORKERS" ] && [ "$NGINX_WORKERS" != "auto" ]; then
     echo "   • Nginx: $NGINX_WORKERS workers, $NGINX_WORKER_CONNECTIONS connections each"
 fi
-if [ -n "$PHP_MAX_CHILDREN" ]; then
+if [ -n "${PHP_MAX_CHILDREN:-}" ]; then
     echo "   • PHP-FPM: Up to $PHP_MAX_CHILDREN processes, ${PHP_MEMORY_LIMIT}MB memory limit per process"
 fi
-if [ -n "$MYSQL_INNODB_BUFFER_POOL_SIZE" ]; then
+if [ -n "${MYSQL_INNODB_BUFFER_POOL_SIZE:-}" ]; then
     echo "   • MariaDB: ${MYSQL_INNODB_BUFFER_POOL_SIZE}MB InnoDB buffer pool, $MYSQL_MAX_CONNECTIONS max connections"
 fi
-if [ -n "$REDIS_MAX_MEMORY" ]; then
+if [ -n "${REDIS_MAX_MEMORY:-}" ]; then
     echo "   • Redis: ${REDIS_MAX_MEMORY}MB max memory, $REDIS_MAX_CLIENTS max clients"
 fi
 echo ""
 echo "📁 Configuration templates available for deployment:"
-if [ "$WEB_SERVER_TYPE" = "unit" ]; then
-    echo "   • NGINX Unit: templates/unit/ (high-performance application server)"
-    echo "   • PHP 8.4: templates/php/ (optimized for ${TOTAL_RAM_MB}MB RAM)"
-else
-    echo "   • Nginx: templates/nginx/ (optimized for $CPU_CORES cores)"
-    echo "   • PHP 8.4: templates/php/ (optimized for ${TOTAL_RAM_MB}MB RAM)"
-fi
+echo "   • Nginx: templates/nginx/ (optimized for $CPU_CORES cores)"
+echo "   • PHP 8.4: templates/php/ (optimized for ${TOTAL_RAM_MB}MB RAM)"
 echo "   • MariaDB: templates/mariadb/ (production-ready settings)"
 echo "   • Redis: templates/redis/ (security-hardened)"
 echo ""

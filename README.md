@@ -13,8 +13,10 @@ This repository provides a comprehensive, security-hardened Debian server founda
   - [Step 1: Local Setup and Configuration](#step-1-local-setup-and-configuration)
   - [Step 2: Server Provisioning](#step-2-server-provisioning)
   - [Step 3: Deploy and Run Server Hardening](#step-3-deploy-and-run-server-hardening)
-  - [Step 4: Deploy Base Configuration](#step-4-deploy-base-configuration)
+  - [Step 4: Run Server Hardening](#step-4-run-server-hardening)
+- [Specialized Server Deployments](#specialized-server-deployments)
   - [Bastion Host Setup](#bastion-host-setup)
+  - [MariaDB Dedicated Server](#mariadb-dedicated-server)
 - [Application Deployment](#application-deployment)
   - [Deployment Modes](#deployment-modes)
   - [Supported Applications](#supported-applications)
@@ -50,6 +52,7 @@ This repository provides a comprehensive, security-hardened Debian server founda
   - [Malware Protection](#malware-protection)
   - [Rootkit Detection](#rootkit-detection)
   - [File Integrity Monitoring](#file-integrity-monitoring)
+  - [RAID Array Monitoring](#raid-array-monitoring)
   - [Logcheck System Monitoring](#logcheck-system-monitoring)
   - [Logwatch System Monitoring](#logwatch-system-monitoring)
   - [Automatic Security Updates](#automatic-security-updates)
@@ -155,8 +158,11 @@ polyserver/
 │   │   ├── health_alarm_notify.conf.template
 │   │   └── health.d/
 │   │       └── cgroups.conf.template
-│   ├── mariadb/                         # Database server templates
+│   ├── mariadb/                         # MariaDB/MySQL server templates
 │   │   └── 50-server.cnf.template           # Performance-optimized MariaDB configuration
+│   ├── postgresql/                      # PostgreSQL server templates
+│   │   ├── postgresql.conf.template         # Performance-optimized PostgreSQL configuration
+│   │   └── pg_hba.conf.template             # PostgreSQL authentication configuration
 │   ├── nginx/                           # Traditional web server templates (mode-specific)
 │   │   ├── nginx-baremetal.conf.template    # Nginx config for bare metal mode
 │   │   ├── nginx-docker.conf.template       # Nginx config for Docker mode (reverse proxy)
@@ -170,9 +176,6 @@ polyserver/
 │   │   └── php.ini.template                  # Security-hardened PHP configuration
 │   ├── redis/                           # Redis cache configuration
 │   │   └── redis.conf.template               # Performance and security optimized Redis
-│   ├── unit/                            # NGINX Unit application server templates
-│   │   ├── config.json.template              # Unit config for bare metal mode
-│   │   └── config-docker.json.template       # Unit config for Docker mode (reverse proxy)
 │   ├── scripts/                         # Script templates
 │   │   ├── backup.sh.template
 │   │   └── s3backup.sh.template
@@ -181,7 +184,6 @@ polyserver/
 │   ├── systemd/                         # System service templates
 │   │   └── application.service.template
 │   └── unbound/                         # DNS resolver templates
-│       ├── dhclient.conf.template
 │       └── local.conf.template
 ├── config/                              # Generated configuration files (git-ignored)
 │   └── [generated from templates/]     # Output directory for processed templates
@@ -287,6 +289,7 @@ For secure access to your server, it's strongly recommended to use SSH keys inst
 If you don't already have SSH keys, create them on your local machine:
 
 **For Ed25519 keys (recommended):**
+
 ```bash
 # Generate a new Ed25519 SSH key
 ssh-keygen -t ed25519 -C "your-email@example.com"
@@ -296,6 +299,7 @@ ssh-keygen -t ed25519 -C "your-email@example.com"
 ```
 
 **For RSA keys (alternative):**
+
 ```bash
 # Generate a new RSA SSH key (4096 bits)
 ssh-keygen -t rsa -b 4096 -C "your-email@example.com"
@@ -340,6 +344,7 @@ PolyServer provides flexible SSH authentication configuration:
 - Start with password authentication
 - Add SSH keys to your server manually
 - Run the conversion script to disable password auth:
+
   ```bash
   # On the server, after adding SSH keys
   sudo /opt/polyserver/scripts/ssh-disable-password-auth.sh
@@ -350,17 +355,28 @@ PolyServer provides flexible SSH authentication configuration:
 **Run on your local machine:**
 
 1. **Clone the repository:**
+
    ```bash
    git clone https://github.com/quadrifolia/PolyServer.git
    cd PolyServer
    ```
 
-2. **Customize base configuration:**
+2. **Create your configuration file:**
+   Copy the example configuration to create your own `defaults.env`:
+
+   ```bash
+   cp templates/defaults.env.example templates/defaults.env
+   ```
+
+   **Note:** The `defaults.env` file is gitignored to prevent accidentally committing your production configuration.
+
+3. **Customize base configuration:**
    Edit `templates/defaults.env` to set your environment-specific values:
+
    ```bash
    nano templates/defaults.env
    ```
-   
+
    **Required changes:**
    - `LOGWATCH_EMAIL=your-email@example.com` (for daily security reports)
    - `SSL_EMAIL=your-email@example.com` (for Let's Encrypt certificates)
@@ -370,15 +386,16 @@ PolyServer provides flexible SSH authentication configuration:
 
    **Netdata Cloud Integration (Optional):**
    For centralized monitoring across multiple servers:
+
    ```bash
    # Enable Netdata with Cloud integration
    NETDATA_ENABLED=true
    NETDATA_CLAIM_TOKEN=your_claim_token_from_netdata_cloud
-   NETDATA_CLAIM_ROOMS=your_room_id_from_netdata_cloud
    ```
 
    **Email Configuration (Recommended):**
    For reliable security notification delivery, configure external SMTP:
+   
    ```bash
    # Enable external SMTP for reliable email delivery
    SMTP_ENABLED=true
@@ -393,6 +410,7 @@ PolyServer provides flexible SSH authentication configuration:
    **Note**: If `SMTP_ENABLED=false`, all system emails will be stored locally in `/var/mail/root`
 
    **SSH Configuration:**
+   
    ```bash
    # For key-based authentication (recommended):
    SSH_PUBLIC_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG... your-email@example.com"
@@ -408,7 +426,8 @@ PolyServer provides flexible SSH authentication configuration:
    - `NETDATA_ENABLED=true` (enable/disable Netdata monitoring)
    - Other security and monitoring settings
 
-3. **Generate configuration files:**
+4. **Generate configuration files:**
+
    ```bash
    ./scripts/generate-configs.sh
    ```
@@ -428,43 +447,75 @@ PolyServer provides flexible SSH authentication configuration:
 
 **Run from your local machine:**
 
-1. **Upload the generated hardening script to your server:**
-   ```bash
-   # Copy the customized script to your server
-   scp config/server-setup.sh root@your-server-ip:/root/
-   ```
-
-2. **SSH to your server and run the hardening script:**
-   ```bash
-   # Connect to your server
-   ssh root@your-server-ip
-   
-   # Run the hardening script (already executable)
-   /root/server-setup.sh
-   ```
-
-   **The script will automatically:**
-   - Update and secure the base Debian system
-   - Install and configure all security tools
-   - Set up monitoring and logging systems
-   - Configure DSGVO/GDPR compliance framework
-   - Harden network and system access
-   - Change SSH port to 2222 (reconnect using this port afterward)
-
-### Step 4: Deploy Base Configuration
-
-**Run from your local machine after server hardening:**
-
-Deploy the generated configuration to your hardened server:
+Deploy all configuration files to your server using the unified deployment script:
 
 ```bash
-# Deploy base configuration to server (note the new SSH port)
-./scripts/deploy-unified.sh templates/defaults.env deploy your-server-ip 2222
+# Basic deployment (uses defaults from templates/defaults.env)
+./scripts/deploy-unified.sh --host your-server-ip
+
+# Or with custom options
+./scripts/deploy-unified.sh \
+  --host your-server-ip \
+  --user root \
+  --port 22 \
+  --env-file templates/defaults.env \
+  --identity ~/.ssh/id_ed25519
 ```
 
-**Note:** After step 3, SSH access will be on port 2222, and you'll connect as the `deploy` user, not root.
+**SSH Key Authentication:**
 
-## Bastion Host Setup
+The deployment script supports SSH key authentication with the `-i` flag. If your SSH key is not automatically selected:
+
+```bash
+# Specify your SSH key explicitly
+./scripts/deploy-unified.sh \
+  --host your-server-ip \
+  --identity ~/.ssh/id_ed25519
+
+# Or add your key to the SSH agent for automatic selection
+ssh-add ~/.ssh/id_ed25519
+./scripts/deploy-unified.sh --host your-server-ip
+```
+
+**What gets deployed:**
+- Environment configuration (`defaults.env`) → `/opt/polyserver/config/`
+- Server setup script (`server-setup.sh`) → `/opt/polyserver/config/`
+- Nginx configurations → `/opt/polyserver/config/nginx/`
+- Backup scripts → `/opt/polyserver/scripts/`
+- Audit configurations (if enabled) → `/opt/polyserver/config/audit/`
+- Unbound DNS configurations (if enabled) → `/opt/polyserver/config/unbound/`
+
+### Step 4: Run Server Hardening
+
+**SSH to your server and run the hardening script:**
+
+```bash
+# Connect to your server
+ssh root@your-server-ip
+
+# Navigate to the config directory
+cd /opt/polyserver/config
+
+# Run the hardening script (reads settings from defaults.env)
+sudo bash server-setup.sh
+```
+
+**The script will automatically:**
+- Read all configuration from `/opt/polyserver/config/defaults.env`
+- Update and secure the base Debian system
+- Install and configure all security tools
+- Set up monitoring and logging systems
+- Configure DSGVO/GDPR compliance framework
+- Harden network and system access
+- Change SSH port to 2222 (reconnect using this port afterward)
+
+**Important:** After the script completes, SSH will be on port 2222 and you'll connect as the `deploy` user (not root).
+
+## Specialized Server Deployments
+
+PolyServer includes specialized setup scripts for specific server roles beyond the standard application server deployment.
+
+### Bastion Host Setup
 
 For environments requiring secure access to internal networks, PolyServer includes a specialized bastion host hardening script. Bastion hosts provide a secure gateway for administrative access to internal infrastructure.
 
@@ -486,6 +537,7 @@ A bastion host is a specialized server that:
 **Setup Process:**
 
 1. **Configure SSH Public Key in Script:**
+
    ```bash
    # Edit the bastion setup script
    nano scripts/server-setup-bastion.sh
@@ -498,6 +550,7 @@ A bastion host is a specialized server that:
    ```
 
 2. **Get Your SSH Public Key:**
+
    ```bash
    # Display your Ed25519 public key
    cat ~/.ssh/id_ed25519.pub
@@ -509,6 +562,7 @@ A bastion host is a specialized server that:
    ```
 
 3. **Deploy the Bastion Host:**
+
    ```bash
    # Copy the script to your server (as root)
    scp scripts/server-setup-bastion.sh root@your-bastion-ip:/root/
@@ -525,6 +579,7 @@ A bastion host is a specialized server that:
    - SMTP server details (recommended for production environments)
    
    **Alternative if you have sudo access:**
+
    ```bash
    # Copy the script to your server (as regular user)
    scp scripts/server-setup-bastion.sh debian@your-bastion-ip:/home/debian/
@@ -545,12 +600,326 @@ A bastion host is a specialized server that:
 
 The bastion setup provides enhanced security beyond the standard server hardening:
 
+#### Core Security Components (Always Installed)
+- **Fail2ban**: Brute force protection with aggressive SSH monitoring
+- **UFW Firewall**: Restrictive rules with only essential ports open
+- **AIDE**: File integrity monitoring for detecting unauthorized changes
+- **Unbound DNS**: Caching DNS resolver for improved performance and privacy
+- **Postfix**: Local mail system for security notifications
+- **AppArmor**: Mandatory access control for critical services
+
+#### Enhanced Security Components (Enabled by Default)
+
+These essential security tools are **now enabled by default** to provide comprehensive bastion protection:
+
+- **RKHunter + chkrootkit**: Rootkit detection and system integrity checking (LOW resource - ~10MB RAM)
+- **Suricata IDS**: Network intrusion detection system with real-time traffic analysis (MEDIUM resource - ~150MB RAM)
+
+**Why these are enabled by default:**
+- Bastion hosts are high-value targets requiring maximum security
+- Rootkit detection is essential and has minimal resource impact
+- Network IDS is critical for monitoring all traffic through the bastion gateway
+- Combined resource usage: ~160MB RAM - acceptable for modern bastions
+
+#### Optional Security Components
+
+Additional security tools available for specific needs:
+
+```bash
+# Enable optional components (disabled by default)
+export INSTALL_CLAMAV=true      # Antivirus scanning (HIGH resource - 500MB+ RAM)
+export INSTALL_MALDET=true      # Linux Malware Detect (MEDIUM resource - disk I/O intensive)
+
+# Disable default components if needed (not recommended)
+export INSTALL_RKHUNTER=false   # Disable rootkit detection (not recommended)
+export INSTALL_SURICATA=false   # Disable network IDS (not recommended)
+
+# Run the script with environment preserved
+sudo -E ./scripts/server-setup-bastion.sh
+```
+
+**What Each Component Does:**  
+- **ClamAV** (`INSTALL_CLAMAV`): Antivirus scanning for files. Better for mail/file servers. High resource usage.  
+- **Malware Detect** (`INSTALL_MALDET`): Linux malware scanner. Better for web servers with file uploads. Disk I/O intensive.  
+- **RKHunter** (`INSTALL_RKHUNTER`): **ENABLED BY DEFAULT** - Rootkit detection with daily automated scans.  
+- **Suricata** (`INSTALL_SURICATA`): **ENABLED BY DEFAULT** - Network IDS monitoring all bastion traffic.  
+
+**Viewing Current Configuration:**
+
+After installation, check which components are active:
+
+```bash
+sudo bastionstat
+```
+
+This shows which security services are running and which are inactive (not installed).
+
 #### Enhanced SSH Security
 - **Key-only authentication**: No password authentication allowed
 - **Custom SSH port**: Default port 2222 to reduce attack surface
 - **SSH tunneling enabled**: Supports port forwarding for internal access
 - **Connection limits**: Maximum 5 concurrent sessions
 - **Client keep-alive**: Automatic session management
+
+#### Authentication and Access Model
+
+**IMPORTANT:** The bastion host uses a strict SSH key-only authentication model for maximum security.
+
+**Bastion User Account:**
+- **Password Authentication**: Intentionally DISABLED (no password login possible)
+- **SSH Key Authentication**: REQUIRED (your public key must be configured)
+- **Sudo Access**: **Restricted** to specific whitelisted commands only (security hardening)
+- **Login Method**: SSH key authentication only
+
+**Root Account:**
+- **Password**: Set during installation for emergency console access
+- **SSH Login**: DISABLED (root cannot SSH in)
+- **Console Access**: Available for emergency recovery via hosting provider console
+- **Use Case**: Emergency access when SSH keys are lost or bastion user is locked out
+
+**Sudo Command Restrictions (Important!):**
+
+The bastion host uses **restrictive sudoers** configuration that only allows passwordless sudo for specific whitelisted commands. This prevents unauthorized privilege escalation.
+
+**Allowed Commands (No Password Required):**
+
+```bash
+# System monitoring commands
+sudo bastionstat          # Show comprehensive bastion status
+sudo sshmon               # Monitor SSH connections
+sudo bastionmail          # Read system mail
+
+# Service status checks (read-only)
+sudo systemctl status sshd
+sudo systemctl is-active ssh
+sudo ufw status
+sudo fail2ban-client status
+
+# Log file access (read-only)
+sudo tail /var/log/auth.log
+sudo tail /var/log/syslog
+sudo tail /var/log/fail2ban.log
+```
+
+**Restricted Commands (Require Root):**
+
+```bash
+# These will NOT work with sudo - use 'su -' to become root
+sudo ./my-script.sh               # ❌ Scripts in home directory
+sudo systemctl restart sshd       # ❌ Service control
+sudo apt update                   # ❌ Package management
+sudo nano /etc/ssh/sshd_config    # ❌ Configuration editing
+```
+
+**How to Run Administrative Commands:**
+
+```bash
+# Method 1: Use 'su -' to become root (recommended for admin tasks)
+bastion@bastion:~$ su -
+Password: [enter root password]
+root@bastion:~# systemctl restart sshd
+root@bastion:~# apt update
+root@bastion:~# exit
+
+# Method 2: Run allowed commands with sudo (monitoring only)
+bastion@bastion:~$ sudo bastionstat
+bastion@bastion:~$ sudo systemctl status sshd
+```
+
+**After Installation:**
+
+```bash
+# Correct login method (SSH with key)
+ssh -p 2222 bastion@your-bastion-ip
+
+# Allowed sudo commands work without password
+bastion@bastion:~$ sudo bastionstat
+bastion@bastion:~$ sudo systemctl status sshd
+# Works immediately - no password prompt
+
+# Administrative commands require root access
+bastion@bastion:~$ sudo systemctl restart sshd
+# ❌ This will ask for password (which doesn't exist)
+
+# Solution: Use 'su -' for admin tasks
+bastion@bastion:~$ su -
+Password: [root password]
+root@bastion:~# systemctl restart sshd
+# ✅ Works
+
+# Password login attempts will FAIL (by design)
+ssh -p 2222 -o PubkeyAuthentication=no bastion@your-bastion-ip
+# This will fail - password authentication is disabled
+
+# If you need root access (emergency only)
+# Use hosting provider console and login as root with the password you set
+```
+
+**Why This Design:**
+- **Eliminates password brute-force attacks**: No password = no brute-forcing
+- **Enforces strong authentication**: SSH keys are cryptographically stronger than passwords
+- **Restricts privilege escalation**: Whitelisted sudo commands prevent unauthorized root access
+- **Principle of least privilege**: Bastion user can monitor but not modify system
+- **Audit trail**: All access tied to specific SSH keys, root access via su is logged
+- **Compliance**: Meets security requirements for privileged access management (separation of duties)
+- **Defense in depth**: Even if bastion account is compromised, attacker cannot run arbitrary root commands
+- **Emergency recovery**: Root password via console provides last-resort access
+
+**Common Issues:**
+
+```bash
+# Issue: "sudo password doesn't work"
+# Solution: This is expected - bastion user has no password
+# Only whitelisted commands work with sudo - use 'su -' for admin tasks
+
+# Issue: "sudo ./script.sh asks for password"
+# Solution: Scripts in home directory are not whitelisted for sudo
+# Either: 1) Use 'su -' to run as root, OR
+#         2) Install script to /usr/local/bin/ and add to sudoers
+
+# Issue: "sudo systemctl restart fails"
+# Solution: Only 'status' and 'is-active' are allowed, not 'restart'
+# Use 'su -' for service management commands
+
+# Issue: "I need to set a password for bastion user"
+# Solution: Don't - this defeats the security model
+# If you absolutely need it, see security implications below
+```
+
+**Security Implications of Enabling Passwords:**
+
+If you absolutely must enable password authentication (NOT RECOMMENDED):
+
+```bash
+# As root (via console)
+passwd bastion          # Set a password
+nano /etc/ssh/sshd_config
+# Change: PasswordAuthentication no → yes
+systemctl restart sshd
+
+# WARNING: This significantly reduces security by:
+# - Allowing password brute-force attacks
+# - Creating weaker authentication
+# - Violating bastion host best practices
+```
+
+### SSH Filesystem Protection (ProtectSystem)
+
+**ℹ️ DISABLED BY DEFAULT FOR USABILITY**
+
+As of the latest version, **ProtectSystem is disabled by default** on the SSH service to ensure the system remains manageable and usable. System administration works normally without read-only filesystem issues.
+
+#### Current Default Behavior (No ProtectSystem)
+
+By default, the SSH service has **no filesystem restrictions**, providing a normal Linux experience:
+
+```
+Filesystem Status in SSH Sessions (Default):
+✅ Fully writable: All directories including /, /etc, /var, /usr, /boot, /tmp, /home
+✅ Normal system administration without restrictions
+✅ apt install/update works without issues
+✅ No read-only filesystem errors
+```
+
+**Why ProtectSystem was removed:**
+- ❌ Caused read-only filesystem errors during package installations  
+- ❌ Made system administration unnecessarily complex  
+- ❌ Required console access for basic maintenance tasks  
+- ❌ Broke apt, dpkg, and other standard tools  
+- ✅ Security is better provided through network isolation, firewalls, and access controls  
+
+**Current Security Model:**
+- ✅ Network-level protection (UFW firewall, fail2ban, port restrictions)  
+- ✅ Access control (key-based SSH authentication only, no password login)  
+- ✅ Monitoring and detection (Suricata IDS, auditd, comprehensive logging)  
+- ✅ Application-level sandboxing (individual services have their own protections)  
+- ✅ Usable system that can be properly maintained and updated  
+
+#### Running System Updates
+
+**Default behavior (No restrictions):**
+
+```bash
+# SSH in as bastion user
+ssh -p 2222 bastion@your-bastion
+
+# Switch to root
+su -
+Password: [root password]
+
+# Run updates normally - everything works!
+apt update
+apt upgrade -y
+apt autoremove
+exit
+```
+
+Everything works as expected on a normal Linux system.
+
+#### Optional: Enabling ProtectSystem for Enhanced Security
+
+**⚠️ WARNING: Only enable if you understand the implications!**
+
+If you want to add filesystem protection despite the usability issues, you can manually enable it:
+
+```bash
+# 1. Edit SSH service configuration
+nano /etc/systemd/system/ssh.service.d/watchdog.conf
+
+# 2. Add ProtectSystem setting:
+[Service]
+Restart=on-failure
+RestartSec=5
+StartLimitInterval=300
+StartLimitBurst=5
+OOMScoreAdjust=-500
+Nice=-10
+
+# Add one of these protection levels:
+ProtectSystem=full    # Protects /usr and /boot only (recommended if enabling)
+# OR
+ProtectSystem=strict  # Protects everything (requires console access for admin)
+ReadWritePaths=/var/log /var/run /run /var/spool /var/tmp /var/lib /tmp /home /var/cache /var/backups /var/mail /etc
+
+# 3. Save and reload
+systemctl daemon-reload
+systemctl restart ssh
+```
+
+**Consequences of enabling ProtectSystem:**
+- ⚠️ May cause "Read-only file system" errors
+- ⚠️ Can break apt, dpkg, and package installations
+- ⚠️ Requires console access for many admin tasks
+- ⚠️ Makes system harder to maintain and update
+- ✅ Provides additional filesystem-level protection
+
+#### Security Philosophy
+
+The bastion host implements a **layered security approach** without relying on ProtectSystem:
+
+**Defense in Depth:**
+1. **Network Layer**: UFW firewall, fail2ban, Suricata IDS
+2. **Access Layer**: Key-only SSH authentication, no password login, restricted sudo
+3. **Monitoring Layer**: Comprehensive auditd rules, system logging, alerting
+4. **Application Layer**: Individual services have their own sandboxing where appropriate
+
+**Why this approach works better:**
+- ✅ Security where it matters (network perimeter, access control)
+- ✅ System remains usable and maintainable
+- ✅ Can respond quickly to security incidents
+- ✅ Proper monitoring and detection capabilities
+- ✅ No unexpected "read-only filesystem" errors breaking operations
+
+**If an attacker gets SSH access:**
+- They still need to get root (auditd logs all attempts)
+- All their actions are logged and monitored
+- fail2ban will block repeated failed attempts
+- Suricata IDS will detect suspicious patterns
+- Network isolation limits lateral movement
+
+This provides effective security while maintaining a usable, maintainable system.
+
+---
 
 #### Advanced Monitoring
 - **Comprehensive audit logging**: All user activities tracked
@@ -571,12 +940,12 @@ The bastion setup provides enhanced security beyond the standard server hardenin
 - **Enhanced fail2ban**: Aggressive protection against brute force attacks
 - **Traffic monitoring**: Network activity logging and analysis
 
-#### Built-in Tools
-- **Network diagnostics**: nmap, ncat, socat, mtr, traceroute
-- **Security scanning**: ClamAV, maldet, rkhunter, chkrootkit
-- **Traffic analysis**: tcpdump, iftop, nethogs
+#### Diagnostic and Management Tools (Always Installed)
+- **Network diagnostics**: nmap, ncat, socat, mtr, traceroute, tcpdump
 - **System monitoring**: htop, iotop, atop, sysstat
-- **Optional Netdata monitoring**: Bastion-optimized monitoring with Cloud integration
+- **Custom commands**: `bastionstat` (system status), `sshmon` (SSH monitoring), `bastionmail` (local mail reader)
+
+Note: Security scanning tools (ClamAV, maldet, rkhunter, chkrootkit) are **optional** and only installed if explicitly enabled via environment variables (see Optional Security Components section above).
 
 ### Using the Bastion Host
 
@@ -614,9 +983,8 @@ Bastion hosts can optionally include Netdata monitoring for enhanced visibility:
 # Enable Netdata during bastion setup by setting:
 export INSTALL_NETDATA=true
 
-# Or configure Netdata Cloud integration with environment variables:
+# Or configure Netdata Cloud integration with environment variable:
 export NETDATA_CLAIM_TOKEN=your_claim_token
-export NETDATA_CLAIM_ROOMS=your_room_id
 ```
 
 **Bastion Monitoring Benefits:**
@@ -656,6 +1024,45 @@ ALLOWED_INTERNAL_PORTS="22,80,443,3306,5432"                # Ports accessible o
 ```
 
 For more advanced configurations, review the comprehensive audit rules and monitoring settings in the script.
+
+### Dedicated Database Server
+
+For dedicated database server deployments, use the general server setup with database components enabled:
+
+**Setup Steps:**
+
+1. **Configure `templates/defaults.env`**:
+   ```bash
+   # Enable database server(s)
+   INSTALL_MARIADB=true
+   INSTALL_POSTGRESQL=true  # Optional
+
+   # Disable application servers (for dedicated database server)
+   INSTALL_NGINX=false
+   INSTALL_PHP=false
+   INSTALL_NODEJS=false
+   ```
+
+2. **Generate and deploy**:
+   ```bash
+   ./scripts/generate-configs.sh
+   ./scripts/deploy-unified.sh --host db-server-ip --identity ~/.ssh/id_ed25519
+   ```
+
+3. **Optional: Configure vRack private networking**:
+   ```bash
+   # On the database server, after setup completes
+   sudo ./scripts/configure-vrack-isolation.sh
+   ```
+
+**Key Features:**
+- **Auto-tuned performance**: Settings optimized based on available RAM and CPU
+  - Dedicated server: 75% RAM for MariaDB, 50% for PostgreSQL
+  - Mixed server: 40% RAM for MariaDB, 20% for PostgreSQL
+- **Security hardening**: Root access restricted, strong password generation, firewall configured
+- **Private network support**: Optional vRack integration with `configure-vrack-isolation.sh`
+- **Production ready**: Automated backups, health monitoring, comprehensive documentation
+- **Monitoring**: Netdata integration with go.d collectors for MySQL and PostgreSQL
 
 ## Application Deployment
 
@@ -710,10 +1117,14 @@ echo "DEPLOYMENT_MODE=docker" >> templates/defaults.env
 # 2. Generate Docker-optimized configs
 ./scripts/generate-configs.sh
 
-# 3. Deploy hardened server with Docker support
-./scripts/deploy-unified.sh templates/defaults.env deploy server.example.com 2222
+# 3. Deploy configuration to server
+./scripts/deploy-unified.sh --host server.example.com
 
-# 4. Create application Docker Compose file
+# 4. SSH to server and run server-setup.sh
+ssh root@server.example.com
+cd /opt/polyserver/config && sudo bash server-setup.sh
+
+# 5. Create application Docker Compose file
 cat > docker-compose.yml << EOF
 version: '3.8'
 services:
@@ -746,10 +1157,14 @@ echo "DEPLOYMENT_MODE=baremetal" >> templates/defaults.env
 # 2. Generate bare metal optimized configs
 ./scripts/generate-configs.sh
 
-# 3. Deploy hardened server
-./scripts/deploy-unified.sh templates/defaults.env deploy server.example.com 2222
+# 3. Deploy configuration to server
+./scripts/deploy-unified.sh --host server.example.com
 
-# 4. Deploy React application directly
+# 4. SSH to server and run server-setup.sh
+ssh root@server.example.com
+cd /opt/polyserver/config && sudo bash server-setup.sh
+
+# 5. Deploy React application directly
 npm run build
 pm2 start ecosystem.config.js
 ```
@@ -764,47 +1179,119 @@ pm2 start ecosystem.config.js
 
 ## DSGVO/GDPR Compliance
 
-This repository includes a comprehensive DSGVO/GDPR compliance toolkit for ensuring your server deployments meet data protection requirements, regardless of the application type.
+**⚠️ OPTIONAL**: This section is only relevant if you need to comply with EU data protection regulations (DSGVO/GDPR). Skip this if you don't process EU personal data.
 
-### Compliance Documentation
+This repository includes a comprehensive DSGVO/GDPR compliance toolkit that helps you meet data protection requirements by providing:
+- **Documentation templates** for required GDPR records
+- **Incident response scripts** for handling data breaches
+- **Compliance verification tools** to check your setup
+- **Data subject request handlers** for GDPR rights (access, deletion, etc.)
 
-- **DSGVO.md**: Main compliance guide covering breach procedures, notification requirements, and documentation templates
-- **DSGVO-TOOLS.md**: Overview of all DSGVO/GDPR tools and usage instructions
-- **Templates**:
-  - **processing-activities-record.md**: Template for Article 30 records of processing activities
-  - **processing_records.md.template**: Detailed documentation of data processing activities
-  - **retention_policy.md.template**: Data retention policy template
-  - **deletion_procedures.md.template**: Procedures for secure data deletion
-  - **subject_request_procedures.md.template**: Procedures for handling data subject requests
+### What It Does
 
-### Compliance Scripts
+The DSGVO compliance toolkit provides ready-to-use templates and tools for:
 
-- **breach-response-checklist.sh**: Interactive script for guiding through data breach response
-- **collect-forensics.sh**: Comprehensive forensic evidence collection during security incidents
-- **dsgvo-compliance-check.sh**: Automated verification of GDPR compliance status
-- **data-subject-request.sh**: Interactive tool for handling data subject requests
-- **setup-dsgvo.sh**: Automation script for setting up the DSGVO/GDPR compliance environment
+1. **Article 30 Records**: Documentation of data processing activities (legally required)
+2. **Data Breach Response**: Step-by-step procedures and automated forensic collection
+3. **Data Subject Requests**: Handle access, deletion, and portability requests
+4. **Retention Policies**: Document how long you keep data and why
+5. **Compliance Verification**: Automated checks of your GDPR compliance status
 
-### Compliance Setup
+### Available Documentation Templates
 
-To set up the DSGVO/GDPR compliance toolkit:
+Located in `templates/dsgvo/`:
+- **processing-activities-record.md**: Article 30 record of processing activities
+- **processing_records.md.template**: Detailed data processing documentation
+- **retention_policy.md.template**: Data retention policy
+- **deletion_procedures.md.template**: Secure data deletion procedures
+- **subject_request_procedures.md.template**: Data subject request handling
+- **contacts.conf.template**: DPO and data controller contact information
 
-```bash
-# Make the setup script executable
-chmod +x scripts/setup-dsgvo.sh
+### Available Compliance Scripts
 
-# Run the setup script
-sudo ./scripts/setup-dsgvo.sh
-```
+Located in `scripts/`:
+- **breach-response-checklist.sh**: Interactive data breach response guide
+- **collect-forensics.sh**: Automated forensic evidence collection
+- **dsgvo-compliance-check.sh**: Verify GDPR compliance status
+- **data-subject-request.sh**: Handle data access/deletion requests
+- **setup-dsgvo.sh**: Install all DSGVO files on the server
 
-The setup script will:
-1. Create necessary directories in `/etc/dsgvo/` and `/opt/polyserver/`
-2. Install all configuration templates and scripts
-3. Configure log files and appropriate permissions
-4. Set up scheduled compliance checks
-5. Provide guidance for next steps
+### When and Where to Set Up
 
-For more information, see the [DSGVO-TOOLS.md](./DSGVO-TOOLS.md) documentation.
+**IMPORTANT**: The DSGVO toolkit is installed **ON THE SERVER** after the base server setup is complete.
+
+#### Installation Process
+
+1. **Complete base server setup first** (Steps 1-4 from Base Server Setup Process above)
+
+2. **Copy the setup script to your server**:
+
+   ```bash
+   # From your local machine
+   scp -P 2222 scripts/setup-dsgvo.sh deploy@your-server-ip:/tmp/
+   ```
+
+3. **SSH to your server and run the setup**:
+
+   ```bash
+   # Connect to your server
+   ssh -p 2222 deploy@your-server-ip
+   
+   # Run the DSGVO setup script (requires sudo)
+   sudo bash /tmp/setup-dsgvo.sh
+   ```
+
+#### What Gets Installed
+
+The setup script installs files on the server:
+
+**Configuration files** → `/etc/dsgvo/`:
+- `contacts.conf` - DPO contact information
+- `data_inventory.json` - Inventory of processed data
+- `processing_records.md` - Processing activity records
+- `retention_policy.md` - Data retention policy
+- `deletion_procedures.md` - Deletion procedures
+- `subject_request_procedures.md` - Subject request handling
+
+**Scripts** → `/opt/polyserver/scripts/`:
+- `breach-response-checklist.sh` - Breach response guide
+- `collect-forensics.sh` - Forensic collection
+- `dsgvo-compliance-check.sh` - Compliance checker
+- `data-subject-request.sh` - Request handler
+
+**Log directories** → `/var/log/`:
+- `/var/log/dsgvo/` - Compliance logs
+- `/var/log/security/incidents/` - Security incident logs
+
+#### After Installation
+
+1. **Customize the templates** with your organization's information:
+
+   ```bash
+   # Edit the templates on the server
+   sudo nano /etc/dsgvo/contacts.conf
+   sudo nano /etc/dsgvo/processing_records.md
+   # ... edit other files as needed
+   ```
+
+2. **Use the compliance tools** as needed:
+
+   ```bash
+   # Check compliance status
+   sudo /opt/polyserver/scripts/dsgvo-compliance-check.sh
+   
+   # Handle a data subject request
+   sudo /opt/polyserver/scripts/data-subject-request.sh
+   
+   # Respond to a data breach
+   sudo /opt/polyserver/scripts/breach-response-checklist.sh
+   ```
+
+### Detailed Documentation
+
+For complete information on DSGVO compliance requirements, procedures, and tool usage, see:
+- **[DSGVO.md](./DSGVO.md)**: Main compliance guide with breach procedures and notification requirements
+- **[DSGVO-TOOLS.md](./DSGVO-TOOLS.md)**: Detailed overview of all tools and their usage
 
 ## Base Server Features
 
@@ -875,53 +1362,216 @@ The PolyServer foundation includes:
 
 ## Optional Application Components
 
-During server setup, you can optionally install additional application components for your specific use case. These components are installed with secure configurations and production-ready defaults.
+PolyServer uses a configuration-based approach for component installation. You choose which components to install by setting flags in `templates/defaults.env` before running the server setup.
+
+### Component Configuration
+
+Edit `templates/defaults.env` to enable/disable components (all are false by default except nginx, Docker, and Git):
+
+```bash
+# Web server (required for web applications)
+INSTALL_NGINX=true              # Nginx web server
+
+# Application runtimes (install only what you need)
+INSTALL_PHP=false               # PHP 8.4 with php-fpm (disable for Docker-only setups)
+INSTALL_NODEJS=false            # Node.js LTS with npm
+
+# Databases (install only what you need)
+INSTALL_MARIADB=false           # MariaDB/MySQL database server
+INSTALL_POSTGRESQL=false        # PostgreSQL database server
+INSTALL_REDIS=false             # Redis in-memory data store
+
+# Container platform
+INSTALL_DOCKER=true             # Docker CE with docker-compose
+
+# Development tools
+INSTALL_GIT=true                # Git version control
+```
 
 ### 🐳 **Container Platform**
-- **Docker with Security Optimizations**: Container runtime with hardened daemon configuration
+- **Docker with Security Optimizations** (INSTALL_DOCKER=true)
+  - Container runtime with hardened daemon configuration
   - Secure daemon configuration with logging restrictions
   - User namespace remapping for enhanced security
   - Storage driver optimization (overlay2)
   - Resource limits and security profiles
 
-### 🌐 **Web Application Server Choice**
-
-During server setup, you can choose between two high-performance web server architectures:
-
-#### **Traditional nginx + PHP-FPM** (Default)
-- **Industry Standard**: Battle-tested architecture used by millions of websites
-- **Separate Processes**: nginx handles HTTP, PHP-FPM processes PHP requests
-- **Extensive Documentation**: Large community, abundant resources and tutorials
-- **Resource Usage**: Moderate memory usage, predictable performance
-- **Best For**: Established workflows, large teams, complex nginx configurations
-
-#### **NGINX Unit** (High-Performance Option)
-- **Modern Architecture**: Single process handles both web serving and application execution
-- **Superior Performance**: 8-10x faster response times than traditional PHP-FPM
-- **Dynamic Configuration**: RESTful API for configuration changes without restarts
-- **Better Resource Management**: More efficient under high load conditions
-- **Multi-Language Support**: PHP, Python, Node.js, Go, Ruby, and more
-- **Best For**: High-traffic sites, performance-critical applications, modern deployments
-
-**Performance Comparison:**
-- Response time: NGINX Unit ~7.6ms vs PHP-FPM ~60ms (99th percentile)
-- Load handling: Unit handles 1000 requests without failures vs PHP-FPM with 200 failures
-- Resource efficiency: Better memory and CPU utilization under stress
-
-**Template Support:**
-- Traditional setup uses `templates/nginx/` and `templates/php/` configurations
-- NGINX Unit setup uses `templates/unit/` with optimized JSON configurations
+### 🌐 **Web Server**
+- **Nginx** (INSTALL_NGINX=true)
+  - High-performance HTTP server and reverse proxy
+  - ModSecurity WAF integration with OWASP Core Rule Set
+  - Security hardening configuration included
+  - Rate limiting and DDoS protection
+  - SSL/TLS optimization
+  - Perfect for Docker reverse proxy setups or traditional PHP hosting
 
 ### 🐘 **Database Systems**
 - **MariaDB**: High-performance MySQL-compatible database
   - Secure installation with disabled remote root access
-  - Performance optimization for server environments
+  - Performance optimization based on available RAM/CPU
   - Automatic security hardening configuration
+  - Resource-aware: 75% RAM for dedicated servers, 40% for mixed deployments
+  - Automated backups and Netdata monitoring integration
   
 - **PostgreSQL**: Advanced open-source relational database
-  - Role-based access control
-  - SSL/TLS encryption enabled by default
-  - Performance tuning for production workloads
+  - Role-based access control with scram-sha-256 authentication
+  - SSL/TLS encryption support (configurable)
+  - Performance-optimized configuration templates
+  - SSD-optimized query planner settings
+  - Comprehensive logging and statistics tracking
+  - Optional replication support
+  - **Configuration templates**: See `templates/postgresql/` for optimized configs
+
+#### Database User Configuration for Private Networks
+
+Both MariaDB and PostgreSQL are installed with localhost-only access by default (`bind-address = 127.0.0.1` for MariaDB, `listen_addresses = 'localhost'` for PostgreSQL). For production deployments with application servers on separate machines or private networks, you'll need to configure database access appropriately.
+
+**Option 1: Private Network Access (Recommended)**
+
+If using a private network (e.g., OVH vRack, AWS VPC, private VLAN):
+
+1. **Configure vRack isolation** (for OVH vRack private networking):
+   ```bash
+   sudo ./scripts/configure-vrack-isolation.sh
+   ```
+   This script automatically:
+   - Configures netplan for vRack network interface
+   - Updates MariaDB/PostgreSQL bind addresses to listen on the vRack private IP
+   - Configures interface-specific firewall rules
+   - Creates `/usr/local/bin/vrack-status` verification script
+   - Generates comprehensive documentation in `/root/VRACK-CONFIGURATION.md`
+
+   After configuration, verify status with:
+   ```bash
+   sudo /usr/local/bin/vrack-status
+   ```
+
+2. **Create database users restricted to private network**:
+
+   **MariaDB example**:
+   ```sql
+   -- Connect as root (uses /root/.my.cnf automatically)
+   mysql
+
+   -- Create database
+   CREATE DATABASE myapp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+   -- Create user restricted to private network
+   CREATE USER 'myapp'@'10.0.%' IDENTIFIED BY 'secure_password_here';
+
+   -- Grant privileges
+   GRANT ALL PRIVILEGES ON myapp.* TO 'myapp'@'10.0.%';
+   FLUSH PRIVILEGES;
+   ```
+
+   **PostgreSQL example**:
+   ```sql
+   -- Connect as postgres user
+   sudo -u postgres psql
+
+   -- Create database
+   CREATE DATABASE myapp OWNER postgres;
+
+   -- Create user
+   CREATE USER myapp WITH PASSWORD 'secure_password_here';
+
+   -- Grant privileges
+   GRANT ALL PRIVILEGES ON DATABASE myapp TO myapp;
+   ```
+
+   Then update `pg_hba.conf` to allow private network access:
+   ```bash
+   # Edit PostgreSQL client authentication
+   sudo nano /etc/postgresql/*/main/pg_hba.conf
+
+   # Add line for private network (e.g., 10.0.0.0/8)
+   host    myapp    myapp    10.0.0.0/8    scram-sha-256
+   ```
+
+   Restart PostgreSQL:
+   ```bash
+   sudo systemctl restart postgresql
+   ```
+
+3. **Configure firewall for private network access**:
+
+   **MariaDB (port 3306)**:
+   ```bash
+   # Allow from entire private network
+   sudo ufw allow from 10.0.0.0/8 to any port 3306 proto tcp comment 'MySQL from private network'
+
+   # Or allow from specific subnet only
+   sudo ufw allow from 10.0.1.0/24 to any port 3306 proto tcp comment 'MySQL from app servers'
+   ```
+
+   **PostgreSQL (port 5432)**:
+   ```bash
+   # Allow from entire private network
+   sudo ufw allow from 10.0.0.0/8 to any port 5432 proto tcp comment 'PostgreSQL from private network'
+
+   # Or allow from specific subnet only
+   sudo ufw allow from 10.0.1.0/24 to any port 5432 proto tcp comment 'PostgreSQL from app servers'
+   ```
+
+**Option 2: Specific IP Address Access**
+
+For single application servers or specific machines:
+
+**MariaDB**:
+```sql
+-- Create user for specific IP
+CREATE USER 'myapp'@'10.0.1.50' IDENTIFIED BY 'secure_password_here';
+GRANT ALL PRIVILEGES ON myapp.* TO 'myapp'@'10.0.1.50';
+FLUSH PRIVILEGES;
+```
+
+**PostgreSQL pg_hba.conf**:
+```
+# Allow specific IP only
+host    myapp    myapp    10.0.1.50/32    scram-sha-256
+```
+
+**Firewall**:
+```bash
+# MariaDB - allow from specific IP
+sudo ufw allow from 10.0.1.50 to any port 3306 proto tcp comment 'MySQL from app server'
+
+# PostgreSQL - allow from specific IP
+sudo ufw allow from 10.0.1.50 to any port 5432 proto tcp comment 'PostgreSQL from app server'
+```
+
+**Common IP Range Patterns**:
+- `'user'@'10.0.%'` - All 10.0.x.x network (e.g., 10.0.0.0/16)
+- `'user'@'10.0.1.%'` - Only 10.0.1.x subnet (e.g., 10.0.1.0/24)
+- `'user'@'10.0.1.50'` - Specific IP only
+- `'user'@'192.168.%'` - All 192.168.x.x network
+- `'user'@'%'` - All IPs (NOT recommended, security risk!)
+
+**Security Best Practices**:
+- ✅ **Use private networks**: Never expose databases directly to public internet
+- ✅ **Restrict by IP/network**: Always limit access to specific IPs or private subnets
+- ✅ **Strong passwords**: Use `openssl rand -base64 32` to generate secure passwords
+- ✅ **Principle of least privilege**: Grant only necessary permissions
+- ✅ **Monitor access**: Review database logs regularly (`/var/log/mysql/`, `/var/log/postgresql/`)
+- ❌ **Avoid**: `GRANT ALL PRIVILEGES ON *.* TO 'user'@'%'` (too permissive)
+
+**Testing Connectivity**:
+
+From application server:
+```bash
+# Test MariaDB connection
+mysql -h 10.0.1.10 -u myapp -p myapp
+
+# Test PostgreSQL connection
+psql -h 10.0.1.10 -U myapp -d myapp
+```
+
+**Troubleshooting**:
+1. Check database is listening on correct IP: `ss -tlnp | grep -E '3306|5432'`
+2. Check firewall rules: `sudo ufw status | grep -E '3306|5432'`
+3. Check database user host pattern: `SELECT user, host FROM mysql.user;` (MariaDB)
+4. Check pg_hba.conf entries (PostgreSQL): `sudo cat /etc/postgresql/*/main/pg_hba.conf`
+5. Review database error logs: `/var/log/mysql/error.log` or `/var/log/postgresql/*.log`
 
 ### 📦 **Caching and Storage**
 - **Redis**: In-memory data structure store
@@ -931,27 +1581,20 @@ During server setup, you can choose between two high-performance web server arch
 
 ### 🔧 **Development Platforms**
 
-#### **PHP Development Stack**
+#### **PHP Development Stack** (INSTALL_PHP=false by default)
 - **PHP 8.4 with php-fpm**: Latest PHP with FastCGI Process Manager
-  - Common extensions: mysqli, pdo, curl, gd, mbstring, xml, zip
+  - Common extensions: mysqli, pdo, curl, gd, mbstring, xml, zip, pgsql, redis
   - OPcache enabled for performance
   - Security hardening (disabled dangerous functions)
+  - **Note**: Not needed for Docker-only setups where applications run in containers
 
-- **PHP Development Tools** (optional):
-  - **Composer**: Dependency management
-  - **Xdebug**: Debugging and profiling extension
+#### **Node.js Development Stack** (INSTALL_NODEJS=false by default)
+- **Node.js LTS**: JavaScript runtime
+  - Latest LTS version from official NodeSource repository
+  - NPM package manager included
+  - **Note**: Consider PM2 for production process management (separate installation)
 
-#### **Node.js Development Stack**
-- **Node.js with PM2**: JavaScript runtime with process manager
-  - Latest LTS version (v22.x) from NodeSource repository
-  - PM2 process manager for production deployments
-  - Cluster mode support for scalability
-
-- **Node.js Development Tools** (optional):
-  - **Yarn**: Fast, reliable package manager
-  - **TypeScript**: Static type checking
-
-### 🔧 **Development Tools**
+### 🔧 **Development Tools** (INSTALL_GIT=true by default)
 - **Git**: Version control with optimized configuration
   - Security-focused default configurations
   - Performance optimizations for large repositories
@@ -962,30 +1605,46 @@ During server setup, you can choose between two high-performance web server arch
 - **logmon**: Real-time log monitoring for different log types (auth, security, system, nginx)
 - **servermail**: Local system mail and notification reader
 
-### Installation Process
+### Component Installation
 
-Optional components are presented during the interactive server setup process:
+All components are configured via `templates/defaults.env` before running the setup script. Each component is installed with:
 
-```bash
-# During server setup, you'll be prompted:
-Install/Configure Docker with security optimizations? (y/N): 
-Install Nginx Unit (modern application server)? (y/N): 
-Install PHP 8.4 with php-fpm and common extensions? (y/N): 
-  Include PHP development tools (Composer, Xdebug)? (y/N): 
-Install MariaDB with secure configuration? (y/N): 
-Install PostgreSQL with secure configuration? (y/N): 
-Install Node.js with PM2 process manager? (y/N): 
-  Include development tools (Yarn, TypeScript)? (y/N): 
-Install Redis with secure configuration? (y/N): 
-Install Git with optimized configuration? (y/N): 
-Install advanced server monitoring commands? (y/N): 
-```
-
-Each component is installed with:
 - **Security-first configuration**: All services configured with security best practices
 - **Performance optimization**: Tuned for production server environments
 - **Integration with monitoring**: Automatic integration with system monitoring and logging
 - **DSGVO compliance**: Data handling procedures documented where applicable
+
+**Example configurations:**
+
+**Docker-only reverse proxy** (minimal setup):
+
+```bash
+INSTALL_NGINX=true
+INSTALL_DOCKER=true
+INSTALL_GIT=true
+# All others false
+```
+
+**Traditional PHP hosting**:
+
+```bash
+INSTALL_NGINX=true
+INSTALL_PHP=true
+INSTALL_MARIADB=true
+INSTALL_REDIS=true
+INSTALL_GIT=true
+```
+
+**Full stack Node.js development**:
+
+```bash
+INSTALL_NGINX=true
+INSTALL_NODEJS=true
+INSTALL_POSTGRESQL=true
+INSTALL_REDIS=true
+INSTALL_DOCKER=true
+INSTALL_GIT=true
+```
 
 ## Updating and Maintenance
 
@@ -1164,126 +1823,371 @@ SSL certificates are automatically managed by Certbot. The initial certificate i
 
 ## Backup Strategy
 
-This deployment includes a comprehensive backup strategy using OVH Object Storage (primary) and optional Block Storage (secondary).
+This deployment includes a comprehensive backup strategy using S3-compatible object storage (primary) and optional block storage (secondary).
 
-### Primary: OVH Object Storage for Backups
+### Primary: S3-Compatible Object Storage for Backups
 
-OVH Object Storage is the recommended backup solution with many advantages:
+S3-compatible object storage is the recommended backup solution with many advantages:
 
+- **Universal compatibility**: Works with any S3-compatible provider (AWS S3, OVH, Cloudflare R2, MinIO, etc.)
 - **Access from multiple servers**: Can be accessed from any server in any region
-- **Higher durability**: Data is stored with erasure coding across multiple availability zones (with 3-AZ option)
+- **Higher durability**: Data is typically stored with erasure coding across multiple availability zones
 - **Unlimited capacity**: No need to manage volume sizes or worry about running out of space
 - **Versioning support**: Maintain multiple versions of your backups for better protection
 - **Lifecycle policies**: Automate retention and deletion of old backups
 - **Immutability options**: Prevent backups from being modified or deleted for compliance
 - **Company-wide storage**: Can be organized across departments using buckets and prefixes
 
-#### Setting Up OVH Object Storage
+#### Supported S3-Compatible Providers
 
-1. **Create an Object Storage container in the OVH Cloud Manager**:
-   - Log in to your OVH Control Panel
-   - Navigate to Public Cloud > Storage > Object Storage
-   - Click "Create an Object Container"
-   - Select a region close to your server for better performance (e.g., GRA, SBG, BHS)
-   - Choose "Standard" storage class for backups
+The backup system works with any S3-compatible object storage provider:
 
-2. **Create an S3 user and generate access credentials**:
-   - In the Object Storage section, click "Users and Roles"
-   - Create a new user with a descriptive name (e.g., "app-backup")
-   - Generate access keys and save them securely
-   - **SECURITY**: Apply the principle of least privilege - limit permissions to only what's needed
+- **AWS S3**: Amazon's object storage service
+- **OVH Object Storage**: European provider with GDPR compliance
+- **Cloudflare R2**: Zero egress fees, global distribution
+- **MinIO**: Self-hosted S3-compatible storage
+- **Backblaze B2**: Cost-effective storage with S3 compatibility
+- **DigitalOcean Spaces**: Simple, scalable object storage
+- **And many others**: Any provider supporting the S3 API
+
+#### Setting Up S3-Compatible Object Storage
+
+1. **Create a storage bucket with your provider**:
+   - Sign in to your provider's control panel
+   - Navigate to object storage / S3 section
+   - Create a new bucket with a unique name (e.g., `polyserver-backups`)
+   - Select a region close to your server for better performance
+   - Choose appropriate storage class (standard for backups)
+
+2. **Create access credentials**:
+   - Generate S3-compatible access keys (access key ID and secret key)
+   - Save credentials securely
+   - **SECURITY**: Apply the principle of least privilege - grant only required permissions:
+     - List bucket contents
+     - Upload objects (write backups)
+     - Delete objects (cleanup old backups)
 
 3. **Configure your S3 credentials in the environment file**:
 
 ```bash
-# Edit the environment file
-nano /opt/polyserver/config/.env
+# Edit templates/defaults.env before deployment
+nano templates/defaults.env
 
-# Add your S3 credentials
+# Configure S3-compatible storage
 S3_BUCKET=polyserver-backups
-S3_REGION=gra  # Your region (e.g., gra, sbg, bhs)
-S3_PREFIX=production
-AWS_ACCESS_KEY_ID=your_access_key
-AWS_SECRET_ACCESS_KEY=your_secret_key
+S3_REGION=us-east-1              # Your region
+S3_PREFIX=production             # Optional prefix for organization
+S3_ACCESS_KEY_ID=your_access_key
+S3_SECRET_ACCESS_KEY=your_secret_key
+
+# Optional: S3 endpoint (required for non-AWS providers)
+# Examples:
+#   OVH:          S3_ENDPOINT=https://s3.gra.cloud.ovh.net
+#   Cloudflare:   S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+#   MinIO:        S3_ENDPOINT=https://minio.example.com
+# AWS S3:        Leave blank (auto-detected)
+# S3_ENDPOINT=https://s3.gra.cloud.ovh.net
 
 # Generate a strong encryption key for backups (highly recommended)
 BACKUP_ENCRYPTION_KEY=$(openssl rand -base64 32)
-echo "BACKUP_ENCRYPTION_KEY=$BACKUP_ENCRYPTION_KEY" >> /opt/polyserver/config/.env
 
 # IMPORTANT: Store this encryption key safely outside the server too
-echo "Save this encryption key in a secure location: $BACKUP_ENCRYPTION_KEY"
-echo "Without this key, encrypted backups cannot be restored!"
+# Without this key, encrypted backups cannot be restored!
 ```
 
-4. **The S3 backup process will run automatically** via the scheduled backups.
+4. **The S3 backup process will run automatically** according to the configured schedule (default: daily at 2 AM).
 
-**Note**: AWS CLI is already installed during the initial server setup.
+#### What Gets Backed Up
+
+**IMPORTANT**: The backup scripts are **templates** that must be customized for your specific application.
+
+By default, the backup scripts include:
+- **File-based backups**: Archives the data directory (`{{DEPLOY_DIR}}/data`)
+- **Database examples**: Commented examples for PostgreSQL, MySQL, SQLite
+- **Container examples**: Example for backing up Docker containers
+- **Encryption**: Optional AES-256-CBC encryption with your encryption key
+
+**Location of backup scripts**:
+- `templates/scripts/backup.sh.template` - Local/block storage backups
+- `templates/scripts/s3backup.sh.template` - S3-compatible storage backups with encryption
+
+#### Customizing What to Back Up
+
+Edit the backup script template before deployment to specify what to back up:
+
+```bash
+# Edit templates/scripts/s3backup.sh.template
+nano templates/scripts/s3backup.sh.template
+```
+
+**Example customizations**:
+
+1. **Back up a PostgreSQL database**:
+
+   ```bash
+   # Uncomment and customize in the script:
+   pg_dump -h localhost -U myapp_user myapp_db | gzip > "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
+   ```
+
+2. **Back up a MySQL/MariaDB database**:
+
+   ```bash
+   # Uncomment and customize in the script:
+   mysqldump -u myapp_user -p'password' myapp_db | gzip > "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
+   ```
+
+3. **Back up multiple directories**:
+
+   ```bash
+   # Add to the script:
+   tar -czf "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" \
+     /var/www/html \
+     /opt/myapp/data \
+     /opt/myapp/config
+   ```
+
+4. **Back up Docker volumes**:
+
+   ```bash
+   # Add to the script:
+   docker run --rm -v myapp_data:/data -v ${LOCAL_BACKUP_DIR}:/backup \
+     alpine tar -czf /backup/${BACKUP_NAME} /data
+   ```
+
+5. **Custom application backup**:
+
+   ```bash
+   # Add your application's backup command:
+   /opt/myapp/bin/backup --output "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
+   ```
+
+After customizing, regenerate configs:
+
+```bash
+./scripts/generate-configs.sh
+```
+
+#### Modifying Backups After Server Setup
+
+**If your server is already deployed** and you need to add or remove files from backups:
+
+1. **SSH to your server**:
+   ```bash
+   ssh -p 2222 deploy@your-server-ip
+   ```
+
+2. **Edit the backup script on the server**:
+   ```bash
+   # For S3 backups (most common)
+   sudo nano /opt/polyserver/scripts/s3backup.sh
+
+   # Or for local/block storage backups
+   sudo nano /opt/polyserver/scripts/backup.sh
+   ```
+
+3. **Modify the backup section** (around line 76-99):
+   ```bash
+   # Find the "Application-Specific Backup Logic" section
+   # Example: Add a database backup
+
+   # Add this line:
+   pg_dump -h localhost -U myapp_user myapp_db | gzip > "${LOCAL_BACKUP_DIR}/db_${TIMESTAMP}.sql.gz"
+
+   # Or modify the tar command to include/exclude directories:
+   tar -czf "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" \
+     --exclude='/opt/myapp/cache' \
+     --exclude='/opt/myapp/temp' \
+     /opt/myapp/data \
+     /var/www/html
+   ```
+
+4. **Save the file** (Ctrl+O, Enter, Ctrl+X)
+
+5. **Test the backup manually** before waiting for the scheduled run:
+   ```bash
+   # Run the backup script to test your changes
+   sudo /opt/polyserver/scripts/s3backup.sh
+
+   # Check the log to verify it worked
+   tail -50 /opt/polyserver/backups/backup_*.log | tail -50
+   ```
+
+6. **Optional: Update the local template** for future deployments:
+   ```bash
+   # On your local machine, update the template so future servers have the same config
+   nano templates/scripts/s3backup.sh.template
+   # Make the same changes as you did on the server
+   ```
+
+**Common modifications**:
+
+- **Add a directory**: Add another line to the tar command
+- **Exclude a directory**: Use `--exclude='/path/to/exclude'` in tar
+- **Add database backup**: Uncomment or add pg_dump/mysqldump commands
+- **Add Docker container backup**: Add docker exec commands
+- **Change what gets backed up**: Modify the tar source directories
+
+**Important**: Changes made directly on the server will be lost if you redeploy. To preserve changes across deployments, also update the template file locally.
+
+#### Backup Schedule and Automation
+
+Configure backup timing in `templates/defaults.env`:
+
+```bash
+# Backup schedule (cron format)
+BACKUP_SCHEDULE="0 2 * * *"  # Daily at 2 AM (default)
+
+# Other examples:
+# BACKUP_SCHEDULE="0 */6 * * *"    # Every 6 hours
+# BACKUP_SCHEDULE="0 3 * * 0"      # Weekly on Sunday at 3 AM
+# BACKUP_SCHEDULE="0 1 1 * *"      # Monthly on 1st at 1 AM
+```
+
+The backup runs automatically via cron. To manually trigger a backup:
+
+```bash
+# On the server
+sudo /opt/polyserver/scripts/s3backup.sh
+```
+
+#### Backup Retention and Rotation
+
+Configure how long backups are kept in `templates/defaults.env`:
+
+```bash
+# Retention settings (in days)
+BACKUP_RETENTION_DAYS=30  # Default: 30 days
+
+# Different retention for local vs S3 (optional):
+LOCAL_RETENTION=7   # Keep local backups for 7 days
+S3_RETENTION=90     # Keep S3 backups for 90 days (longer term)
+```
+
+**How rotation works**:
+
+1. **Automatic cleanup**: Old backups are automatically deleted when they exceed the retention period
+2. **Local backups**: Cleaned up using `find -mtime` (based on file modification time)
+3. **S3 backups**: Cleaned up using S3 API (based on LastModified date)
+4. **Retention check**: Runs after each backup to remove old files
+
+**Example retention strategy**:
+
+```bash
+# Keep local backups short (save disk space)
+LOCAL_RETENTION=7
+
+# Keep S3 backups longer (they're cheap)
+S3_RETENTION=90
+
+# With daily backups:
+# - Local: ~7 backups on disk
+# - S3: ~90 backups in object storage
+```
+
+#### Backup Encryption
+
+Backups can be encrypted with AES-256-CBC:
+
+```bash
+# In templates/defaults.env:
+BACKUP_ENCRYPTION_KEY=$(openssl rand -base64 32)
+
+# Or set your own key:
+BACKUP_ENCRYPTION_KEY="your-strong-encryption-key-here"
+```
+
+**IMPORTANT**: Store your encryption key securely outside the server! Without it, encrypted backups cannot be restored.
+
+**To restore an encrypted backup**:
+
+```bash
+# Decrypt the backup
+openssl enc -d -aes-256-cbc -in backup.tar.gz -out backup_decrypted.tar.gz \
+  -pass "pass:your-encryption-key"
+
+# Extract
+tar -xzf backup_decrypted.tar.gz
+```
+
+#### Monitoring Backups
+
+Check backup status and logs:
+
+```bash
+# View recent backup logs
+ls -lh /opt/polyserver/backups/*.log | tail -5
+
+# View last backup log
+tail -50 /opt/polyserver/backups/backup_*.log | tail -50
+
+# Check S3 backups
+aws s3 ls s3://your-bucket/your-prefix/ --region your-region
+
+# Count local backups
+ls -1 /opt/polyserver/backups/*.tar.gz | wc -l
+```
+
+The backup script logs:
+- Backup creation time and size
+- Upload status to S3
+- Cleanup operations (old backups deleted)
+- Any errors encountered
 
 #### Organization Strategy for Company-Wide Storage
 
-For a company-wide Object Storage strategy, we recommend:
+For a company-wide object storage strategy, we recommend:
 
-1. **Create one project per environment**:
-   - Production
-   - Development/Testing
+1. **Create one bucket per environment** or **use prefixes**:
+   - Option A: Separate buckets (polyserver-prod, polyserver-dev)
+   - Option B: Single bucket with prefixes (production/, staging/, development/)
 
-2. **Within each project, create buckets by application**:
-   - polyserver-backups
-   - application-x-backups
-   - database-backups
+2. **Use prefixes within buckets for organization**:
+   - `production/server1/`
+   - `production/server2/`
+   - `staging/`
+   - `daily/`, `weekly/`, `monthly/`
 
-3. **Use prefixes within buckets for organization**:
-   - production/
-   - staging/
-   - daily/weekly/monthly/
+3. **Apply lifecycle policies** to automatically expire old backups and manage costs
 
-This organization allows for clear separation while maintaining the same pricing, as OVH charges based on total storage used regardless of how it's organized.
+This organization provides clear separation while optimizing costs (most providers charge based on total storage used regardless of organization).
 
 ### Optional: Block Storage for Local Backups
 
-Block Storage can be used as a secondary backup option, particularly when you need fast backup/restore performance. However, it has several limitations:
+Block storage (additional disk volumes) can be used as a secondary backup location, particularly when you need fast local backup/restore performance. This is simply additional storage mounted to your server for storing backup files locally.
 
+**Advantages**:
+- **Fast access**: Local disk I/O is faster than network transfers
+- **No egress fees**: No bandwidth costs for reading backups
+- **Simple setup**: Just mount and use like any local directory
+
+**Limitations**:
 - **Single-instance mounting**: Can only be attached to one server at a time
-- **Manual attachment**: Requires manual detachment/attachment to move between servers
-- **No automatic failover**: If your primary server fails, you must manually recover backups
+- **No geographic redundancy**: Data loss if the datacenter fails
 - **Fixed capacity**: Must provision a specific size in advance
+- **Manual migration**: Requires detaching/reattaching to move between servers
 
-#### Setting Up OVH Block Storage (Optional)
+#### Setting Up Block Storage (Optional)
 
-If you choose to use Block Storage as a secondary backup option, follow these steps:
+If you have additional block storage attached to your server:
 
-1. **Enable Block Storage backups in your configuration**:
-
-```bash
-# Edit the environment file
-nano /opt/polyserver/config/.env
-
-# Enable Block Storage backups
-BLOCK_STORAGE_ENABLED=true
-```
-
-2. **Provision a Block Storage volume**:
-   - In your OVH Control Panel, navigate to your B2-7 server
-   - Go to "Block Storage" and click "Create"
-   - Select a size (recommended 50GB minimum for backups)
-   - Choose the same region as your server
-   - Click "Create" and wait for provisioning to complete
-
-3. **Attach and mount the volume**:
-   - Attach it to your server from the OVH control panel
-   - SSH into your server and identify the block device:
+1. **Identify the block device**:
 
 ```bash
+# List all block devices
 lsblk
+
+# Example output:
+# sdb     8:16   0  100G  0 disk    <- Your additional storage
 ```
 
-4. **Format the block device if it's new** (CAUTION: This erases all data):
+2. **Format the block device if it's new** (⚠️ CAUTION: This erases all data):
 
 ```bash
-sudo mkfs.ext4 /dev/sdb  # Replace sdb with your actual device
+# Replace /dev/sdb with your actual device
+sudo mkfs.ext4 /dev/sdb
 ```
 
-5. **Mount and configure the storage**:
+3. **Mount the storage**:
 
 ```bash
 # Create mount directory
@@ -1301,13 +2205,23 @@ sudo chown -R deploy:deploy /mnt/backup/backups
 sudo chmod 750 /mnt/backup/backups
 ```
 
-6. **Verify the mount**:
+4. **Verify the mount**:
 
 ```bash
 df -h | grep "/mnt/backup"
 ```
 
-With both backup systems in place, you'll have a robust, multi-layered backup strategy with the speed of local storage and the durability of cloud storage.
+5. **Configure backups to use the mount**:
+
+```bash
+# Edit templates/defaults.env
+nano templates/defaults.env
+
+# Set the backup mount point
+BACKUP_MOUNT=/mnt/backup
+```
+
+With both S3-compatible object storage and local block storage configured, you'll have a robust multi-layered backup strategy combining the speed of local storage with the durability and accessibility of cloud storage.
 
 ## Server Monitoring and Security
 
@@ -1321,14 +2235,14 @@ The server is protected by UFW (Uncomplicated Firewall), a user-friendly interfa
 
 By default, the server is configured with these firewall rules:
 
-```
+```bash
 Status: active
 
-To                         Action      From
---                         ------      ----
-2222/tcp                   ALLOW       Anywhere                   # SSH (custom port for security)
-80/tcp                     ALLOW       Anywhere                   # HTTP (for redirects and Let's Encrypt)
-443/tcp                    ALLOW       Anywhere                   # HTTPS (primary access)
+To                    Action      From
+--                    ------      ----
+2222/tcp              ALLOW       Anywhere         # SSH (custom port for security)
+80/tcp                ALLOW       Anywhere         # HTTP (for redirects and Let's Encrypt)
+443/tcp               ALLOW       Anywhere         # HTTPS (primary access)
 ```
 
 All other incoming traffic is blocked by default, while all outgoing traffic is allowed.
@@ -1364,7 +2278,7 @@ sudo ufw enable
 
 The Nginx configuration includes rate limiting to protect against brute force attacks:
 
-```
+```bash
 # Rate limiting to prevent brute-force attacks
 limit_req_zone $binary_remote_addr zone=app_limit:10m rate=10r/s;
 
@@ -1510,13 +2424,14 @@ Netdata provides real-time performance monitoring installed natively on your Deb
 Netdata is configured to bind only to localhost (127.0.0.1:19999) for security. Access it via:
 
 **SSH Tunnel (Local Access)**:
+
 ```bash
 ssh -L 19999:localhost:19999 -p 2222 deploy@your-server-ip
 # Then visit http://localhost:19999 in your browser
 ```
 
 **Netdata Cloud (Centralized Monitoring)**:
-- **Automatic Setup**: Configure `NETDATA_CLAIM_TOKEN` and `NETDATA_CLAIM_ROOMS` in your environment for automatic registration
+- **Automatic Setup**: Configure `NETDATA_CLAIM_TOKEN` in your environment for automatic registration
 - **Manual Setup**: Use the detailed instructions provided during server setup
 - **Mobile App**: Access your servers via Netdata Cloud mobile app
 - **Team Collaboration**: Share dashboards, alerts, and insights across team members
@@ -1531,14 +2446,14 @@ To set up Netdata Cloud integration after deployment:
    - Go to "Connect Nodes" and copy your claim token
 
 2. **Register Server**:
+
    ```bash
    # Connect to your server
    ssh -p 2222 deploy@your-server-ip
-   
-   # Claim the node to Netdata Cloud
+
+   # Claim the node to Netdata Cloud (token is required, rooms are optional)
    sudo /opt/netdata/bin/netdata-claim.sh \
      -token=YOUR_CLAIM_TOKEN \
-     -rooms=YOUR_ROOM_ID \
      -url=https://app.netdata.cloud
    ```
 
@@ -1631,11 +2546,24 @@ The combination of ClamAV and maldet provides comprehensive protection against b
 
 The server uses both RKHunter and chkrootkit for enhanced security:
 
-- **Daily automated scans**: Both tools scan each night
+- **Daily automated scans**: Both tools scan each night with intelligent filtering
 - **Email alerts**: Notifications sent if suspicious activity is detected
-- **Baseline updates**: Regular updates to maintain accuracy
+- **Baseline comparison**: Alerts on changes from expected output
+- **Whitelist filtering**: Automatic filtering of known false positives
 
-To manually check for rootkits:
+**chkrootkit Smart Whitelist:**
+
+The setup automatically filters out common false positives:
+- Ruby gems `.document` files (from Debian packages)
+- fail2ban test fixture files
+- Legitimate packet sniffers (Suricata IDS, systemd-networkd, etc.)
+
+**Log Files:**
+- `/var/log/chkrootkit/log.raw` - Unfiltered scan output
+- `/var/log/chkrootkit/log.today` - Filtered output (whitelist applied)
+- `/var/log/chkrootkit/log.expected` - Baseline for comparison
+
+**Manual Commands:**
 
 ```bash
 # Using RKHunter
@@ -1644,6 +2572,28 @@ sudo rkhunter --check --sk
 # Using chkrootkit
 sudo chkrootkit
 
+# View filtered output
+cat /var/log/chkrootkit/log.today
+
+# View raw output (before filtering)
+cat /var/log/chkrootkit/log.raw
+
+# Update chkrootkit baseline after verifying system state
+sudo cp /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected
+
+# Edit whitelist for custom exclusions
+sudo nano /etc/chkrootkit/whitelist.conf
+```
+
+**Customizing the Whitelist:**
+
+Edit `/etc/chkrootkit/whitelist.conf` to add:
+- **File paths**: Add full paths on new lines (e.g., `/path/to/legitimate/file`)
+- **Packet sniffers**: Add process names to `WHITELIST_SNIFFERS` variable
+
+**Update RKHunter:**
+
+```bash
 # Update RKHunter database
 sudo rkhunter --update
 
@@ -1651,7 +2601,29 @@ sudo rkhunter --update
 sudo rkhunter --propupd
 ```
 
-RKHunter is configured to do minimal whitelisting to provide high security with low false positives.
+**For Existing Servers:**
+
+If you have an existing server without the whitelist feature, run the upgrade script:
+
+```bash
+# Download and run the whitelist upgrade script
+sudo ./scripts/add-chkrootkit-whitelist.sh
+```
+
+This script will:
+- Create the whitelist configuration
+- Update the chkrootkit scan script
+- Run a test scan with filtering
+- Preserve your existing baseline (if any)
+
+**Security Note:**
+
+While the whitelist filters known false positives, you're right to be cautious - if you were compromised, malware could hide in whitelisted locations. Therefore:
+
+1. **Review raw output periodically**: `cat /var/log/chkrootkit/log.raw`
+2. **Update baseline carefully**: Only after verifying system state
+3. **Monitor whitelist changes**: The whitelist file itself should be monitored by AIDE
+4. **Cross-verify with other tools**: Use RKHunter, AIDE, and system audits together
 
 ### File Integrity Monitoring
 
@@ -1670,6 +2642,56 @@ sudo aide.wrapper --check
 # Update AIDE database after legitimate changes
 sudo aide.wrapper --update
 ```
+
+### RAID Array Monitoring
+
+For servers with RAID arrays (software RAID with mdadm), PolyServer includes comprehensive monitoring tools:
+
+**Monitoring Tools Installed:**
+- **nvme-cli**: NVMe-specific health monitoring and diagnostics
+- **smartmontools**: S.M.A.R.T. disk health monitoring for all drive types
+- **mdadm**: Software RAID management with automated health checks
+
+**Automated Monitoring:**
+- **AUTOSCAN**: Daily checks for degraded arrays
+- **AUTOCHECK**: Monthly redundancy verification
+- **Email alerts**: Notifications sent for array degradation or failures
+
+**Check RAID Status:**
+
+```bash
+# View RAID array status
+cat /proc/mdstat
+
+# Detailed array information
+sudo mdadm --detail /dev/md1
+
+# Check all arrays
+sudo mdadm --examine --scan
+
+# NVMe drive health (if applicable)
+sudo nvme smart-log /dev/nvme0n1
+sudo nvme smart-log /dev/nvme1n1
+
+# SMART status for SATA/SAS drives
+sudo smartctl -a /dev/sda
+sudo smartctl -a /dev/sdb
+```
+
+**Understanding mdadm Monitoring Messages:**
+
+The system runs `mdmonitor-oneshot.service` periodically to check array health. You may see messages like:
+```
+mdadm: DeviceDisappeared event detected on md device /dev/md/md1
+mdadm: NewArray event detected on md device /dev/md1
+```
+
+These are **historical event reports** from boot time, not real-time failures. The monitoring service scans the array's event log and reports what it finds. These messages are automatically filtered from logcheck to reduce noise.
+
+**Real failures** will show different symptoms:
+- Array state: `degraded` instead of `clean`
+- Missing devices: `[U_]` instead of `[UU]` in `/proc/mdstat`
+- Email alerts about failed devices
 
 ### Logcheck System Monitoring
 
@@ -1699,7 +2721,7 @@ sudo nano /etc/logwatch/conf/logwatch.conf
 
 Key settings you can modify:
 
-```
+```bash
 # Email to receive reports
 MailTo = your-email@example.com
 
@@ -1731,6 +2753,7 @@ PolyServer provides comprehensive SSH security with flexible authentication opti
 #### Managing SSH Keys
 
 **Adding SSH Keys to Existing Server:**
+
 ```bash
 # Connect to your server
 ssh -p 2222 deploy@your-server-ip
@@ -1744,6 +2767,7 @@ chmod 700 ~/.ssh
 ```
 
 **Converting from Password to Key-Only Authentication:**
+
 ```bash
 # After adding SSH keys, disable password authentication
 sudo /opt/polyserver/scripts/ssh-disable-password-auth.sh
@@ -1757,6 +2781,7 @@ sudo /opt/polyserver/scripts/ssh-disable-password-auth.sh
 ```
 
 **Testing SSH Configuration:**
+
 ```bash
 # Test SSH config before applying changes
 sudo sshd -t
@@ -1780,6 +2805,7 @@ sudo tail -f /var/log/auth.log
 #### SSH Troubleshooting
 
 **If Locked Out of Server:**
+
 ```bash
 # If you have console access (VPS provider console)
 # 1. Access via provider's web console
@@ -1792,6 +2818,7 @@ sudo systemctl restart sshd
 ```
 
 **Backup and Recovery:**
+
 ```bash
 # SSH config is automatically backed up during changes
 ls -la /etc/ssh/sshd_config.*
@@ -2009,12 +3036,14 @@ For deployments using embedded databases, encryption can be enabled for at-rest 
 **To enable database encryption:**
 
 1. **Generate a strong encryption key**:
+
 ```bash
 # Generate a 32-byte base64-encoded key
 openssl rand -base64 32
 ```
 
 2. **Add the key to your environment configuration**:
+
 ```bash
 # Edit your environment file
 nano /opt/polyserver/config/.env
@@ -2024,6 +3053,7 @@ MB_ENCRYPTION_SECRET_KEY=your_generated_key_here
 ```
 
 3. **Restart Application**:
+
 ```bash
 # Docker mode
 docker compose restart app
@@ -2113,6 +3143,7 @@ sudo debsums -c
 In case of a suspected security incident:
 
 1. **Immediate Assessment**:
+
    ```bash
    # Check for unauthorized processes
    sudo htop
@@ -2125,6 +3156,7 @@ In case of a suspected security incident:
    ```
 
 2. **Network Investigation**:
+
    ```bash
    # Identify unusual network traffic
    sudo iftop -i eth0
@@ -2134,6 +3166,7 @@ In case of a suspected security incident:
    ```
 
 3. **Verify System Integrity**:
+
    ```bash
    # Check for modified system files
    sudo aide.wrapper --check
@@ -2147,6 +3180,7 @@ In case of a suspected security incident:
    ```
 
 4. **Create Evidence If Needed**:
+
    ```bash
    # Create disk image for forensics
    sudo dd if=/dev/sda of=/path/to/external/disk.img bs=4M
@@ -2222,7 +3256,9 @@ In case of a suspected security incident:
 | Check disk space | Weekly | `df -h` to ensure sufficient space |
 | Verify auto-updates | Weekly | `cat /var/log/unattended-upgrades/unattended-upgrades.log` |
 | Check virus scan logs | Weekly | `cat /var/log/clamav/daily_scan.log` |
-| Review rootkit scans | Weekly | `cat /var/log/rkhunter/daily_scan.log /var/log/chkrootkit/daily_scan.log` |
+| Review rootkit scans | Weekly | `cat /var/log/rkhunter/daily_scan.log /var/log/chkrootkit/log.today` |
+| Review raw chkrootkit output | Monthly | `cat /var/log/chkrootkit/log.raw` (bypasses whitelist) |
+| Update chkrootkit baseline | After system changes | `sudo cp /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected` |
 | Check file integrity | Weekly | `sudo aide.wrapper --check` |
 | Update virus signatures | Monthly | `sudo freshclam` |
 | Update rootkit database | Monthly | `sudo rkhunter --update` |
@@ -2497,6 +3533,7 @@ echo "DEPLOYMENT_MODE=docker" > test-config/.env
 ### Docker-Based Testing
 
 1. **Start Local Test Environment**:
+
    ```bash
    ./local-test-docker.sh
    ```
@@ -2516,6 +3553,7 @@ echo "DEPLOYMENT_MODE=docker" > test-config/.env
    - Zsh shell (testuser): `docker exec -it -u testuser polyserver-test /bin/zsh`
 
 3. **Cleanup Test Environment**:
+
    ```bash
    ./local-test-cleanup-docker.sh
    ```
@@ -2628,6 +3666,7 @@ All workflows must pass before PRs can be merged to main branch:
 ### Running Tests Locally
 
 #### Prerequisites
+
 ```bash
 # Docker for container testing
 docker --version
@@ -2640,6 +3679,7 @@ curl --version
 ```
 
 #### Local Test Execution
+
 ```bash
 # Run full local testing suite
 ./local-test-docker.sh
@@ -2657,6 +3697,7 @@ cat templates/defaults.env >> test.env
 ```
 
 #### Manual Security Checks
+
 ```bash
 # Check for secrets (requires TruffleHog)
 trufflehog git file://. --only-verified=false
