@@ -253,6 +253,12 @@ fi
 
 log_message "===== 4. Updating Firewall Configuration ====="
 
+# Backup current UFW rules before making changes
+echo "Backing up current UFW configuration..."
+UFW_BACKUP_FILE="/root/ufw-backup-vrack-$(date +%Y%m%d-%H%M%S).txt"
+ufw status numbered > "$UFW_BACKUP_FILE" 2>/dev/null || echo "No existing UFW rules" > "$UFW_BACKUP_FILE"
+log_message "✅ UFW configuration backed up to: $UFW_BACKUP_FILE"
+
 # Add SSH access from vRack network (before restricting)
 SSH_PORT=$(grep -E "^Port " /etc/ssh/sshd_config | awk '{print $2}' || echo "2222")
 ufw allow from "$VRACK_NETWORK" to any port "$SSH_PORT" proto tcp comment "SSH from vRack network"
@@ -428,25 +434,465 @@ if systemctl is-active --quiet postgresql 2>/dev/null; then
     echo "   • PostgreSQL: Listening on localhost,$VRACK_IP_ADDRESS:5432"
 fi
 echo ""
+echo "📋 Configuration Files Created:"
+echo "   • UFW backup: $UFW_BACKUP_FILE"
+echo "   • Status script: /usr/local/bin/vrack-status"
+echo "   • Documentation: /root/VRACK-CONFIGURATION.md"
+echo ""
 echo "🔍 Next Steps:"
-echo "   1. Test connectivity from other vRack servers"
-echo "   2. Update application connection strings to use $VRACK_IP_ADDRESS"
-echo "   3. If SSH still public, test vRack SSH then: ufw delete allow $SSH_PORT"
-echo "   4. Remove public IP from OVH control panel (optional)"
+echo "   1. Run status check: sudo /usr/local/bin/vrack-status"
+echo "   2. Read documentation: cat /root/VRACK-CONFIGURATION.md"
+echo "   3. Test connectivity from other vRack servers"
+echo "   4. Update application connection strings to use $VRACK_IP_ADDRESS"
+echo "   5. If SSH still public, test vRack SSH then: ufw delete allow $SSH_PORT"
+echo "   6. Remove public IP from OVH control panel (optional)"
 echo ""
 echo "⚠️  Important: Test all connectivity before removing console access!"
+echo ""
+
+log_message "===== 7. Creating Verification Script ====="
+
+# Create generic vRack status verification script
+cat > /usr/local/bin/vrack-status << 'VRACK_STATUS_EOF'
+#!/bin/bash
+# vRack Network Status Check
+# Generic verification script for vRack network configuration
+
+# Load vRack configuration if exists
+if [ -f /var/lib/vrack-isolation-complete ]; then
+    source /var/lib/vrack-isolation-complete 2>/dev/null || true
+fi
+
+echo "===== vRack Network Status ====="
+echo "Timestamp: $(date)"
+echo ""
+
+# Read configuration from marker file
+VRACK_INTERFACE=$(grep "^VRACK_INTERFACE=" /var/lib/vrack-isolation-complete 2>/dev/null | cut -d'=' -f2 || echo "unknown")
+VRACK_IP_ADDRESS=$(grep "^VRACK_IP_ADDRESS=" /var/lib/vrack-isolation-complete 2>/dev/null | cut -d'=' -f2 || echo "unknown")
+VRACK_PREFIX=$(grep "^VRACK_PREFIX=" /var/lib/vrack-isolation-complete 2>/dev/null | cut -d'=' -f2 || echo "unknown")
+VRACK_NETWORK=$(grep "^VRACK_NETWORK=" /var/lib/vrack-isolation-complete 2>/dev/null | cut -d'=' -f2 || echo "unknown")
+
+echo "=== Network Configuration ==="
+echo "Interface: $VRACK_INTERFACE"
+if [ "$VRACK_INTERFACE" != "unknown" ]; then
+    echo -n "Status: "
+    if ip link show "$VRACK_INTERFACE" 2>/dev/null | grep -q "state UP"; then
+        echo "✅ UP"
+    else
+        echo "❌ DOWN"
+    fi
+
+    echo "IP Address: $VRACK_IP_ADDRESS/$VRACK_PREFIX"
+    echo -n "Configured: "
+    if ip addr show "$VRACK_INTERFACE" 2>/dev/null | grep -q "$VRACK_IP_ADDRESS"; then
+        echo "✅ YES"
+    else
+        echo "❌ NO"
+    fi
+fi
+
+echo ""
+echo "=== Service Status ==="
+
+# Check MariaDB
+if systemctl is-active --quiet mariadb 2>/dev/null; then
+    echo "MariaDB:"
+    echo "  Service: ✅ RUNNING"
+    echo -n "  Listening on vRack IP: "
+    if ss -tlnp 2>/dev/null | grep -q ":3306.*$VRACK_IP_ADDRESS"; then
+        echo "✅ YES ($VRACK_IP_ADDRESS:3306)"
+    elif ss -tlnp 2>/dev/null | grep -q ":3306"; then
+        BIND_ADDR=$(ss -tlnp 2>/dev/null | grep ":3306" | awk '{print $4}' | head -1)
+        echo "⚠️  Listening on: $BIND_ADDR"
+    else
+        echo "❌ Not listening"
+    fi
+    echo -n "  Local connection: "
+    if mysql -e "SELECT 1;" >/dev/null 2>&1; then
+        echo "✅ OK"
+    else
+        echo "❌ FAILED"
+    fi
+fi
+
+# Check PostgreSQL
+if systemctl is-active --quiet postgresql 2>/dev/null; then
+    echo "PostgreSQL:"
+    echo "  Service: ✅ RUNNING"
+    echo -n "  Listening on vRack IP: "
+    if ss -tlnp 2>/dev/null | grep -q ":5432.*$VRACK_IP_ADDRESS"; then
+        echo "✅ YES ($VRACK_IP_ADDRESS:5432)"
+    elif ss -tlnp 2>/dev/null | grep -q ":5432"; then
+        BIND_ADDR=$(ss -tlnp 2>/dev/null | grep ":5432" | awk '{print $4}' | head -1)
+        echo "⚠️  Listening on: $BIND_ADDR"
+    else
+        echo "❌ Not listening"
+    fi
+fi
+
+echo ""
+echo "=== Firewall Rules ==="
+SSH_PORT=$(grep -E "^Port " /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "2222")
+
+if command -v ufw >/dev/null 2>&1; then
+    echo "SSH ($SSH_PORT):"
+    ufw status 2>/dev/null | grep "$SSH_PORT" | head -3 || echo "  No rules found"
+
+    if systemctl is-active --quiet mariadb 2>/dev/null; then
+        echo ""
+        echo "MySQL (3306):"
+        ufw status 2>/dev/null | grep 3306 | head -3 || echo "  No specific rules (using default/interface rules)"
+    fi
+
+    if systemctl is-active --quiet postgresql 2>/dev/null; then
+        echo ""
+        echo "PostgreSQL (5432):"
+        ufw status 2>/dev/null | grep 5432 | head -3 || echo "  No specific rules (using default/interface rules)"
+    fi
+fi
+
+echo ""
+echo "=== Network Statistics ==="
+if [ "$VRACK_INTERFACE" != "unknown" ] && ip link show "$VRACK_INTERFACE" >/dev/null 2>&1; then
+    ip -s link show "$VRACK_INTERFACE" 2>/dev/null | head -10
+fi
+
+echo ""
+echo "=== Quick Diagnostics ==="
+echo "Netplan configuration: /etc/netplan/60-vrack.yaml"
+if [ -f /etc/netplan/60-vrack.yaml ]; then
+    echo "  ✅ exists"
+else
+    echo "  ❌ not found"
+fi
+
+echo "vRack isolation marker: /var/lib/vrack-isolation-complete"
+if [ -f /var/lib/vrack-isolation-complete ]; then
+    echo "  ✅ exists"
+else
+    echo "  ❌ not found"
+fi
+
+echo ""
+echo "For detailed logs: tail -f /var/log/vrack-isolation.log"
+VRACK_STATUS_EOF
+
+chmod +x /usr/local/bin/vrack-status
+log_message "✅ Created verification script: /usr/local/bin/vrack-status"
+
+log_message "===== 8. Creating Configuration Documentation ====="
+
+# Create comprehensive configuration documentation
+cat > /root/VRACK-CONFIGURATION.md << EOF
+# vRack Network Configuration
+
+**Configuration Date:** $(date)
+**Script Version:** configure-vrack-isolation.sh
+
+## Network Configuration
+
+- **Interface:** $VRACK_INTERFACE
+- **IP Address:** $VRACK_IP_ADDRESS/$VRACK_PREFIX
+- **Network:** $VRACK_NETWORK
+- **Gateway:** ${VRACK_GATEWAY:-none (layer 2 only)}
+
+## Configured Services
+
+EOF
+
+# Add MariaDB section if detected
+if systemctl is-active --quiet mariadb 2>/dev/null; then
+    cat >> /root/VRACK-CONFIGURATION.md << EOF
+### MariaDB
+- **Status:** Configured for vRack access
+- **Bind Address:** $VRACK_IP_ADDRESS
+- **Port:** 3306
+- **Access:** vRack network only
+- **Monitoring:** Netdata via Unix socket
+
+**Connection Example:**
+\`\`\`bash
+# From application server on same vRack
+mysql -h $VRACK_IP_ADDRESS -u your_user -p your_database
+
+# Connection string
+mysql://user:password@$VRACK_IP_ADDRESS:3306/database_name
+\`\`\`
+
+**Create Users for vRack Network:**
+\`\`\`sql
+-- Allow access from entire vRack subnet
+CREATE USER 'myapp'@'${NETWORK_ADDRESS}/%' IDENTIFIED BY 'secure_password';
+GRANT ALL PRIVILEGES ON myapp.* TO 'myapp'@'${NETWORK_ADDRESS}/%';
+
+-- Or allow access from specific IP
+CREATE USER 'myapp'@'10.0.1.50' IDENTIFIED BY 'secure_password';
+GRANT ALL PRIVILEGES ON myapp.* TO 'myapp'@'10.0.1.50';
+FLUSH PRIVILEGES;
+\`\`\`
+
+EOF
+fi
+
+# Add PostgreSQL section if detected
+if systemctl is-active --quiet postgresql 2>/dev/null; then
+    cat >> /root/VRACK-CONFIGURATION.md << EOF
+### PostgreSQL
+- **Status:** Configured for vRack access
+- **Listen Addresses:** localhost, $VRACK_IP_ADDRESS
+- **Port:** 5432
+- **Access:** vRack network ($VRACK_NETWORK)
+- **Authentication:** scram-sha-256
+
+**Connection Example:**
+\`\`\`bash
+# From application server on same vRack
+psql -h $VRACK_IP_ADDRESS -U your_user -d your_database
+
+# Connection string
+postgresql://user:password@$VRACK_IP_ADDRESS:5432/database_name
+\`\`\`
+
+**Create Users for vRack Network:**
+\`\`\`sql
+-- Create user
+CREATE USER myapp WITH PASSWORD 'secure_password';
+
+-- Grant permissions
+GRANT ALL PRIVILEGES ON DATABASE mydb TO myapp;
+
+-- Note: pg_hba.conf already configured for $VRACK_NETWORK
+\`\`\`
+
+EOF
+fi
+
+# Add common sections
+cat >> /root/VRACK-CONFIGURATION.md << EOF
+## Firewall Configuration
+
+### SSH Access
+- **Port:** $SSH_PORT
+- **Allowed From:** $VRACK_NETWORK
+
+### Essential Outbound Services
+The following services are allowed on outbound connections:
+- DNS (53/tcp, 53/udp) - Name resolution
+- HTTP/HTTPS (80/tcp, 443/tcp) - Updates and external APIs
+- NTP (123/udp) - Time synchronization
+- SMTP (25/tcp, 587/tcp, 465/tcp) - Email delivery
+
+## Verification Commands
+
+### Check vRack Status
+\`\`\`bash
+# Quick status check
+sudo /usr/local/bin/vrack-status
+
+# Network interface status
+ip addr show $VRACK_INTERFACE
+ip -s link show $VRACK_INTERFACE
+
+# Firewall rules
+sudo ufw status verbose
+
+# Service listening ports
+sudo ss -tlnp | grep -E '3306|5432'
+\`\`\`
+
+### Test Connectivity from Remote Server
+\`\`\`bash
+# Ping test
+ping $VRACK_IP_ADDRESS
+
+# SSH test
+ssh -p $SSH_PORT user@$VRACK_IP_ADDRESS
+
+# MariaDB test (if configured)
+mysql -h $VRACK_IP_ADDRESS -u root -p
+
+# PostgreSQL test (if configured)
+psql -h $VRACK_IP_ADDRESS -U postgres
+\`\`\`
+
+## Troubleshooting
+
+### Network Issues
+1. **Interface not UP:**
+   \`\`\`bash
+   sudo ip link set $VRACK_INTERFACE up
+   sudo netplan apply
+   \`\`\`
+
+2. **IP not assigned:**
+   \`\`\`bash
+   cat /etc/netplan/60-vrack.yaml
+   sudo netplan apply
+   ip addr show $VRACK_INTERFACE
+   \`\`\`
+
+3. **Connectivity issues:**
+   \`\`\`bash
+   # Check routing
+   ip route show
+
+   # Check firewall
+   sudo ufw status verbose
+
+   # Test from server itself
+   ping $VRACK_IP_ADDRESS
+   \`\`\`
+
+### Database Connection Issues
+1. **MariaDB not listening on vRack IP:**
+   \`\`\`bash
+   # Check bind-address
+   sudo grep bind-address /etc/mysql/mariadb.conf.d/60-performance.cnf
+
+   # Should show: bind-address = $VRACK_IP_ADDRESS
+
+   # Restart if needed
+   sudo systemctl restart mariadb
+   \`\`\`
+
+2. **PostgreSQL not listening on vRack IP:**
+   \`\`\`bash
+   # Check listen_addresses
+   sudo grep listen_addresses /etc/postgresql/*/main/postgresql.conf
+
+   # Should include: localhost,$VRACK_IP_ADDRESS
+
+   # Check pg_hba.conf
+   sudo grep "$VRACK_NETWORK" /etc/postgresql/*/main/pg_hba.conf
+
+   # Restart if needed
+   sudo systemctl restart postgresql
+   \`\`\`
+
+3. **Permission denied errors:**
+   \`\`\`bash
+   # Verify user host patterns in MariaDB
+   mysql -e "SELECT user, host FROM mysql.user;"
+
+   # Verify pg_hba.conf for PostgreSQL
+   sudo cat /etc/postgresql/*/main/pg_hba.conf
+   \`\`\`
+
+### SSH Access Issues
+1. **SSH from vRack not working:**
+   \`\`\`bash
+   # Check firewall allows SSH from vRack
+   sudo ufw status | grep $SSH_PORT
+
+   # Should show rule allowing from $VRACK_NETWORK
+
+   # Add if missing:
+   sudo ufw allow from $VRACK_NETWORK to any port $SSH_PORT proto tcp
+   \`\`\`
+
+2. **Need to restore public SSH access (emergency):**
+   \`\`\`bash
+   # Requires console/KVM access!
+   sudo ufw allow $SSH_PORT/tcp
+   \`\`\`
+
+## Emergency Rollback
+
+If you need to revert the vRack configuration (requires console/KVM access):
+
+### 1. Restore Network Configuration
+\`\`\`bash
+# Remove vRack netplan config
+sudo rm /etc/netplan/60-vrack.yaml
+
+# Restore from backup
+sudo cp /etc/netplan/50-cloud-init.yaml.backup-* /etc/netplan/50-cloud-init.yaml
+
+# Apply
+sudo netplan apply
+\`\`\`
+
+### 2. Restore Service Configurations
+\`\`\`bash
+# MariaDB - restore bind-address to 127.0.0.1 or 0.0.0.0
+sudo nano /etc/mysql/mariadb.conf.d/60-performance.cnf
+# Change: bind-address = 0.0.0.0
+sudo systemctl restart mariadb
+
+# PostgreSQL - restore listen_addresses
+sudo nano /etc/postgresql/*/main/postgresql.conf
+# Change: listen_addresses = 'localhost'
+sudo systemctl restart postgresql
+\`\`\`
+
+### 3. Restore Firewall
+\`\`\`bash
+# Restore from backup
+cat $UFW_BACKUP_FILE
+
+# Or reset UFW (will remove all rules!)
+sudo ufw --force reset
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow $SSH_PORT/tcp
+sudo ufw enable
+\`\`\`
+
+## Configuration Files
+
+- **Netplan:** \`/etc/netplan/60-vrack.yaml\`
+- **MariaDB:** \`/etc/mysql/mariadb.conf.d/60-performance.cnf\`
+- **PostgreSQL:** \`/etc/postgresql/*/main/postgresql.conf\`, \`/etc/postgresql/*/main/pg_hba.conf\`
+- **Netdata MySQL:** \`/etc/netdata/go.d/mysql.conf\`
+- **UFW Backup:** \`$UFW_BACKUP_FILE\`
+- **Logs:** \`/var/log/vrack-isolation.log\`
+- **Status Script:** \`/usr/local/bin/vrack-status\`
+
+## Next Steps
+
+1. ✅ Test connectivity from other vRack servers
+2. ✅ Update application connection strings to use \`$VRACK_IP_ADDRESS\`
+3. ✅ Create database users with appropriate host restrictions
+4. ✅ Test all application connections
+5. ✅ If SSH still accessible publicly, test vRack SSH then remove public access:
+   \`\`\`bash
+   sudo ufw delete allow $SSH_PORT/tcp
+   \`\`\`
+6. ✅ (Optional) Remove public IP from OVH control panel
+7. ✅ Document the configuration for your team
+8. ✅ Set up monitoring alerts for vRack interface status
+
+## Support
+
+- **Status Check:** \`sudo /usr/local/bin/vrack-status\`
+- **Logs:** \`tail -f /var/log/vrack-isolation.log\`
+- **Network Status:** \`ip addr show $VRACK_INTERFACE\`
+- **Service Status:** \`sudo systemctl status mariadb postgresql\`
+
+---
+
+*Configuration completed: $(date)*
+*Generated by: configure-vrack-isolation.sh*
+EOF
+
+chmod 600 /root/VRACK-CONFIGURATION.md
+log_message "✅ Created configuration documentation: /root/VRACK-CONFIGURATION.md"
+
 echo ""
 echo "Configuration completed at: $(date)"
 echo ""
 
-# Mark vRack isolation complete
+# Mark vRack isolation complete with configuration details
 cat > /var/lib/vrack-isolation-complete << EOF
-vRack network isolation completed
-Date: $(date)
-Interface: $VRACK_INTERFACE
-IP Address: $VRACK_IP_ADDRESS/$VRACK_PREFIX
-Network: $VRACK_NETWORK
-Gateway: ${VRACK_GATEWAY:-none}
+# vRack isolation configuration
+# Source this file to get configuration variables
+VRACK_INTERFACE="$VRACK_INTERFACE"
+VRACK_IP_ADDRESS="$VRACK_IP_ADDRESS"
+VRACK_PREFIX="$VRACK_PREFIX"
+VRACK_NETWORK="$VRACK_NETWORK"
+VRACK_GATEWAY="${VRACK_GATEWAY:-none}"
+CONFIGURED_DATE="$(date)"
 EOF
 
 log_message "vRack isolation completed successfully"

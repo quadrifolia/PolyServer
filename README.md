@@ -1025,34 +1025,44 @@ ALLOWED_INTERNAL_PORTS="22,80,443,3306,5432"                # Ports accessible o
 
 For more advanced configurations, review the comprehensive audit rules and monitoring settings in the script.
 
-### MariaDB Dedicated Server
+### Dedicated Database Server
 
-For dedicated database server deployments, PolyServer provides a two-phase conversion process that transforms a hardened bastion server into a production-ready MariaDB server with optional private network (vRack) support.
+For dedicated database server deployments, use the general server setup with database components enabled:
 
-**📖 Complete Guide:** See [MARIADB.md](./MARIADB.md) for full documentation including:
-- Step-by-step setup instructions
-- vRack private network configuration
-- Performance tuning and optimization
-- Troubleshooting common issues (including email delivery after vRack transition)
-- Security best practices
-- Backup and monitoring configuration
+**Setup Steps:**
 
-**Quick Start:**
+1. **Configure `templates/defaults.env`**:
+   ```bash
+   # Enable database server(s)
+   INSTALL_MARIADB=true
+   INSTALL_POSTGRESQL=true  # Optional
 
-```bash
-# Phase 1: Convert bastion to MariaDB server
-sudo ./scripts/mariadb-1-convert.sh
+   # Disable application servers (for dedicated database server)
+   INSTALL_NGINX=false
+   INSTALL_PHP=false
+   INSTALL_NODEJS=false
+   ```
 
-# Phase 2: Optional - Enable vRack private networking
-sudo ./scripts/mariadb-2-enable-vrack.sh
-```
+2. **Generate and deploy**:
+   ```bash
+   ./scripts/generate-configs.sh
+   ./scripts/deploy-unified.sh --host db-server-ip --identity ~/.ssh/id_ed25519
+   ```
+
+3. **Optional: Configure vRack private networking**:
+   ```bash
+   # On the database server, after setup completes
+   sudo ./scripts/configure-vrack-isolation.sh
+   ```
 
 **Key Features:**
 - **Auto-tuned performance**: Settings optimized based on available RAM and CPU
+  - Dedicated server: 75% RAM for MariaDB, 50% for PostgreSQL
+  - Mixed server: 40% RAM for MariaDB, 20% for PostgreSQL
 - **Security hardening**: Root access restricted, strong password generation, firewall configured
-- **Private network support**: Optional vRack integration with interface-specific firewall rules
-- **Production ready**: Automated backups, health monitoring, and comprehensive documentation
-- **Email notifications**: Properly configured to work even with isolated network setup
+- **Private network support**: Optional vRack integration with `configure-vrack-isolation.sh`
+- **Production ready**: Automated backups, health monitoring, comprehensive documentation
+- **Monitoring**: Netdata integration with go.d collectors for MySQL and PostgreSQL
 
 ## Application Deployment
 
@@ -1398,9 +1408,10 @@ INSTALL_GIT=true                # Git version control
 ### 🐘 **Database Systems**
 - **MariaDB**: High-performance MySQL-compatible database
   - Secure installation with disabled remote root access
-  - Performance optimization for server environments
+  - Performance optimization based on available RAM/CPU
   - Automatic security hardening configuration
-  - **Dedicated server setup**: See [MARIADB.md](./MARIADB.md) for deploying hardened MariaDB servers with vRack support
+  - Resource-aware: 75% RAM for dedicated servers, 40% for mixed deployments
+  - Automated backups and Netdata monitoring integration
   
 - **PostgreSQL**: Advanced open-source relational database
   - Role-based access control with scram-sha-256 authentication
@@ -1423,7 +1434,17 @@ If using a private network (e.g., OVH vRack, AWS VPC, private VLAN):
    ```bash
    sudo ./scripts/configure-vrack-isolation.sh
    ```
-   This script automatically updates MariaDB/PostgreSQL bind addresses to listen on the vRack private IP.
+   This script automatically:
+   - Configures netplan for vRack network interface
+   - Updates MariaDB/PostgreSQL bind addresses to listen on the vRack private IP
+   - Configures interface-specific firewall rules
+   - Creates `/usr/local/bin/vrack-status` verification script
+   - Generates comprehensive documentation in `/root/VRACK-CONFIGURATION.md`
+
+   After configuration, verify status with:
+   ```bash
+   sudo /usr/local/bin/vrack-status
+   ```
 
 2. **Create database users restricted to private network**:
 
