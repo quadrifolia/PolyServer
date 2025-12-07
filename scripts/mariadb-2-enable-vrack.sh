@@ -2,6 +2,18 @@
 # mariadb-2-enable-vrack.sh - Phase 2: Switch MariaDB to vRack private network
 # Run AFTER mariadb-1-convert.sh to transition to private network-only access
 #
+# ⚠️  DEPRECATION WARNING ⚠️
+# This script is DEPRECATED and maintained for legacy deployments only.
+#
+# For new deployments, use the generic vRack isolation script instead:
+#   ./scripts/configure-vrack-isolation.sh
+#
+# The generic script works for ANY service (not just MariaDB) and includes
+# all the functionality from this script plus improvements:
+#   - Auto-detects MariaDB/PostgreSQL and updates bind addresses
+#   - Interface-specific firewall rules with SMTP fix
+#   - Comprehensive verification and rollback documentation
+#
 # Prerequisites:
 # - mariadb-1-convert.sh completed successfully
 # - vRack network configured on the server

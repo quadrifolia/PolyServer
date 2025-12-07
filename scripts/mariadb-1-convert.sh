@@ -2,6 +2,21 @@
 # mariadb-1-convert.sh - Convert hardened bastion to dedicated MariaDB server
 # Run AFTER server-setup-bastion.sh to convert the server for database use
 #
+# ⚠️  DEPRECATION WARNING ⚠️
+# This script is DEPRECATED and maintained for legacy deployments only.
+#
+# For new database server deployments, use the general server setup instead:
+#   1. Configure defaults.env with INSTALL_MARIADB=true
+#   2. Run ./scripts/generate-configs.sh
+#   3. Deploy with ./scripts/deploy-unified.sh
+#   4. Run server-setup.sh on the server (not bastion setup!)
+#
+# The general server-setup.sh now includes all the optimizations from this
+# conversion script (resource-aware configuration, backups, monitoring, etc.)
+#
+# For vRack private networking, use ./scripts/configure-vrack-isolation.sh
+# after server setup is complete.
+#
 # Prerequisites:
 # - server-setup-bastion.sh must be completed successfully
 # - Run as root

@@ -2,6 +2,19 @@
 # mariadb-3-add-postgresql.sh - Add PostgreSQL to MariaDB server for Metabase
 # Run AFTER mariadb-1-convert.sh (and optionally mariadb-2-enable-vrack.sh)
 #
+# ⚠️  DEPRECATION WARNING ⚠️
+# This script is DEPRECATED and maintained for legacy deployments only.
+#
+# For new deployments, simply install both databases during initial setup:
+#   1. Configure defaults.env with:
+#      INSTALL_MARIADB=true
+#      INSTALL_POSTGRESQL=true
+#   2. Run server-setup.sh
+#
+# The general server-setup.sh now includes resource-aware configuration that
+# automatically allocates resources appropriately when both databases are
+# installed (MariaDB gets 40% RAM, PostgreSQL gets 20% RAM).
+#
 # Prerequisites:
 # - mariadb-1-convert.sh must be completed successfully
 # - Run as root

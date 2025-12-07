@@ -2,7 +2,55 @@
 
 Complete guide for deploying a security-hardened, performance-optimized MariaDB database server using PolyServer.
 
-## Overview
+---
+
+## ⚠️  DEPRECATION NOTICE
+
+**This conversion-based approach is DEPRECATED and maintained for legacy deployments only.**
+
+### For New Database Server Deployments
+
+Use the **general server setup** instead, which now includes all optimizations from the conversion scripts:
+
+1. **Configure `templates/defaults.env`**:
+   ```bash
+   INSTALL_MARIADB=true
+   # Optional: also install PostgreSQL
+   INSTALL_POSTGRESQL=true
+   ```
+
+2. **Generate and deploy configuration**:
+   ```bash
+   ./scripts/generate-configs.sh
+   ./scripts/deploy-unified.sh --host your-server-ip --identity ~/.ssh/id_ed25519
+   ```
+
+3. **Run server setup on the server**:
+   ```bash
+   ssh root@your-server-ip
+   cd /opt/polyserver/config
+   sudo bash server-setup.sh
+   ```
+
+4. **Optional: Configure vRack private networking**:
+   ```bash
+   sudo /opt/polyserver/scripts/configure-vrack-isolation.sh
+   ```
+
+**Benefits of using general server setup**:
+- ✅ All optimizations from conversion scripts included
+- ✅ Resource-aware configuration (dedicated vs general server detection)
+- ✅ Automated backups with mysql-backup script
+- ✅ Netdata monitoring integration
+- ✅ Systemd security hardening
+- ✅ No bastion-to-database conversion needed
+- ✅ Cleaner, more maintainable approach
+
+**vRack Isolation**: Use the generic `configure-vrack-isolation.sh` script instead of `mariadb-2-enable-vrack.sh`. It works for any service and includes all improvements.
+
+---
+
+## Overview (Legacy Conversion Approach)
 
 This setup creates a dedicated MariaDB server with:
 - **Security-first design**: Multiple layers of protection
