@@ -1411,6 +1411,147 @@ INSTALL_GIT=true                # Git version control
   - Optional replication support
   - **Configuration templates**: See `templates/postgresql/` for optimized configs
 
+#### Database User Configuration for Private Networks
+
+Both MariaDB and PostgreSQL are installed with localhost-only access by default (`bind-address = 127.0.0.1` for MariaDB, `listen_addresses = 'localhost'` for PostgreSQL). For production deployments with application servers on separate machines or private networks, you'll need to configure database access appropriately.
+
+**Option 1: Private Network Access (Recommended)**
+
+If using a private network (e.g., OVH vRack, AWS VPC, private VLAN):
+
+1. **Configure vRack isolation** (for OVH vRack private networking):
+   ```bash
+   sudo ./scripts/configure-vrack-isolation.sh
+   ```
+   This script automatically updates MariaDB/PostgreSQL bind addresses to listen on the vRack private IP.
+
+2. **Create database users restricted to private network**:
+
+   **MariaDB example**:
+   ```sql
+   -- Connect as root (uses /root/.my.cnf automatically)
+   mysql
+
+   -- Create database
+   CREATE DATABASE myapp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+   -- Create user restricted to private network
+   CREATE USER 'myapp'@'10.0.%' IDENTIFIED BY 'secure_password_here';
+
+   -- Grant privileges
+   GRANT ALL PRIVILEGES ON myapp.* TO 'myapp'@'10.0.%';
+   FLUSH PRIVILEGES;
+   ```
+
+   **PostgreSQL example**:
+   ```sql
+   -- Connect as postgres user
+   sudo -u postgres psql
+
+   -- Create database
+   CREATE DATABASE myapp OWNER postgres;
+
+   -- Create user
+   CREATE USER myapp WITH PASSWORD 'secure_password_here';
+
+   -- Grant privileges
+   GRANT ALL PRIVILEGES ON DATABASE myapp TO myapp;
+   ```
+
+   Then update `pg_hba.conf` to allow private network access:
+   ```bash
+   # Edit PostgreSQL client authentication
+   sudo nano /etc/postgresql/*/main/pg_hba.conf
+
+   # Add line for private network (e.g., 10.0.0.0/8)
+   host    myapp    myapp    10.0.0.0/8    scram-sha-256
+   ```
+
+   Restart PostgreSQL:
+   ```bash
+   sudo systemctl restart postgresql
+   ```
+
+3. **Configure firewall for private network access**:
+
+   **MariaDB (port 3306)**:
+   ```bash
+   # Allow from entire private network
+   sudo ufw allow from 10.0.0.0/8 to any port 3306 proto tcp comment 'MySQL from private network'
+
+   # Or allow from specific subnet only
+   sudo ufw allow from 10.0.1.0/24 to any port 3306 proto tcp comment 'MySQL from app servers'
+   ```
+
+   **PostgreSQL (port 5432)**:
+   ```bash
+   # Allow from entire private network
+   sudo ufw allow from 10.0.0.0/8 to any port 5432 proto tcp comment 'PostgreSQL from private network'
+
+   # Or allow from specific subnet only
+   sudo ufw allow from 10.0.1.0/24 to any port 5432 proto tcp comment 'PostgreSQL from app servers'
+   ```
+
+**Option 2: Specific IP Address Access**
+
+For single application servers or specific machines:
+
+**MariaDB**:
+```sql
+-- Create user for specific IP
+CREATE USER 'myapp'@'10.0.1.50' IDENTIFIED BY 'secure_password_here';
+GRANT ALL PRIVILEGES ON myapp.* TO 'myapp'@'10.0.1.50';
+FLUSH PRIVILEGES;
+```
+
+**PostgreSQL pg_hba.conf**:
+```
+# Allow specific IP only
+host    myapp    myapp    10.0.1.50/32    scram-sha-256
+```
+
+**Firewall**:
+```bash
+# MariaDB - allow from specific IP
+sudo ufw allow from 10.0.1.50 to any port 3306 proto tcp comment 'MySQL from app server'
+
+# PostgreSQL - allow from specific IP
+sudo ufw allow from 10.0.1.50 to any port 5432 proto tcp comment 'PostgreSQL from app server'
+```
+
+**Common IP Range Patterns**:
+- `'user'@'10.0.%'` - All 10.0.x.x network (e.g., 10.0.0.0/16)
+- `'user'@'10.0.1.%'` - Only 10.0.1.x subnet (e.g., 10.0.1.0/24)
+- `'user'@'10.0.1.50'` - Specific IP only
+- `'user'@'192.168.%'` - All 192.168.x.x network
+- `'user'@'%'` - All IPs (NOT recommended, security risk!)
+
+**Security Best Practices**:
+- ✅ **Use private networks**: Never expose databases directly to public internet
+- ✅ **Restrict by IP/network**: Always limit access to specific IPs or private subnets
+- ✅ **Strong passwords**: Use `openssl rand -base64 32` to generate secure passwords
+- ✅ **Principle of least privilege**: Grant only necessary permissions
+- ✅ **Monitor access**: Review database logs regularly (`/var/log/mysql/`, `/var/log/postgresql/`)
+- ❌ **Avoid**: `GRANT ALL PRIVILEGES ON *.* TO 'user'@'%'` (too permissive)
+
+**Testing Connectivity**:
+
+From application server:
+```bash
+# Test MariaDB connection
+mysql -h 10.0.1.10 -u myapp -p myapp
+
+# Test PostgreSQL connection
+psql -h 10.0.1.10 -U myapp -d myapp
+```
+
+**Troubleshooting**:
+1. Check database is listening on correct IP: `ss -tlnp | grep -E '3306|5432'`
+2. Check firewall rules: `sudo ufw status | grep -E '3306|5432'`
+3. Check database user host pattern: `SELECT user, host FROM mysql.user;` (MariaDB)
+4. Check pg_hba.conf entries (PostgreSQL): `sudo cat /etc/postgresql/*/main/pg_hba.conf`
+5. Review database error logs: `/var/log/mysql/error.log` or `/var/log/postgresql/*.log`
+
 ### 📦 **Caching and Storage**
 - **Redis**: In-memory data structure store
   - Secure configuration with authentication
