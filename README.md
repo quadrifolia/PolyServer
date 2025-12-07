@@ -638,11 +638,11 @@ export INSTALL_SURICATA=false   # Disable network IDS (not recommended)
 sudo -E ./scripts/server-setup-bastion.sh
 ```
 
-**What Each Component Does:**
-- **ClamAV** (`INSTALL_CLAMAV`): Antivirus scanning for files. Better for mail/file servers. High resource usage.
-- **Malware Detect** (`INSTALL_MALDET`): Linux malware scanner. Better for web servers with file uploads. Disk I/O intensive.
-- **RKHunter** (`INSTALL_RKHUNTER`): **ENABLED BY DEFAULT** - Rootkit detection with daily automated scans.
-- **Suricata** (`INSTALL_SURICATA`): **ENABLED BY DEFAULT** - Network IDS monitoring all bastion traffic.
+**What Each Component Does:**  
+- **ClamAV** (`INSTALL_CLAMAV`): Antivirus scanning for files. Better for mail/file servers. High resource usage.  
+- **Malware Detect** (`INSTALL_MALDET`): Linux malware scanner. Better for web servers with file uploads. Disk I/O intensive.  
+- **RKHunter** (`INSTALL_RKHUNTER`): **ENABLED BY DEFAULT** - Rootkit detection with daily automated scans.  
+- **Suricata** (`INSTALL_SURICATA`): **ENABLED BY DEFAULT** - Network IDS monitoring all bastion traffic.  
 
 **Viewing Current Configuration:**
 
@@ -708,7 +708,7 @@ sudo tail /var/log/fail2ban.log
 sudo ./my-script.sh               # ❌ Scripts in home directory
 sudo systemctl restart sshd       # ❌ Service control
 sudo apt update                   # ❌ Package management
-sudo nano /etc/ssh/sshd_config   # ❌ Configuration editing
+sudo nano /etc/ssh/sshd_config    # ❌ Configuration editing
 ```
 
 **How to Run Administrative Commands:**
@@ -822,18 +822,18 @@ Filesystem Status in SSH Sessions (Default):
 ```
 
 **Why ProtectSystem was removed:**
-- ❌ Caused read-only filesystem errors during package installations
-- ❌ Made system administration unnecessarily complex
-- ❌ Required console access for basic maintenance tasks
-- ❌ Broke apt, dpkg, and other standard tools
-- ✅ Security is better provided through network isolation, firewalls, and access controls
+- ❌ Caused read-only filesystem errors during package installations  
+- ❌ Made system administration unnecessarily complex  
+- ❌ Required console access for basic maintenance tasks  
+- ❌ Broke apt, dpkg, and other standard tools  
+- ✅ Security is better provided through network isolation, firewalls, and access controls  
 
 **Current Security Model:**
-- ✅ Network-level protection (UFW firewall, fail2ban, port restrictions)
-- ✅ Access control (key-based SSH authentication only, no password login)
-- ✅ Monitoring and detection (Suricata IDS, auditd, comprehensive logging)
-- ✅ Application-level sandboxing (individual services have their own protections)
-- ✅ Usable system that can be properly maintained and updated
+- ✅ Network-level protection (UFW firewall, fail2ban, port restrictions)  
+- ✅ Access control (key-based SSH authentication only, no password login)  
+- ✅ Monitoring and detection (Suricata IDS, auditd, comprehensive logging)  
+- ✅ Application-level sandboxing (individual services have their own protections)  
+- ✅ Usable system that can be properly maintained and updated  
 
 #### Running System Updates
 
@@ -1215,16 +1215,18 @@ Located in `scripts/`:
 1. **Complete base server setup first** (Steps 1-4 from Base Server Setup Process above)
 
 2. **Copy the setup script to your server**:
+
    ```bash
    # From your local machine
    scp -P 2222 scripts/setup-dsgvo.sh deploy@your-server-ip:/tmp/
    ```
 
 3. **SSH to your server and run the setup**:
+
    ```bash
    # Connect to your server
    ssh -p 2222 deploy@your-server-ip
-
+   
    # Run the DSGVO setup script (requires sudo)
    sudo bash /tmp/setup-dsgvo.sh
    ```
@@ -1254,6 +1256,7 @@ The setup script installs files on the server:
 #### After Installation
 
 1. **Customize the templates** with your organization's information:
+
    ```bash
    # Edit the templates on the server
    sudo nano /etc/dsgvo/contacts.conf
@@ -1262,13 +1265,14 @@ The setup script installs files on the server:
    ```
 
 2. **Use the compliance tools** as needed:
+
    ```bash
    # Check compliance status
    sudo /opt/polyserver/scripts/dsgvo-compliance-check.sh
-
+   
    # Handle a data subject request
    sudo /opt/polyserver/scripts/data-subject-request.sh
-
+   
    # Respond to a data breach
    sudo /opt/polyserver/scripts/breach-response-checklist.sh
    ```
@@ -1451,6 +1455,7 @@ All components are configured via `templates/defaults.env` before running the se
 **Example configurations:**
 
 **Docker-only reverse proxy** (minimal setup):
+
 ```bash
 INSTALL_NGINX=true
 INSTALL_DOCKER=true
@@ -1459,6 +1464,7 @@ INSTALL_GIT=true
 ```
 
 **Traditional PHP hosting**:
+
 ```bash
 INSTALL_NGINX=true
 INSTALL_PHP=true
@@ -1468,6 +1474,7 @@ INSTALL_GIT=true
 ```
 
 **Full stack Node.js development**:
+
 ```bash
 INSTALL_NGINX=true
 INSTALL_NODEJS=true
@@ -1754,18 +1761,21 @@ nano templates/scripts/s3backup.sh.template
 **Example customizations**:
 
 1. **Back up a PostgreSQL database**:
+
    ```bash
    # Uncomment and customize in the script:
    pg_dump -h localhost -U myapp_user myapp_db | gzip > "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
    ```
 
 2. **Back up a MySQL/MariaDB database**:
+
    ```bash
    # Uncomment and customize in the script:
    mysqldump -u myapp_user -p'password' myapp_db | gzip > "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
    ```
 
 3. **Back up multiple directories**:
+
    ```bash
    # Add to the script:
    tar -czf "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" \
@@ -1775,6 +1785,7 @@ nano templates/scripts/s3backup.sh.template
    ```
 
 4. **Back up Docker volumes**:
+
    ```bash
    # Add to the script:
    docker run --rm -v myapp_data:/data -v ${LOCAL_BACKUP_DIR}:/backup \
@@ -1782,15 +1793,79 @@ nano templates/scripts/s3backup.sh.template
    ```
 
 5. **Custom application backup**:
+
    ```bash
    # Add your application's backup command:
    /opt/myapp/bin/backup --output "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
    ```
 
 After customizing, regenerate configs:
+
 ```bash
 ./scripts/generate-configs.sh
 ```
+
+#### Modifying Backups After Server Setup
+
+**If your server is already deployed** and you need to add or remove files from backups:
+
+1. **SSH to your server**:
+   ```bash
+   ssh -p 2222 deploy@your-server-ip
+   ```
+
+2. **Edit the backup script on the server**:
+   ```bash
+   # For S3 backups (most common)
+   sudo nano /opt/polyserver/scripts/s3backup.sh
+
+   # Or for local/block storage backups
+   sudo nano /opt/polyserver/scripts/backup.sh
+   ```
+
+3. **Modify the backup section** (around line 76-99):
+   ```bash
+   # Find the "Application-Specific Backup Logic" section
+   # Example: Add a database backup
+
+   # Add this line:
+   pg_dump -h localhost -U myapp_user myapp_db | gzip > "${LOCAL_BACKUP_DIR}/db_${TIMESTAMP}.sql.gz"
+
+   # Or modify the tar command to include/exclude directories:
+   tar -czf "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" \
+     --exclude='/opt/myapp/cache' \
+     --exclude='/opt/myapp/temp' \
+     /opt/myapp/data \
+     /var/www/html
+   ```
+
+4. **Save the file** (Ctrl+O, Enter, Ctrl+X)
+
+5. **Test the backup manually** before waiting for the scheduled run:
+   ```bash
+   # Run the backup script to test your changes
+   sudo /opt/polyserver/scripts/s3backup.sh
+
+   # Check the log to verify it worked
+   tail -50 /opt/polyserver/backups/backup_*.log | tail -50
+   ```
+
+6. **Optional: Update the local template** for future deployments:
+   ```bash
+   # On your local machine, update the template so future servers have the same config
+   nano templates/scripts/s3backup.sh.template
+   # Make the same changes as you did on the server
+   ```
+
+**Common modifications**:
+
+- **Add a directory**: Add another line to the tar command
+- **Exclude a directory**: Use `--exclude='/path/to/exclude'` in tar
+- **Add database backup**: Uncomment or add pg_dump/mysqldump commands
+- **Add Docker container backup**: Add docker exec commands
+- **Change what gets backed up**: Modify the tar source directories
+
+**Important**: Changes made directly on the server will be lost if you redeploy. To preserve changes across deployments, also update the template file locally.
 
 #### Backup Schedule and Automation
 
@@ -1834,6 +1909,7 @@ S3_RETENTION=90     # Keep S3 backups for 90 days (longer term)
 4. **Retention check**: Runs after each backup to remove old files
 
 **Example retention strategy**:
+
 ```bash
 # Keep local backups short (save disk space)
 LOCAL_RETENTION=7
@@ -1861,6 +1937,7 @@ BACKUP_ENCRYPTION_KEY="your-strong-encryption-key-here"
 **IMPORTANT**: Store your encryption key securely outside the server! Without it, encrypted backups cannot be restored.
 
 **To restore an encrypted backup**:
+
 ```bash
 # Decrypt the backup
 openssl enc -d -aes-256-cbc -in backup.tar.gz -out backup_decrypted.tar.gz \
@@ -1996,14 +2073,14 @@ The server is protected by UFW (Uncomplicated Firewall), a user-friendly interfa
 
 By default, the server is configured with these firewall rules:
 
-```
+```bash
 Status: active
 
-To                         Action      From
---                         ------      ----
-2222/tcp                   ALLOW       Anywhere                   # SSH (custom port for security)
-80/tcp                     ALLOW       Anywhere                   # HTTP (for redirects and Let's Encrypt)
-443/tcp                    ALLOW       Anywhere                   # HTTPS (primary access)
+To                    Action      From
+--                    ------      ----
+2222/tcp              ALLOW       Anywhere         # SSH (custom port for security)
+80/tcp                ALLOW       Anywhere         # HTTP (for redirects and Let's Encrypt)
+443/tcp               ALLOW       Anywhere         # HTTPS (primary access)
 ```
 
 All other incoming traffic is blocked by default, while all outgoing traffic is allowed.
@@ -2039,7 +2116,7 @@ sudo ufw enable
 
 The Nginx configuration includes rate limiting to protect against brute force attacks:
 
-```
+```bash
 # Rate limiting to prevent brute-force attacks
 limit_req_zone $binary_remote_addr zone=app_limit:10m rate=10r/s;
 
@@ -2482,7 +2559,7 @@ sudo nano /etc/logwatch/conf/logwatch.conf
 
 Key settings you can modify:
 
-```
+```bash
 # Email to receive reports
 MailTo = your-email@example.com
 
