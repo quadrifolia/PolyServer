@@ -6811,69 +6811,652 @@ XDEBUG_EOF
                     fi
                     ;;
                 mariadb)
-                    echo "===== 16.1.5 Installing MariaDB with Secure Configuration ====="
+                    echo "===== 16.1.5 Installing MariaDB with Optimized Configuration ====="
                     apt-get install -y mariadb-server mariadb-client
-                    
-                    # Secure MariaDB installation automatically
-                    mysql_secure_installation --defaults <<EOF || true
 
-y
-{{DB_ROOT_PASSWORD:-$(openssl rand -base64 32)}}
-{{DB_ROOT_PASSWORD:-$(openssl rand -base64 32)}}
-y
-y
-y
-y
-EOF
-                    
-                    # Configure MariaDB for security
-                    cat >> /etc/mysql/mariadb.conf.d/99-security.cnf << 'MARIADB_EOF'
+                    # Stop MariaDB for configuration
+                    systemctl stop mariadb
+
+                    # Calculate optimal MariaDB settings based on system resources
+                    echo "Calculating optimal MariaDB configuration for ${TOTAL_RAM_MB}MB RAM, ${CPU_CORES} CPU cores..."
+
+                    # InnoDB Buffer Pool: Use different percentages based on deployment type
+                    # Dedicated database server: 75%, General server: 40%
+                    if [ "${INSTALL_NGINX:-false}" = "false" ] && [ "${INSTALL_PHP:-false}" = "false" ] && [ "${INSTALL_NODEJS:-false}" = "false" ]; then
+                        # Dedicated database server - use 75% of RAM
+                        INNODB_BUFFER_POOL_MB=$((TOTAL_RAM_MB * 75 / 100))
+                    else
+                        # General server - use 40% of RAM (leave room for app servers)
+                        INNODB_BUFFER_POOL_MB=$((TOTAL_RAM_MB * 40 / 100))
+                    fi
+
+                    # InnoDB Log File Size: 25% of buffer pool
+                    INNODB_LOG_FILE_SIZE_MB=$((INNODB_BUFFER_POOL_MB / 4))
+
+                    # Thread Pool: Based on CPU cores
+                    THREAD_POOL_SIZE=$((CPU_CORES * 2))
+
+                    # Max Connections: Scale with RAM
+                    if [ $TOTAL_RAM_MB -lt 2048 ]; then
+                        MAX_CONNECTIONS=100
+                    elif [ $TOTAL_RAM_MB -lt 8192 ]; then
+                        MAX_CONNECTIONS=200
+                    elif [ $TOTAL_RAM_MB -lt 16384 ]; then
+                        MAX_CONNECTIONS=500
+                    else
+                        MAX_CONNECTIONS=1000
+                    fi
+
+                    # Table open cache: scale with connections
+                    TABLE_OPEN_CACHE=$((MAX_CONNECTIONS * 4))
+
+                    echo "  • InnoDB Buffer Pool: ${INNODB_BUFFER_POOL_MB}MB"
+                    echo "  • InnoDB Log File: ${INNODB_LOG_FILE_SIZE_MB}MB"
+                    echo "  • Thread Pool: ${THREAD_POOL_SIZE}"
+                    echo "  • Max Connections: ${MAX_CONNECTIONS}"
+                    echo "  • Table Open Cache: ${TABLE_OPEN_CACHE}"
+
+                    # Create optimized MariaDB performance configuration
+                    cat > /etc/mysql/mariadb.conf.d/60-performance.cnf << MARIADB_PERF_EOF
+# MariaDB Performance Optimization
+# Auto-generated based on: ${TOTAL_RAM_MB}MB RAM, ${CPU_CORES} CPU cores
+# Generated: $(date)
+
 [mysqld]
-# Security settings
+
+# ===== Connection Settings =====
+max_connections = ${MAX_CONNECTIONS}
+max_allowed_packet = 256M
+thread_cache_size = ${CPU_CORES}
+table_open_cache = ${TABLE_OPEN_CACHE}
+
+# ===== Thread Pool (MariaDB-specific) =====
+thread_handling = pool-of-threads
+thread_pool_size = ${THREAD_POOL_SIZE}
+thread_pool_max_threads = 2000
+thread_pool_idle_timeout = 60
+
+# ===== InnoDB Settings =====
+innodb_buffer_pool_size = ${INNODB_BUFFER_POOL_MB}M
+innodb_log_file_size = ${INNODB_LOG_FILE_SIZE_MB}M
+innodb_log_buffer_size = 16M
+innodb_file_per_table = 1
+innodb_flush_method = O_DIRECT
+innodb_flush_log_at_trx_commit = 2
+innodb_io_capacity = 2000
+innodb_io_capacity_max = 4000
+innodb_read_io_threads = 4
+innodb_write_io_threads = 4
+
+# ===== Query Cache (disabled in MariaDB 10.10+) =====
+query_cache_type = 0
+query_cache_size = 0
+
+# ===== Temporary Tables =====
+tmp_table_size = 64M
+max_heap_table_size = 64M
+
+# ===== Binary Logging =====
+server_id = 1
+log_bin = /var/log/mysql/mysql-bin.log
+binlog_format = ROW
+expire_logs_days = 7
+max_binlog_size = 100M
+sync_binlog = 1
+
+# ===== Slow Query Log =====
+slow_query_log = 1
+slow_query_log_file = /var/log/mysql/slow.log
+long_query_time = 2
+log_queries_not_using_indexes = 0
+
+# ===== Error Log =====
+log_error = /var/log/mysql/error.log
+log_warnings = 2
+
+# ===== Network Settings =====
 bind-address = 127.0.0.1
+port = 3306
+skip-name-resolve = 1
+
+# ===== Security Settings =====
 local-infile = 0
 symbolic-links = 0
+
+# ===== Character Set =====
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci
+
+# ===== Other =====
+back_log = 100
+wait_timeout = 600
+interactive_timeout = 600
+MARIADB_PERF_EOF
+
+                    # Create security configuration
+                    cat > /etc/mysql/mariadb.conf.d/99-security.cnf << 'MARIADB_SEC_EOF'
+# MariaDB Security Hardening
+
+[mysqld]
+# Additional security settings
 secure-file-priv = "/var/lib/mysql-files/"
 
-# Performance and resource limits (calculated based on system resources)
-max_connections = $DB_MAX_CONNECTIONS
-max_user_connections = $((DB_MAX_CONNECTIONS / 2))
-table_open_cache = 2000
-innodb_buffer_pool_size = ${INNODB_BUFFER_POOL_MB}M
-query_cache_size = ${QUERY_CACHE_SIZE}M
-query_cache_limit = 2M
-MARIADB_EOF
-                    
+[client]
+# Client-side security (SSL can be configured later)
+MARIADB_SEC_EOF
+
+                    # Ensure log directory exists
+                    mkdir -p /var/log/mysql
+                    chown mysql:mysql /var/log/mysql
+                    chmod 750 /var/log/mysql
+
+                    # Start MariaDB
+                    systemctl start mariadb
+                    systemctl enable mariadb
+                    sleep 5
+
+                    # Run mysql_secure_installation automatically with strong password
+                    echo "Running mysql_secure_installation..."
+                    MYSQL_ROOT_PASSWORD=$(openssl rand -base64 32)
+
+                    mysql <<MYSQL_SECURE_EOF
+-- Set root password
+ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_ROOT_PASSWORD}';
+
+-- Remove anonymous users
+DELETE FROM mysql.user WHERE User='';
+
+-- Disallow root login remotely
+DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
+
+-- Remove test database
+DROP DATABASE IF EXISTS test;
+DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+
+-- Reload privilege tables
+FLUSH PRIVILEGES;
+MYSQL_SECURE_EOF
+
+                    # Save root password securely
+                    cat > /root/.my.cnf << MYCNF_EOF
+[client]
+user=root
+password=${MYSQL_ROOT_PASSWORD}
+
+[mysql]
+user=root
+password=${MYSQL_ROOT_PASSWORD}
+MYCNF_EOF
+                    chmod 600 /root/.my.cnf
+
+                    echo "✅ MariaDB root password saved to /root/.my.cnf (chmod 600)"
+
+                    # Create backup directory and script
+                    mkdir -p /var/backups/mysql
+                    chmod 700 /var/backups/mysql
+
+                    cat > /usr/local/bin/mysql-backup << 'BACKUP_SCRIPT_EOF'
+#!/bin/bash
+# Automated MySQL/MariaDB backup script
+
+set -e
+
+BACKUP_DIR="/var/backups/mysql"
+DATE=$(date +%Y%m%d-%H%M%S)
+HOSTNAME=$(hostname)
+RETENTION_DAYS=7
+
+mkdir -p "$BACKUP_DIR"
+
+# Get list of databases
+DATABASES=$(mysql -e "SHOW DATABASES;" | grep -Ev "Database|information_schema|performance_schema|mysql|sys")
+
+# Full backup
+echo "Starting full database backup..."
+mysqldump --all-databases \
+    --single-transaction \
+    --quick \
+    --lock-tables=false \
+    --routines \
+    --triggers \
+    --events \
+    | gzip > "$BACKUP_DIR/full-backup-${HOSTNAME}-${DATE}.sql.gz"
+
+echo "✅ Full backup complete: full-backup-${HOSTNAME}-${DATE}.sql.gz"
+
+# Individual database backups
+for DB in $DATABASES; do
+    echo "Backing up database: $DB"
+    mysqldump "$DB" \
+        --single-transaction \
+        --quick \
+        --lock-tables=false \
+        --routines \
+        --triggers \
+        | gzip > "$BACKUP_DIR/${DB}-${DATE}.sql.gz"
+done
+
+# Remove old backups
+echo "Removing backups older than ${RETENTION_DAYS} days..."
+find "$BACKUP_DIR" -name "*.sql.gz" -mtime +${RETENTION_DAYS} -delete
+
+BACKUP_SIZE=$(du -sh "$BACKUP_DIR" | cut -f1)
+echo "✅ Backup complete. Total size: $BACKUP_SIZE"
+
+logger -t mysql-backup "Database backup completed. Size: $BACKUP_SIZE"
+BACKUP_SCRIPT_EOF
+
+                    chmod +x /usr/local/bin/mysql-backup
+
+                    # Add to cron (daily at 2 AM)
+                    echo "0 2 * * * root /usr/local/bin/mysql-backup >> /var/log/mysql-backup.log 2>&1" > /etc/cron.d/mysql-backup
+
+                    # Create health check script
+                    cat > /usr/local/bin/mysql-health << 'HEALTH_SCRIPT_EOF'
+#!/bin/bash
+# MySQL/MariaDB health check script
+
+echo "===== MariaDB Health Check ====="
+echo "Timestamp: $(date)"
+echo ""
+
+if systemctl is-active --quiet mariadb; then
+    echo "✅ MariaDB service: RUNNING"
+else
+    echo "❌ MariaDB service: STOPPED"
+    exit 1
+fi
+
+if mysql -e "SELECT 1;" >/dev/null 2>&1; then
+    echo "✅ MySQL connectivity: OK"
+else
+    echo "❌ MySQL connectivity: FAILED"
+    exit 1
+fi
+
+echo ""
+echo "===== Server Status ====="
+mysql -e "SHOW GLOBAL STATUS LIKE 'Threads_connected';" -s -N | awk '{print "Active connections: " $2}'
+mysql -e "SHOW GLOBAL STATUS LIKE 'Max_used_connections';" -s -N | awk '{print "Peak connections: " $2}'
+mysql -e "SHOW GLOBAL STATUS LIKE 'Uptime';" -s -N | awk '{print "Uptime (seconds): " $2}'
+
+echo ""
+echo "===== Database List ====="
+mysql -e "SHOW DATABASES;" | grep -v "Database\|information_schema\|performance_schema\|mysql\|sys"
+
+echo ""
+echo "===== Slow Queries ====="
+mysql -e "SHOW GLOBAL STATUS LIKE 'Slow_queries';" -s -N | awk '{print "Slow queries: " $2}'
+HEALTH_SCRIPT_EOF
+
+                    chmod +x /usr/local/bin/mysql-health
+
+                    # Configure Netdata MySQL monitoring if Netdata is installed
+                    if command -v netdata >/dev/null 2>&1 && [ -d /etc/netdata ]; then
+                        echo "Configuring Netdata MySQL monitoring..."
+
+                        mysql <<NETDATA_USER_EOF
+CREATE USER IF NOT EXISTS 'netdata'@'localhost';
+GRANT USAGE, REPLICATION CLIENT, PROCESS ON *.* TO 'netdata'@'localhost';
+FLUSH PRIVILEGES;
+NETDATA_USER_EOF
+
+                        mkdir -p /etc/netdata/go.d
+                        cat > /etc/netdata/go.d/mysql.conf << 'NETDATA_MYSQL_EOF'
+jobs:
+  - name: local
+    dsn: 'netdata@unix(/var/run/mysqld/mysqld.sock)/'
+    update_every: 1
+NETDATA_MYSQL_EOF
+
+                        systemctl restart netdata
+                        echo "✅ Netdata MySQL monitoring configured"
+                    fi
+
+                    # Add systemd security hardening for MariaDB
+                    mkdir -p /etc/systemd/system/mariadb.service.d
+                    cat > /etc/systemd/system/mariadb.service.d/security.conf << 'SYSTEMD_HARDENING_EOF'
+[Service]
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
+# Resource management
+Nice=-5
+OOMScoreAdjust=-200
+LimitNOFILE=65536
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=3
+StartLimitInterval=300
+SYSTEMD_HARDENING_EOF
+
+                    systemctl daemon-reload
                     systemctl restart mariadb
-                    echo "✅ MariaDB installed with secure defaults"
+
+                    echo "✅ MariaDB installed with optimized configuration"
+                    echo "   • Root password: /root/.my.cnf"
+                    echo "   • Backups: Daily at 2 AM → /var/backups/mysql/"
+                    echo "   • Health check: /usr/local/bin/mysql-health"
+                    echo "   • InnoDB buffer pool: ${INNODB_BUFFER_POOL_MB}MB"
+                    echo "   • Max connections: ${MAX_CONNECTIONS}"
                     ;;
                 postgresql)
-                    echo "===== 16.1.6 Installing PostgreSQL with Secure Configuration ====="
+                    echo "===== 16.1.6 Installing PostgreSQL with Optimized Configuration ====="
                     apt-get install -y postgresql postgresql-contrib postgresql-client
-                    
-                    # Configure PostgreSQL for security
-                    sudo -u postgres psql -c "ALTER USER postgres PASSWORD '{{DB_PG_PASSWORD:-$(openssl rand -base64 32)}}';"
-                    
-                    # Update pg_hba.conf for security
-                    sed -i "s/#listen_addresses = 'localhost'/listen_addresses = 'localhost'/" /etc/postgresql/*/main/postgresql.conf
-                    sed -i "s/local   all             all                                     peer/local   all             all                                     md5/" /etc/postgresql/*/main/pg_hba.conf
-                    
-                    # Add performance tuning to postgresql.conf
-                    cat >> /etc/postgresql/*/main/postgresql.conf << 'POSTGRESQL_EOF'
 
-# Performance tuning (calculated based on system resources)
-max_connections = $DB_MAX_CONNECTIONS
-shared_buffers = ${INNODB_BUFFER_POOL_MB}MB
-effective_cache_size = $((TOTAL_RAM_MB * 75 / 100))MB
-maintenance_work_mem = $((TOTAL_RAM_MB / 16))MB
+                    # Get PostgreSQL version and paths
+                    PG_VERSION=$(psql --version | awk '{print $3}' | cut -d. -f1)
+                    PG_CLUSTER="main"
+                    PG_CONF_DIR="/etc/postgresql/${PG_VERSION}/${PG_CLUSTER}"
+
+                    # Stop PostgreSQL for configuration
+                    systemctl stop postgresql
+
+                    # Calculate PostgreSQL settings based on system resources
+                    echo "Calculating optimal PostgreSQL configuration for ${TOTAL_RAM_MB}MB RAM, ${CPU_CORES} CPU cores..."
+
+                    # Resource allocation strategy:
+                    # - If MariaDB is installed: PostgreSQL gets ~20-30% (secondary database)
+                    # - If no MariaDB: PostgreSQL gets ~50% (primary database)
+                    if [ "${INSTALL_MARIADB:-false}" = "true" ]; then
+                        # Secondary database - conservative allocation
+                        SHARED_BUFFERS_MB=$((TOTAL_RAM_MB * 20 / 100))
+                        EFFECTIVE_CACHE_SIZE_MB=$((TOTAL_RAM_MB * 40 / 100))
+                    else
+                        # Primary database - generous allocation
+                        SHARED_BUFFERS_MB=$((TOTAL_RAM_MB * 50 / 100))
+                        EFFECTIVE_CACHE_SIZE_MB=$((TOTAL_RAM_MB * 75 / 100))
+                    fi
+
+                    # Work memory: Per-query memory
+                    WORK_MEM_MB=$((TOTAL_RAM_MB / 500))
+                    if [ $WORK_MEM_MB -lt 4 ]; then
+                        WORK_MEM_MB=4
+                    elif [ $WORK_MEM_MB -gt 512 ]; then
+                        WORK_MEM_MB=512
+                    fi
+
+                    # Maintenance work memory
+                    MAINTENANCE_WORK_MEM_MB=$((TOTAL_RAM_MB / 32))
+                    if [ $MAINTENANCE_WORK_MEM_MB -lt 64 ]; then
+                        MAINTENANCE_WORK_MEM_MB=64
+                    elif [ $MAINTENANCE_WORK_MEM_MB -gt 8192 ]; then
+                        MAINTENANCE_WORK_MEM_MB=8192
+                    fi
+
+                    # WAL buffers
+                    WAL_BUFFERS_MB=$((SHARED_BUFFERS_MB / 32))
+                    if [ $WAL_BUFFERS_MB -lt 16 ]; then
+                        WAL_BUFFERS_MB=16
+                    elif [ $WAL_BUFFERS_MB -gt 64 ]; then
+                        WAL_BUFFERS_MB=64
+                    fi
+
+                    # Max connections
+                    MAX_CONNECTIONS=100
+
+                    # Parallel workers
+                    MAX_PARALLEL_WORKERS=$((CPU_CORES / 4))
+                    if [ $MAX_PARALLEL_WORKERS -lt 2 ]; then
+                        MAX_PARALLEL_WORKERS=2
+                    elif [ $MAX_PARALLEL_WORKERS -gt 8 ]; then
+                        MAX_PARALLEL_WORKERS=8
+                    fi
+                    MAX_PARALLEL_WORKERS_PER_GATHER=$((MAX_PARALLEL_WORKERS / 2))
+                    if [ $MAX_PARALLEL_WORKERS_PER_GATHER -lt 2 ]; then
+                        MAX_PARALLEL_WORKERS_PER_GATHER=2
+                    fi
+
+                    echo "  • Shared buffers: ${SHARED_BUFFERS_MB}MB"
+                    echo "  • Effective cache: ${EFFECTIVE_CACHE_SIZE_MB}MB"
+                    echo "  • Work mem: ${WORK_MEM_MB}MB"
+                    echo "  • Maintenance work mem: ${MAINTENANCE_WORK_MEM_MB}MB"
+                    echo "  • WAL buffers: ${WAL_BUFFERS_MB}MB"
+                    echo "  • Max connections: ${MAX_CONNECTIONS}"
+                    echo "  • Max parallel workers: ${MAX_PARALLEL_WORKERS}"
+
+                    # Create optimized PostgreSQL configuration
+                    mkdir -p "${PG_CONF_DIR}/conf.d"
+                    cat > "${PG_CONF_DIR}/conf.d/99-polyserver-optimization.conf" << PGSQL_PERF_EOF
+# PolyServer PostgreSQL Configuration
+# Generated: $(date)
+# System: ${TOTAL_RAM_MB}MB RAM, ${CPU_CORES} CPU cores
+
+####################
+# Connection Settings
+####################
+max_connections = ${MAX_CONNECTIONS}
+superuser_reserved_connections = 3
+
+####################
+# Memory Settings
+####################
+shared_buffers = ${SHARED_BUFFERS_MB}MB
+work_mem = ${WORK_MEM_MB}MB
+maintenance_work_mem = ${MAINTENANCE_WORK_MEM_MB}MB
+autovacuum_work_mem = ${MAINTENANCE_WORK_MEM_MB}MB
+effective_cache_size = ${EFFECTIVE_CACHE_SIZE_MB}MB
+temp_buffers = 8MB
+
+####################
+# WAL Settings
+####################
+wal_buffers = ${WAL_BUFFERS_MB}MB
+min_wal_size = 512MB
+max_wal_size = 2GB
+wal_level = replica
 checkpoint_completion_target = 0.9
-wal_buffers = 16MB
-default_statistics_target = 100
+checkpoint_timeout = 15min
+
+####################
+# Query Planner (SSD-optimized)
+####################
 random_page_cost = 1.1
-POSTGRESQL_EOF
-                    
-                    systemctl restart postgresql
-                    echo "✅ PostgreSQL installed with secure defaults"
+seq_page_cost = 1.0
+effective_io_concurrency = 200
+
+####################
+# Parallel Queries
+####################
+max_parallel_workers_per_gather = ${MAX_PARALLEL_WORKERS_PER_GATHER}
+max_parallel_workers = ${MAX_PARALLEL_WORKERS}
+max_parallel_maintenance_workers = ${MAX_PARALLEL_WORKERS_PER_GATHER}
+
+####################
+# Logging
+####################
+log_destination = 'stderr'
+logging_collector = on
+log_directory = 'log'
+log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'
+log_file_mode = 0600
+log_rotation_age = 1d
+log_rotation_size = 100MB
+
+# Log slow queries (>1 second)
+log_min_duration_statement = 1000
+log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+log_checkpoints = on
+log_connections = off
+log_disconnections = off
+log_lock_waits = on
+log_temp_files = 0
+
+####################
+# Autovacuum
+####################
+autovacuum = on
+autovacuum_max_workers = 3
+autovacuum_naptime = 1min
+autovacuum_vacuum_threshold = 50
+autovacuum_analyze_threshold = 50
+autovacuum_vacuum_scale_factor = 0.1
+autovacuum_analyze_scale_factor = 0.05
+
+####################
+# Statistics
+####################
+track_activities = on
+track_counts = on
+track_io_timing = on
+track_functions = pl
+default_statistics_target = 100
+
+####################
+# Security
+####################
+password_encryption = scram-sha-256
+ssl = off
+
+####################
+# Locale
+####################
+lc_messages = 'en_US.UTF-8'
+lc_monetary = 'en_US.UTF-8'
+lc_numeric = 'en_US.UTF-8'
+lc_time = 'en_US.UTF-8'
+default_text_search_config = 'pg_catalog.english'
+
+####################
+# Performance Features
+####################
+jit = off
+huge_pages = try
+PGSQL_PERF_EOF
+
+                    # Update listen_addresses
+                    sed -i "s/#listen_addresses = 'localhost'/listen_addresses = 'localhost'/" "${PG_CONF_DIR}/postgresql.conf"
+
+                    # Configure pg_hba.conf for secure authentication
+                    cat > "${PG_CONF_DIR}/pg_hba.conf" << 'PGHBA_EOF'
+# PostgreSQL Client Authentication Configuration
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+
+# Local connections
+local   all             postgres                                peer
+local   all             all                                     scram-sha-256
+
+# IPv4 localhost connections
+host    all             all             127.0.0.1/32            scram-sha-256
+
+# IPv6 localhost connections
+host    all             all             ::1/128                 scram-sha-256
+
+# Replication connections
+local   replication     all                                     peer
+host    replication     all             127.0.0.1/32            scram-sha-256
+host    replication     all             ::1/128                 scram-sha-256
+PGHBA_EOF
+
+                    # Start PostgreSQL
+                    systemctl start postgresql
+                    systemctl enable postgresql
+                    sleep 5
+
+                    # Generate secure passwords
+                    POSTGRES_PASSWORD=$(openssl rand -base64 32)
+
+                    # Set postgres user password
+                    sudo -u postgres psql << PGSQL_SECURE_EOF
+ALTER USER postgres WITH PASSWORD '${POSTGRES_PASSWORD}';
+PGSQL_SECURE_EOF
+
+                    # Save postgres credentials
+                    cat > /root/.pgpass << PGPASS_EOF
+localhost:5432:*:postgres:${POSTGRES_PASSWORD}
+PGPASS_EOF
+                    chmod 600 /root/.pgpass
+
+                    echo "✅ PostgreSQL root password saved to /root/.pgpass (chmod 600)"
+
+                    # Create backup directory and script
+                    mkdir -p /var/backups/postgresql
+                    chown postgres:postgres /var/backups/postgresql
+
+                    cat > /usr/local/bin/postgresql-backup << 'PGSQL_BACKUP_EOF'
+#!/bin/bash
+# PostgreSQL backup script
+
+set -Eeuo pipefail
+
+BACKUP_DIR="/var/backups/postgresql"
+DATE=$(date +%Y%m%d_%H%M%S)
+LOG_FILE="/var/log/postgresql-backup.log"
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+log "Starting PostgreSQL backup..."
+
+# Get list of databases
+DATABASES=$(sudo -u postgres psql -t -c "SELECT datname FROM pg_database WHERE datistemplate = false AND datname != 'postgres';" | grep -v '^$')
+
+# Backup each database
+for DB in $DATABASES; do
+    BACKUP_FILE="${BACKUP_DIR}/${DB}_${DATE}.sql.gz"
+    if sudo -u postgres pg_dump "$DB" | gzip > "$BACKUP_FILE"; then
+        log "✅ Backup completed: $BACKUP_FILE"
+        log "   Size: $(du -h "$BACKUP_FILE" | cut -f1)"
+    else
+        log "❌ Backup failed for database: $DB"
+    fi
+done
+
+# Keep last 7 days of backups
+find "$BACKUP_DIR" -name "*.sql.gz" -mtime +7 -delete
+log "Old backups cleaned (keeping 7 days)"
+
+log "Backup completed successfully"
+PGSQL_BACKUP_EOF
+
+                    chmod +x /usr/local/bin/postgresql-backup
+
+                    # Create daily backup cron job
+                    cat > /etc/cron.daily/postgresql-backup << 'PGSQL_CRON_EOF'
+#!/bin/bash
+/usr/local/bin/postgresql-backup
+PGSQL_CRON_EOF
+                    chmod +x /etc/cron.daily/postgresql-backup
+
+                    # Configure Netdata PostgreSQL monitoring if Netdata is installed
+                    if command -v netdata >/dev/null 2>&1 && [ -d /etc/netdata ]; then
+                        echo "Configuring Netdata PostgreSQL monitoring..."
+
+                        NETDATA_PG_PASSWORD=$(openssl rand -base64 16)
+
+                        sudo -u postgres psql << NETDATA_PG_EOF
+CREATE USER netdata WITH PASSWORD '${NETDATA_PG_PASSWORD}';
+GRANT pg_monitor TO netdata;
+GRANT CONNECT ON DATABASE postgres TO netdata;
+NETDATA_PG_EOF
+
+                        mkdir -p /etc/netdata/go.d
+                        cat > /etc/netdata/go.d/postgres.conf << NETDATA_POSTGRES_EOF
+jobs:
+  - name: local
+    dsn: 'postgres://netdata:${NETDATA_PG_PASSWORD}@localhost:5432/postgres'
+    timeout: 5
+    collect_databases_metrics: yes
+NETDATA_POSTGRES_EOF
+
+                        chmod 640 /etc/netdata/go.d/postgres.conf
+                        chown root:netdata /etc/netdata/go.d/postgres.conf 2>/dev/null || true
+
+                        systemctl restart netdata
+                        echo "✅ Netdata PostgreSQL monitoring configured"
+                    fi
+
+                    echo "✅ PostgreSQL installed with optimized configuration"
+                    echo "   • Postgres password: /root/.pgpass"
+                    echo "   • Backups: Daily via cron.daily → /var/backups/postgresql/"
+                    echo "   • Shared buffers: ${SHARED_BUFFERS_MB}MB"
+                    echo "   • Max connections: ${MAX_CONNECTIONS}"
                     ;;
                 nodejs)
                     echo "===== 16.1.7 Installing Node.js with PM2 ====="
