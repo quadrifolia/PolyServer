@@ -126,6 +126,7 @@ polyserver/
 │   ├── deploy-unified.sh                # Base configuration deployment script
 │   ├── generate-configs.sh              # Configuration generation from templates
 │   ├── server-setup-bastion.sh          # Specialized bastion host hardening script
+│   ├── configure-vrack-isolation.sh     # vRack private network isolation (OVH)
 │   ├── audit-report.sh                  # Security audit reporting
 │   ├── breach-response-checklist.sh     # DSGVO breach response procedures
 │   ├── collect-forensics.sh             # Forensic evidence collection
@@ -173,7 +174,10 @@ polyserver/
 │   │   └── security.conf.template
 │   ├── php/                             # PHP-FPM configuration templates
 │   │   ├── www.conf.template                 # PHP-FPM pool configuration
-│   │   └── php.ini.template                  # Security-hardened PHP configuration
+│   │   ├── php.ini.template                  # Security-hardened PHP configuration
+│   │   ├── 99-security.ini.template          # Additional security hardening
+│   │   ├── security-pool.conf.template       # Security-focused pool configuration
+│   │   └── xdebug.ini.template               # Development debugging configuration
 │   ├── redis/                           # Redis cache configuration
 │   │   └── redis.conf.template               # Performance and security optimized Redis
 │   ├── scripts/                         # Script templates
