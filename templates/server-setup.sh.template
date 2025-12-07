@@ -933,7 +933,7 @@ echo ""
 echo "===== 6.2 Installing core packages and web server ====="
 
 # Core security and monitoring packages (always installed)
-CORE_PACKAGES="fail2ban unattended-upgrades apt-listchanges gnupg-agent logwatch apparmor apparmor-utils smartmontools rsyslog"
+CORE_PACKAGES="fail2ban unattended-upgrades apt-listchanges gnupg-agent logwatch apparmor apparmor-utils smartmontools rsyslog powermgmt-base python3-gi"
 
 # Build component-based package list
 COMPONENT_PACKAGES=""
@@ -2987,65 +2987,65 @@ echo "" >> $REPORT_FILE
 # General Summary Report
 echo "GENERAL SUMMARY" >> $REPORT_FILE
 echo "===============" >> $REPORT_FILE
-ausearch --start today --end now | aureport --summary -i >> $REPORT_FILE
+ausearch --start today --end now 2>/dev/null | aureport --summary -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Authentication Report
 echo "AUTHENTICATION EVENTS" >> $REPORT_FILE
 echo "====================" >> $REPORT_FILE
-ausearch --start today --end now | aureport --auth --summary -i >> $REPORT_FILE
+ausearch --start today --end now 2>/dev/null | aureport --auth --summary -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # User Modification Events
 echo "USER MODIFICATION EVENTS" >> $REPORT_FILE
 echo "=======================" >> $REPORT_FILE
-ausearch -k user_modify --start today --end now -i >> $REPORT_FILE
+ausearch -k user_modify --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Executable Summary
 echo "EXECUTABLE SUMMARY" >> $REPORT_FILE
 echo "=================" >> $REPORT_FILE
-ausearch --start today --end now | aureport --executable --summary -i >> $REPORT_FILE
+ausearch --start today --end now 2>/dev/null | aureport --executable --summary -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Suspicious Command Executions
 echo "SUSPICIOUS COMMAND EXECUTIONS" >> $REPORT_FILE
 echo "============================" >> $REPORT_FILE
-ausearch -k data_exfiltration --start today --end now -i >> $REPORT_FILE
+ausearch -k data_exfiltration --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # File Modification Events
 echo "CONFIG FILE MODIFICATION EVENTS" >> $REPORT_FILE
 echo "=============================" >> $REPORT_FILE
-ausearch -k sshd_config_modifications --start today --end now -i >> $REPORT_FILE
-ausearch -k nginx_config --start today --end now -i >> $REPORT_FILE
-ausearch -k docker_config --start today --end now -i >> $REPORT_FILE
-ausearch -k application_config_changes --start today --end now -i >> $REPORT_FILE
-ausearch -k security_tool_config --start today --end now -i >> $REPORT_FILE
+ausearch -k sshd_config_modifications --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch -k nginx_config --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
+ausearch -k docker_config --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
+ausearch -k application_config_changes --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
+ausearch -k security_tool_config --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
 echo "" >> $REPORT_FILE
 
 # Privilege Escalation
 echo "PRIVILEGE ESCALATION EVENTS" >> $REPORT_FILE
 echo "=========================" >> $REPORT_FILE
-ausearch -k privilege_escalation --start today --end now -i >> $REPORT_FILE
+ausearch -k privilege_escalation --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Unauthorized Access Attempts
 echo "UNAUTHORIZED ACCESS ATTEMPTS" >> $REPORT_FILE
 echo "==========================" >> $REPORT_FILE
-ausearch -k unauthorized_access --start today --end now -i >> $REPORT_FILE
+ausearch -k unauthorized_access --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Binary Modifications
 echo "BINARY MODIFICATION EVENTS" >> $REPORT_FILE
 echo "=========================" >> $REPORT_FILE
-ausearch -k binary_modifications --start today --end now -i >> $REPORT_FILE
+ausearch -k binary_modifications --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Docker Socket Access
 echo "DOCKER SOCKET ACCESS" >> $REPORT_FILE
 echo "===================" >> $REPORT_FILE
-ausearch -k docker_socket_access --start today --end now -i >> $REPORT_FILE
+ausearch -k docker_socket_access --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Audit System Status
@@ -4028,9 +4028,23 @@ ALLOW_SSH_ROOT_USER=no
 XINETD_ALLOWED_SVC=
 DISABLE_CHECK_PORTS=0
 
+# SSH Protocol configuration (SSH2 only, no SSH1)
+ALLOW_SSH_PROT_V1=0
+
 # Allow certain whitelisted files
 #ALLOWHIDDENDIR=/dev/.udev
 #ALLOWHIDDENFILE=/dev/.blkid.tab
+
+# Netdata shared memory files (legitimate)
+ALLOWHIDDENFILE=/dev/shm/sem.netdata_sem_cgroup_ebpf
+ALLOWHIDDENFILE=/dev/shm/netdata_shm_cgroup_ebpf
+
+# systemd-resolved backup file (legitimate)
+ALLOWHIDDENFILE=/etc/.resolv.conf.systemd-resolved.bak
+ALLOWHIDDENFILE=/etc/.updated
+
+# lwp-request is legitimately a Perl script in Debian
+SCRIPTWHITELIST=/usr/bin/lwp-request
 EOF
 
 # Create RKHunter scan script
@@ -4122,9 +4136,6 @@ chkrootkit -q > $RAW_LOG 2>&1
 
 # Filter out whitelisted entries
 if [ -f "$WHITELIST_CONF" ]; then
-    # Load whitelist configuration
-    source "$WHITELIST_CONF"
-
     # Start with raw output
     cp "$RAW_LOG" "$TODAY_LOG"
 
@@ -4142,12 +4153,6 @@ if [ -f "$WHITELIST_CONF" ]; then
             sed -i "/${escaped_path}/d" "$TODAY_LOG"
         fi
     done < "$WHITELIST_CONF"
-
-    # Filter out whitelisted packet sniffers
-    if [ -n "$WHITELIST_SNIFFERS" ]; then
-        # Remove packet sniffer warnings for whitelisted processes
-        sed -i -E "/PACKET SNIFFER.*(${WHITELIST_SNIFFERS})/d" "$TODAY_LOG"
-    fi
 
     echo "Whitelist filtering applied" >> $LOGFILE
 else
@@ -5501,16 +5506,40 @@ check_persistence_location() {
     local name="$2"
     local baseline_file="$BASELINE_DIR/${name}.baseline"
     local current_file="/tmp/${name}.current"
-    
+    local changes_file="/tmp/${name}.changes"
+
     if [ -d "$location" ] || [ -f "$location" ]; then
-        find "$location" -type f -exec stat -c "%n %Y %s" {} \; 2>/dev/null | sort > "$current_file"
-        
+        # List files with name only (not timestamps or sizes to avoid false positives)
+        find "$location" -type f 2>/dev/null | sort > "$current_file"
+
         if [ -f "$baseline_file" ]; then
-            if ! diff -q "$baseline_file" "$current_file" >/dev/null 2>&1; then
-                log_message "ALERT: Changes detected in $name ($location)"
-                diff "$baseline_file" "$current_file" | head -20 >> "$LOG_FILE"
-                echo "PERSISTENCE ALERT: Changes detected in $name on $(hostname)" | \
-                    mail -s "SECURITY ALERT: Persistence Detection" "$MAIL_RECIPIENT" 2>/dev/null || true
+            # Check for NEW files only (not modifications)
+            local new_files=$(comm -13 "$baseline_file" "$current_file")
+            local removed_files=$(comm -23 "$baseline_file" "$current_file")
+
+            if [ -n "$new_files" ] || [ -n "$removed_files" ]; then
+                log_message "ALERT: New/removed files detected in $name ($location)"
+                {
+                    [ -n "$new_files" ] && echo "NEW FILES:" && echo "$new_files"
+                    [ -n "$removed_files" ] && echo "REMOVED FILES:" && echo "$removed_files"
+                } | tee -a "$LOG_FILE" > "$changes_file"
+
+                # Only send email for new files (not modifications or removals from package updates)
+                if [ -n "$new_files" ]; then
+                    {
+                        echo "PERSISTENCE ALERT: New files detected in $name on $(hostname)"
+                        echo ""
+                        echo "Location: $location"
+                        echo ""
+                        cat "$changes_file"
+                        echo ""
+                        echo "This may indicate persistence mechanisms. Verify these files are legitimate."
+                    } | mail -s "SECURITY ALERT: New Persistence Files Detected" "$MAIL_RECIPIENT" 2>/dev/null || true
+                fi
+
+                # Update baseline to include new files (reduce noise)
+                cp "$current_file" "$baseline_file"
+                rm -f "$changes_file"
             fi
         else
             # First run - create baseline
