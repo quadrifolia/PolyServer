@@ -6530,7 +6530,7 @@ if [ -n "$INSTALL_COMPONENTS" ]; then
                     
                     # Install Docker prerequisites
                     apt-get update
-                    apt-get install -y ca-certificates curl software-properties-common
+                    apt-get install -y ca-certificates curl gnupg lsb-release
                     
                     # Add Docker's official GPG key
                     install -m 0755 -d /etc/apt/keyrings
