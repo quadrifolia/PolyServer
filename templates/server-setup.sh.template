@@ -6626,7 +6626,7 @@ DOCKER_EOF
                     cat > /etc/systemd/system/docker.service.d/security.conf << 'DOCKER_EOF'
 [Service]
 # Security hardening (Docker-compatible settings only)
-ProtectKernelTunables=true
+# Note: ProtectKernelTunables cannot be used - Docker needs write access to /proc/sys/net/ipv4/ip_forward
 RestrictRealtime=true
 
 # Resource limits
