@@ -7867,6 +7867,11 @@ fi
 # Show next steps
 STEP_NUM=1
 echo "Next steps:"
+echo ""
+echo "${STEP_NUM}. Use the server helper for quick access to common tasks:"
+echo "   Type: ${BOLD}helper${NC} or ${BOLD}server-help${NC}"
+echo "   Available commands: status, security, services, network, logs, and more"
+STEP_NUM=$((STEP_NUM + 1))
 
 # GDPR/DSGVO steps (only if enabled)
 if [ "${GDPR_ENABLED,,}" = "true" ]; then
