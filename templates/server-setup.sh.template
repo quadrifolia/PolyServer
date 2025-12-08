@@ -5342,31 +5342,47 @@ if ss -tnlp | grep -q ":$SSH_PORT.*sshd"; then
 fi
 
 echo "===== 13. Optional DSGVO/GDPR Compliance Setup ====="
-echo "Setting up DSGVO/GDPR compliance framework..."
 
-# Copy DSGVO setup script to the scripts directory first
-mkdir -p /opt/polyserver/scripts
-DSGVO_SETUP_SCRIPT=""
+if [ "${GDPR_ENABLED,,}" = "true" ]; then
+    echo "Setting up DSGVO/GDPR compliance framework..."
 
-if [ -f "/opt/polyserver/scripts/setup-dsgvo.sh" ]; then
-    DSGVO_SETUP_SCRIPT="/opt/polyserver/scripts/setup-dsgvo.sh"
-else
-    # Look for the script in the current directory structure
+    # Create DSGVO directory
+    mkdir -p /etc/dsgvo
+
+    # Check if DSGVO files were deployed via generate-configs.sh
     CURRENT_DIR=$(dirname "${BASH_SOURCE[0]}")
-    if [ -f "$CURRENT_DIR/setup-dsgvo.sh" ]; then
-        cp "$CURRENT_DIR/setup-dsgvo.sh" "/opt/polyserver/scripts/"
-        DSGVO_SETUP_SCRIPT="/opt/polyserver/scripts/setup-dsgvo.sh"
-        chmod +x "$DSGVO_SETUP_SCRIPT"
-    fi
-fi
+    if [ -d "$CURRENT_DIR/dsgvo" ]; then
+        echo "Installing GDPR/DSGVO compliance documentation..."
 
-if [ -n "$DSGVO_SETUP_SCRIPT" ] && [ -f "$DSGVO_SETUP_SCRIPT" ]; then
-    echo "Running DSGVO compliance setup..."
-    # Run non-interactively by providing default answers
-    echo "y" | bash "$DSGVO_SETUP_SCRIPT" || echo "DSGVO setup completed with warnings"
+        # Copy all DSGVO files to /etc/dsgvo
+        cp -r "$CURRENT_DIR/dsgvo"/* /etc/dsgvo/
+
+        # Set appropriate permissions
+        chmod 755 /etc/dsgvo
+        chmod 644 /etc/dsgvo/*.conf /etc/dsgvo/*.json /etc/dsgvo/*.md 2>/dev/null || true
+
+        # Make editable files writable by root only
+        chmod 600 /etc/dsgvo/contacts.conf /etc/dsgvo/data_inventory.json 2>/dev/null || true
+
+        echo "✅ GDPR/DSGVO documentation installed to /etc/dsgvo/"
+        log_message "GDPR/DSGVO compliance files installed"
+    elif [ -d "/opt/polyserver/config/dsgvo" ]; then
+        # Fallback: check in deployment directory
+        echo "Installing GDPR/DSGVO compliance documentation from deployment directory..."
+        cp -r /opt/polyserver/config/dsgvo/* /etc/dsgvo/
+        chmod 755 /etc/dsgvo
+        chmod 644 /etc/dsgvo/*.conf /etc/dsgvo/*.json /etc/dsgvo/*.md 2>/dev/null || true
+        chmod 600 /etc/dsgvo/contacts.conf /etc/dsgvo/data_inventory.json 2>/dev/null || true
+        echo "✅ GDPR/DSGVO documentation installed to /etc/dsgvo/"
+        log_message "GDPR/DSGVO compliance files installed"
+    else
+        echo "⚠️  DSGVO files not found. Generate them with:"
+        echo "    GDPR_ENABLED=true ./scripts/generate-configs.sh"
+        log_message "WARNING: GDPR enabled but DSGVO files not found"
+    fi
 else
-    echo "DSGVO setup script not found. You can run it later manually."
-    echo "Make sure to install DSGVO compliance files before running compliance checks."
+    echo "GDPR/DSGVO compliance setup skipped (GDPR_ENABLED=false)"
+    log_message "GDPR compliance setup skipped"
 fi
 
 echo "===== 14. Advanced Security Hardening ====="
@@ -7796,39 +7812,73 @@ fi
 
 echo "===== 18. Setup complete! ====="
 log_message "Server setup completed successfully"
-echo "Server has been secured and Docker installed."
+
+# Build dynamic completion message based on what was installed
+INSTALLED_COMPONENTS=""
+[ "${INSTALL_NGINX,,}" = "true" ] && INSTALLED_COMPONENTS="${INSTALLED_COMPONENTS}Nginx, "
+[ "${INSTALL_PHP,,}" = "true" ] && INSTALLED_COMPONENTS="${INSTALLED_COMPONENTS}PHP, "
+[ "${INSTALL_MARIADB,,}" = "true" ] && INSTALLED_COMPONENTS="${INSTALLED_COMPONENTS}MariaDB, "
+[ "${INSTALL_POSTGRESQL,,}" = "true" ] && INSTALLED_COMPONENTS="${INSTALLED_COMPONENTS}PostgreSQL, "
+[ "${INSTALL_REDIS,,}" = "true" ] && INSTALLED_COMPONENTS="${INSTALLED_COMPONENTS}Redis, "
+[ "${INSTALL_DOCKER,,}" = "true" ] && INSTALLED_COMPONENTS="${INSTALLED_COMPONENTS}Docker, "
+[ "${INSTALL_NODEJS,,}" = "true" ] && INSTALLED_COMPONENTS="${INSTALLED_COMPONENTS}Node.js, "
+INSTALLED_COMPONENTS="${INSTALLED_COMPONENTS%, }"  # Remove trailing comma
+
+if [ -n "$INSTALLED_COMPONENTS" ]; then
+    echo "Server has been secured with: $INSTALLED_COMPONENTS"
+else
+    echo "Server has been secured with base hardening."
+fi
+
 echo "IMPORTANT: SSH is now running on port $SSH_PORT"
 echo "Use the following command to connect: ssh -p $SSH_PORT $USERNAME@your-server-ip"
 echo ""
-echo ""
-echo "📊 System Resource Optimization Applied:"
-if [ -n "$NGINX_WORKERS" ] && [ "$NGINX_WORKERS" != "auto" ]; then
+
+# Show resource optimization only for installed components
+SHOW_RESOURCES=false
+if [ -n "$NGINX_WORKERS" ] && [ "$NGINX_WORKERS" != "auto" ] && [ "${INSTALL_NGINX,,}" = "true" ]; then
+    [ "$SHOW_RESOURCES" = "false" ] && echo "📊 System Resource Optimization Applied:" && SHOW_RESOURCES=true
     echo "   • Nginx: $NGINX_WORKERS workers, $NGINX_WORKER_CONNECTIONS connections each"
 fi
-if [ -n "${PHP_MAX_CHILDREN:-}" ]; then
+if [ -n "${PHP_MAX_CHILDREN:-}" ] && [ "${INSTALL_PHP,,}" = "true" ]; then
+    [ "$SHOW_RESOURCES" = "false" ] && echo "📊 System Resource Optimization Applied:" && SHOW_RESOURCES=true
     echo "   • PHP-FPM: Up to $PHP_MAX_CHILDREN processes, ${PHP_MEMORY_LIMIT}MB memory limit per process"
 fi
-if [ -n "${MYSQL_INNODB_BUFFER_POOL_SIZE:-}" ]; then
+if [ -n "${MYSQL_INNODB_BUFFER_POOL_SIZE:-}" ] && [ "${INSTALL_MARIADB,,}" = "true" ]; then
+    [ "$SHOW_RESOURCES" = "false" ] && echo "📊 System Resource Optimization Applied:" && SHOW_RESOURCES=true
     echo "   • MariaDB: ${MYSQL_INNODB_BUFFER_POOL_SIZE}MB InnoDB buffer pool, $MYSQL_MAX_CONNECTIONS max connections"
 fi
-if [ -n "${REDIS_MAX_MEMORY:-}" ]; then
+if [ -n "${REDIS_MAX_MEMORY:-}" ] && [ "${INSTALL_REDIS,,}" = "true" ]; then
+    [ "$SHOW_RESOURCES" = "false" ] && echo "📊 System Resource Optimization Applied:" && SHOW_RESOURCES=true
     echo "   • Redis: ${REDIS_MAX_MEMORY}MB max memory, $REDIS_MAX_CLIENTS max clients"
 fi
-echo ""
-echo "📁 Configuration templates available for deployment:"
-echo "   • Nginx: templates/nginx/ (optimized for $CPU_CORES cores)"
-echo "   • PHP 8.4: templates/php/ (optimized for ${TOTAL_RAM_MB}MB RAM)"
-echo "   • MariaDB: templates/mariadb/ (production-ready settings)"
-echo "   • Redis: templates/redis/ (security-hardened)"
-echo ""
+[ "$SHOW_RESOURCES" = "true" ] && echo ""
+
+# Show next steps
+STEP_NUM=1
 echo "Next steps:"
-echo "1. Edit /etc/dsgvo/contacts.conf to add your DPO contact information"
-echo "2. Complete /etc/dsgvo/data_inventory.json with your actual data"
-echo "3. Run compliance check: /opt/polyserver/scripts/dsgvo-compliance-check.sh"
+
+# GDPR/DSGVO steps (only if enabled)
+if [ "${GDPR_ENABLED,,}" = "true" ]; then
+    echo "${STEP_NUM}. Edit /etc/dsgvo/contacts.conf to add your DPO contact information"
+    STEP_NUM=$((STEP_NUM + 1))
+    echo "${STEP_NUM}. Complete /etc/dsgvo/data_inventory.json with your actual data"
+    STEP_NUM=$((STEP_NUM + 1))
+    echo "${STEP_NUM}. Run compliance check: dsgvo-compliance-check"
+    STEP_NUM=$((STEP_NUM + 1))
+fi
+
+# Netdata steps (only if installed)
 if [ "$NETDATA_ENABLED" = "true" ]; then
-    echo "4. Access Netdata dashboard: ssh -L 19999:127.0.0.1:19999 {{USERNAME}}@server"
-    echo "5. Add to Netdata Cloud (optional): run 'netdata-access' for instructions"
-    echo "6. Deploy your applications using the optimized configuration templates"
-else
-    echo "4. Deploy your applications using the optimized configuration templates"
+    echo "${STEP_NUM}. Access Netdata dashboard: ssh -L 19999:127.0.0.1:19999 {{USERNAME}}@server"
+    STEP_NUM=$((STEP_NUM + 1))
+    if [ -z "${NETDATA_CLAIM_TOKEN:-}" ]; then
+        echo "${STEP_NUM}. Add to Netdata Cloud (optional): run 'netdata-access' for instructions"
+        STEP_NUM=$((STEP_NUM + 1))
+    fi
+fi
+
+# Application deployment
+if [ "${INSTALL_NGINX,,}" = "true" ] || [ "${INSTALL_PHP,,}" = "true" ] || [ "${INSTALL_MARIADB,,}" = "true" ]; then
+    echo "${STEP_NUM}. Deploy your applications using the installed components"
 fi

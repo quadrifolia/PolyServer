@@ -207,6 +207,13 @@ if [ -d "$CONFIG_DIR/unbound" ] && [ "${UNBOUND_ENABLED:-false}" = "true" ]; the
     echo -e "${GREEN}✓ Unbound configurations deployed${NC}"
 fi
 
+# Copy DSGVO/GDPR documentation (if enabled)
+if [ -d "$CONFIG_DIR/dsgvo" ] && [ "${GDPR_ENABLED:-false}" = "true" ]; then
+    echo "Copying GDPR/DSGVO compliance documentation..."
+    $SCP_CMD -r "$CONFIG_DIR/dsgvo" "$SSH_USER@$SSH_HOST:${DEPLOY_DIR:-/opt/polyserver}/config/"
+    echo -e "${GREEN}✓ GDPR/DSGVO documentation deployed${NC}"
+fi
+
 echo ""
 echo "===== Deployment Complete ====="
 echo ""
