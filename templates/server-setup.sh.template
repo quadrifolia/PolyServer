@@ -1045,7 +1045,10 @@ fi
 
 if [ "$CPU_VENDOR" = "AuthenticAMD" ]; then
     echo "AMD processor detected - installing AMD microcode updates..."
-    
+
+    # Wait for any running package operations to complete
+    wait_for_dpkg_lock
+
     # Check if non-free-firmware repository is available
     if ! apt-cache search amd64-microcode | grep -q amd64-microcode; then
         echo "Adding non-free-firmware repository for AMD microcode..."
@@ -1079,6 +1082,10 @@ if [ "$CPU_VENDOR" = "AuthenticAMD" ]; then
     
 elif [ "$CPU_VENDOR" = "GenuineIntel" ]; then
     echo "Intel processor detected - installing Intel microcode updates..."
+
+    # Wait for any running package operations to complete
+    wait_for_dpkg_lock
+
     apt-get install -y intel-microcode
     echo "✅ Intel microcode installed successfully"
     echo "⚠️  Microcode will be active after next reboot"
