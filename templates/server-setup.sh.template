@@ -3402,55 +3402,105 @@ if [ "$DOCKER_MODE" = "false" ]; then
     FTP_SERVERS='$HOME_NET'
     
     if [ "$TESTING_MODE" != "true" ]; then
-        echo "Will you be running web services (nginx, apache, etc.) on this server? [Y/n]"
-        read -r web_services
-        if [[ $web_services =~ ^[Nn]$ ]]; then
-            HTTP_SERVERS="any"
-            echo "  📌 HTTP monitoring set to external traffic only"
+        # Check for HTTP services
+        if [ -n "${SURICATA_MONITOR_HTTP:-}" ]; then
+            if [ "${SURICATA_MONITOR_HTTP}" = "false" ]; then
+                HTTP_SERVERS="any"
+                echo "  📌 HTTP monitoring set to external traffic only (from config)"
+            else
+                echo "  📌 HTTP monitoring enabled for this server (from config)"
+            fi
         else
-            echo "  📌 HTTP monitoring enabled for this server"
+            echo "Will you be running web services (nginx, apache, etc.) on this server? [Y/n]"
+            read -r web_services
+            if [[ $web_services =~ ^[Nn]$ ]]; then
+                HTTP_SERVERS="any"
+                echo "  📌 HTTP monitoring set to external traffic only"
+            else
+                echo "  📌 HTTP monitoring enabled for this server"
+            fi
         fi
-        
+
         echo ""
-        echo "Will you be running database services (MySQL, PostgreSQL, etc.) on this server? [Y/n]"
-        read -r db_services
-        if [[ $db_services =~ ^[Nn]$ ]]; then
-            SQL_SERVERS="any"
-            echo "  📌 Database monitoring set to external traffic only"
+        # Check for database services
+        if [ -n "${SURICATA_MONITOR_DATABASE:-}" ]; then
+            if [ "${SURICATA_MONITOR_DATABASE}" = "false" ]; then
+                SQL_SERVERS="any"
+                echo "  📌 Database monitoring set to external traffic only (from config)"
+            else
+                echo "  📌 Database monitoring enabled for this server (from config)"
+            fi
         else
-            echo "  📌 Database monitoring enabled for this server"
+            echo "Will you be running database services (MySQL, PostgreSQL, etc.) on this server? [Y/n]"
+            read -r db_services
+            if [[ $db_services =~ ^[Nn]$ ]]; then
+                SQL_SERVERS="any"
+                echo "  📌 Database monitoring set to external traffic only"
+            else
+                echo "  📌 Database monitoring enabled for this server"
+            fi
         fi
-        
+
         echo ""
-        echo "Will you be running an authoritative DNS server (BIND9, etc.) on this server? [y/N]"
-        echo "  Note: This is for hosting DNS zones, not DNS resolution (Unbound resolver is already configured)"
-        read -r dns_services
-        if [[ $dns_services =~ ^[Yy]$ ]]; then
-            echo "  📌 DNS server monitoring enabled for this server"
+        # Check for DNS services
+        if [ -n "${SURICATA_MONITOR_DNS:-}" ]; then
+            if [ "${SURICATA_MONITOR_DNS}" = "true" ]; then
+                echo "  📌 DNS server monitoring enabled for this server (from config)"
+            else
+                DNS_SERVERS="any"
+                echo "  📌 DNS monitoring set to external traffic only (from config)"
+            fi
         else
-            DNS_SERVERS="any"
-            echo "  📌 DNS monitoring set to external traffic only (server is not hosting DNS zones)"
+            echo "Will you be running an authoritative DNS server (BIND9, etc.) on this server? [y/N]"
+            echo "  Note: This is for hosting DNS zones, not DNS resolution (Unbound resolver is already configured)"
+            read -r dns_services
+            if [[ $dns_services =~ ^[Yy]$ ]]; then
+                echo "  📌 DNS server monitoring enabled for this server"
+            else
+                DNS_SERVERS="any"
+                echo "  📌 DNS monitoring set to external traffic only (server is not hosting DNS zones)"
+            fi
         fi
-        
+
         echo ""
-        echo "Will you be running a mail server (Postfix, Exim, etc.) on this server? [y/N]"
-        echo "  Note: This is for receiving/hosting mail, not sending system notifications (SMTP relay is configured separately)"
-        read -r mail_services
-        if [[ $mail_services =~ ^[Yy]$ ]]; then
-            echo "  📌 Mail server monitoring enabled for this server"
+        # Check for mail services
+        if [ -n "${SURICATA_MONITOR_MAIL:-}" ]; then
+            if [ "${SURICATA_MONITOR_MAIL}" = "true" ]; then
+                echo "  📌 Mail server monitoring enabled for this server (from config)"
+            else
+                MAIL_SERVERS="any"
+                echo "  📌 Mail monitoring set to external traffic only (from config)"
+            fi
         else
-            MAIL_SERVERS="any"
-            echo "  📌 Mail monitoring set to external traffic only (server is not hosting mail services)"
+            echo "Will you be running a mail server (Postfix, Exim, etc.) on this server? [y/N]"
+            echo "  Note: This is for receiving/hosting mail, not sending system notifications (SMTP relay is configured separately)"
+            read -r mail_services
+            if [[ $mail_services =~ ^[Yy]$ ]]; then
+                echo "  📌 Mail server monitoring enabled for this server"
+            else
+                MAIL_SERVERS="any"
+                echo "  📌 Mail monitoring set to external traffic only (server is not hosting mail services)"
+            fi
         fi
-        
+
         echo ""
-        echo "Will you be running FTP services on this server? [y/N]"
-        read -r ftp_services
-        if [[ $ftp_services =~ ^[Yy]$ ]]; then
-            echo "  📌 FTP monitoring enabled for this server"
+        # Check for FTP services
+        if [ -n "${SURICATA_MONITOR_FTP:-}" ]; then
+            if [ "${SURICATA_MONITOR_FTP}" = "true" ]; then
+                echo "  📌 FTP monitoring enabled for this server (from config)"
+            else
+                FTP_SERVERS="any"
+                echo "  📌 FTP monitoring set to external traffic only (from config)"
+            fi
         else
-            FTP_SERVERS="any"
-            echo "  📌 FTP monitoring set to external traffic only"
+            echo "Will you be running FTP services on this server? [y/N]"
+            read -r ftp_services
+            if [[ $ftp_services =~ ^[Yy]$ ]]; then
+                echo "  📌 FTP monitoring enabled for this server"
+            else
+                FTP_SERVERS="any"
+                echo "  📌 FTP monitoring set to external traffic only"
+            fi
         fi
     else
         echo "  📌 Testing mode: Using default service configurations"
