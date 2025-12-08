@@ -6654,7 +6654,7 @@ DOCKER_EOF
                     # Test Docker installation
                     if docker version >/dev/null 2>&1; then
                         echo "✅ Docker installed and configured with security optimizations"
-                        docker version | head -20
+                        docker version
                     else
                         echo "❌ Docker installation failed"
                     fi
