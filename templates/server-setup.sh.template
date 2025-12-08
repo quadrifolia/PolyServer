@@ -6597,26 +6597,20 @@ if [ -n "$INSTALL_COMPONENTS" ]; then
                     mkdir -p /etc/docker
                     cat > /etc/docker/daemon.json << 'DOCKER_EOF'
 {
-    "log-driver": "journald",
+    "log-driver": "json-file",
     "log-opts": {
         "max-size": "100m",
         "max-file": "3"
     },
     "storage-driver": "overlay2",
     "userland-proxy": false,
-    "no-new-privileges": true,
     "live-restore": true,
     "default-ulimits": {
         "nofile": {
             "hard": 100000,
             "soft": 100000
-        },
-        "memlock": {
-            "hard": -1,
-            "soft": -1
         }
     },
-    "security-opts": ["no-new-privileges:true"],
     "icc": false,
     "default-address-pools": [
         {
@@ -6626,26 +6620,20 @@ if [ -n "$INSTALL_COMPONENTS" ]; then
     ]
 }
 DOCKER_EOF
-                    
-                    # Create secure Docker service drop-in
+
+                    # Create secure Docker service drop-in (with Docker-compatible hardening)
                     mkdir -p /etc/systemd/system/docker.service.d
                     cat > /etc/systemd/system/docker.service.d/security.conf << 'DOCKER_EOF'
 [Service]
-# Security hardening
-NoNewPrivileges=true
+# Security hardening (Docker-compatible settings only)
 ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
 RestrictRealtime=true
-RestrictSUIDSGID=true
-MemoryDenyWriteExecute=true
-RestrictNamespaces=true
 
 # Resource limits
 LimitNOFILE=1048576
 LimitNPROC=1048576
 
-# OOM handling
+# OOM handling - allow Docker to be killed first under memory pressure
 OOMScoreAdjust=100
 DOCKER_EOF
                     
