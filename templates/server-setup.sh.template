@@ -786,9 +786,8 @@ if [ "$DOCKER_MODE" = "false" ]; then
 # Network and Protocol
 Port $SSH_PORT
 Protocol 2
-AddressFamily any
+AddressFamily inet
 ListenAddress 0.0.0.0
-ListenAddress ::
 
 # Host Keys (prefer Ed25519, fallback to RSA)
 HostKey /etc/ssh/ssh_host_ed25519_key
@@ -6414,6 +6413,10 @@ StartLimitBurst=5
 # Highest priority and OOM protection for SSH access
 OOMScoreAdjust=-300
 Nice=-8
+
+# Ensure privilege separation directory exists
+RuntimeDirectory=sshd
+RuntimeDirectoryMode=0755
 
 # NO filesystem protection on SSH service - allows normal system administration
 # ProtectSystem causes read-only filesystem issues that break apt, installations, and system management
