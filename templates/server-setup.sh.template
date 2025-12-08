@@ -4474,6 +4474,49 @@ EOF
     echo "✅ Netdata monitoring installed and configured"
     echo "   • Local access: http://127.0.0.1:19999 (via SSH tunnel)"
     echo "   • Quick access command: netdata-access"
+
+    # Configure Nginx monitoring if Nginx is installed
+    if [ "${INSTALL_NGINX,,}" = "true" ]; then
+        echo "Configuring Netdata Nginx monitoring..."
+
+        # Create Nginx stub_status endpoint for Netdata
+        cat > /etc/nginx/conf.d/netdata-stub-status.conf << 'EOF'
+# Netdata monitoring endpoint
+# This provides metrics for Netdata without exposing them publicly
+server {
+    listen 127.0.0.1:8888;
+    server_name localhost;
+
+    location /stub_status {
+        stub_status on;
+        access_log off;
+        allow 127.0.0.1;
+        deny all;
+    }
+}
+EOF
+
+        # Configure Netdata to monitor Nginx
+        mkdir -p /etc/netdata/go.d
+        cat > /etc/netdata/go.d/nginx.conf << 'EOF'
+jobs:
+  - name: local
+    url: http://127.0.0.1:8888/stub_status
+EOF
+
+        # Test and reload Nginx
+        if nginx -t >/dev/null 2>&1; then
+            systemctl reload nginx
+            echo "✅ Netdata Nginx monitoring configured"
+        else
+            echo "⚠️  Nginx configuration test failed, removing netdata stub_status"
+            rm -f /etc/nginx/conf.d/netdata-stub-status.conf
+        fi
+
+        # Restart Netdata to apply changes
+        systemctl restart netdata
+    fi
+
 elif [ "$DOCKER_MODE" = "false" ] && [ "$NETDATA_ENABLED" != "true" ]; then
     echo "📊 Netdata monitoring disabled (NETDATA_ENABLED=false)"
     echo "   To enable: Set NETDATA_ENABLED=true in your configuration"
