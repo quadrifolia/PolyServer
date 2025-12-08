@@ -79,12 +79,16 @@ if [ ! -f "$ENV_FILE" ]; then
     exit 1
 fi
 
+# Save command-line values before sourcing env file
+CLI_SSH_USER="$SSH_USER"
+CLI_SSH_PORT="$SSH_PORT"
+
 # Load environment variables
 source "$ENV_FILE"
 
-# Set defaults from env file if not specified
-SSH_USER="${SSH_USER:-${DEPLOY_USER:-deploy}}"
-SSH_PORT="${SSH_PORT:-${SSH_PORT:-22}}"
+# Set defaults: command-line > env file > defaults
+SSH_USER="${CLI_SSH_USER:-${DEPLOY_USER:-deploy}}"
+SSH_PORT="${CLI_SSH_PORT:-${SSH_PORT:-22}}"
 
 # Validate required parameters
 if [ -z "$SSH_HOST" ]; then
