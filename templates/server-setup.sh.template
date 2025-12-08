@@ -5835,6 +5835,9 @@ if command -v aa-status >/dev/null 2>&1; then
   /bin/** PUx,
   /usr/sbin/sshd mr,
 
+  # Allow sshd to execute sshd-session (Debian 13 / OpenSSH 9.x requirement)
+  /usr/lib/openssh/sshd-session PUx,
+
   /var/log/auth.log w,
   /var/log/btmp w,
   /var/log/lastlog rw,
