@@ -5346,39 +5346,29 @@ echo "===== 13. Optional DSGVO/GDPR Compliance Setup ====="
 if [ "${GDPR_ENABLED,,}" = "true" ]; then
     echo "Setting up DSGVO/GDPR compliance framework..."
 
-    # Create DSGVO directory
-    mkdir -p /etc/dsgvo
+    # Check if setup-dsgvo.sh script is available
+    if [ -f "/opt/polyserver/scripts/setup-dsgvo.sh" ]; then
+        echo "Running DSGVO setup script..."
+        cd /opt/polyserver/scripts
+        # Run non-interactively
+        bash setup-dsgvo.sh << EOF
+y
+EOF
+        echo "✅ GDPR/DSGVO compliance framework installed"
+        log_message "GDPR/DSGVO compliance framework installed via setup-dsgvo.sh"
 
-    # Check if DSGVO files were deployed via generate-configs.sh
-    CURRENT_DIR=$(dirname "${BASH_SOURCE[0]}")
-    if [ -d "$CURRENT_DIR/dsgvo" ]; then
-        echo "Installing GDPR/DSGVO compliance documentation..."
-
-        # Copy all DSGVO files to /etc/dsgvo
-        cp -r "$CURRENT_DIR/dsgvo"/* /etc/dsgvo/
-
-        # Set appropriate permissions
-        chmod 755 /etc/dsgvo
-        chmod 644 /etc/dsgvo/*.conf /etc/dsgvo/*.json /etc/dsgvo/*.md 2>/dev/null || true
-
-        # Make editable files writable by root only
-        chmod 600 /etc/dsgvo/contacts.conf /etc/dsgvo/data_inventory.json 2>/dev/null || true
-
-        echo "✅ GDPR/DSGVO documentation installed to /etc/dsgvo/"
-        log_message "GDPR/DSGVO compliance files installed"
-    elif [ -d "/opt/polyserver/config/dsgvo" ]; then
-        # Fallback: check in deployment directory
-        echo "Installing GDPR/DSGVO compliance documentation from deployment directory..."
-        cp -r /opt/polyserver/config/dsgvo/* /etc/dsgvo/
-        chmod 755 /etc/dsgvo
-        chmod 644 /etc/dsgvo/*.conf /etc/dsgvo/*.json /etc/dsgvo/*.md 2>/dev/null || true
-        chmod 600 /etc/dsgvo/contacts.conf /etc/dsgvo/data_inventory.json 2>/dev/null || true
-        echo "✅ GDPR/DSGVO documentation installed to /etc/dsgvo/"
-        log_message "GDPR/DSGVO compliance files installed"
+        # Make scripts accessible via PATH
+        echo "Creating symlinks for DSGVO commands..."
+        ln -sf /opt/polyserver/scripts/dsgvo-compliance-check.sh /usr/local/bin/dsgvo-compliance-check 2>/dev/null || true
+        ln -sf /opt/polyserver/scripts/data-subject-request.sh /usr/local/bin/data-subject-request 2>/dev/null || true
+        ln -sf /opt/polyserver/scripts/breach-response-checklist.sh /usr/local/bin/breach-response 2>/dev/null || true
+        ln -sf /opt/polyserver/scripts/collect-forensics.sh /usr/local/bin/collect-forensics 2>/dev/null || true
+        echo "✅ DSGVO commands added to PATH"
     else
-        echo "⚠️  DSGVO files not found. Generate them with:"
-        echo "    GDPR_ENABLED=true ./scripts/generate-configs.sh"
-        log_message "WARNING: GDPR enabled but DSGVO files not found"
+        echo "⚠️  DSGVO setup script not found"
+        echo "Deploy DSGVO files with:"
+        echo "    GDPR_ENABLED=true ./scripts/deploy-unified.sh --host <server>"
+        log_message "WARNING: GDPR enabled but setup-dsgvo.sh not found"
     fi
 else
     echo "GDPR/DSGVO compliance setup skipped (GDPR_ENABLED=false)"

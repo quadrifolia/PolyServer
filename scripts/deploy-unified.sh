@@ -207,11 +207,27 @@ if [ -d "$CONFIG_DIR/unbound" ] && [ "${UNBOUND_ENABLED:-false}" = "true" ]; the
     echo -e "${GREEN}✓ Unbound configurations deployed${NC}"
 fi
 
-# Copy DSGVO/GDPR documentation (if enabled)
-if [ -d "$CONFIG_DIR/dsgvo" ] && [ "${GDPR_ENABLED:-false}" = "true" ]; then
-    echo "Copying GDPR/DSGVO compliance documentation..."
-    $SCP_CMD -r "$CONFIG_DIR/dsgvo" "$SSH_USER@$SSH_HOST:${DEPLOY_DIR:-/opt/polyserver}/config/"
-    echo -e "${GREEN}✓ GDPR/DSGVO documentation deployed${NC}"
+# Copy DSGVO/GDPR templates and scripts (if enabled)
+if [ "${GDPR_ENABLED:-false}" = "true" ]; then
+    echo "Copying GDPR/DSGVO compliance files..."
+
+    # Create templates directory on server
+    $SSH_CMD "$SSH_USER@$SSH_HOST" "mkdir -p ${DEPLOY_DIR:-/opt/polyserver}/templates/dsgvo"
+
+    # Copy DSGVO templates
+    if [ -d "${SCRIPT_DIR}/../templates/dsgvo" ]; then
+        $SCP_CMD -r "${SCRIPT_DIR}/../templates/dsgvo"/* "$SSH_USER@$SSH_HOST:${DEPLOY_DIR:-/opt/polyserver}/templates/dsgvo/"
+        echo -e "${GREEN}✓ DSGVO templates deployed${NC}"
+    fi
+
+    # Copy DSGVO scripts
+    echo "Copying DSGVO compliance scripts..."
+    for script in setup-dsgvo.sh dsgvo-compliance-check.sh data-subject-request.sh breach-response-checklist.sh collect-forensics.sh; do
+        if [ -f "${SCRIPT_DIR}/$script" ]; then
+            $SCP_CMD "${SCRIPT_DIR}/$script" "$SSH_USER@$SSH_HOST:${DEPLOY_DIR:-/opt/polyserver}/scripts/"
+            echo -e "${GREEN}✓ $script deployed${NC}"
+        fi
+    done
 fi
 
 echo ""
