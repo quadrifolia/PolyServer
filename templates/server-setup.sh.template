@@ -7800,6 +7800,26 @@ else
     log_message "⚠️  Full audit rules not found, using minimal rules"
 fi
 
+# Install server helper script
+echo "===== 17.1 Installing Server Helper ====="
+CURRENT_DIR=$(dirname "${BASH_SOURCE[0]}")
+if [ -f "$CURRENT_DIR/scripts/server-helper.sh" ]; then
+    echo "Installing server helper script..."
+    cp "$CURRENT_DIR/scripts/server-helper.sh" /opt/polyserver/scripts/
+    chmod +x /opt/polyserver/scripts/server-helper.sh
+
+    # Create symlink for easy access
+    ln -sf /opt/polyserver/scripts/server-helper.sh /usr/local/bin/helper
+    ln -sf /opt/polyserver/scripts/server-helper.sh /usr/local/bin/server-help
+
+    echo "✅ Server helper installed"
+    echo "   Usage: Type 'helper' or 'server-help' for quick access to server commands"
+    log_message "Server helper script installed"
+else
+    echo "⚠️  Server helper script not found, skipping"
+    log_message "WARNING: Server helper script not found"
+fi
+
 echo "===== 18. Setup complete! ====="
 log_message "Server setup completed successfully"
 

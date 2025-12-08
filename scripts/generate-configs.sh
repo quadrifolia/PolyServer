@@ -162,6 +162,12 @@ if [ -f "${TEMPLATE_DIR}/scripts/s3backup.sh.template" ]; then
   chmod +x "${OUTPUT_DIR}/scripts/s3backup.sh"
 fi
 
+# Generate server helper script
+if [ -f "${TEMPLATE_DIR}/scripts/server-helper.sh.template" ]; then
+  render_template "${TEMPLATE_DIR}/scripts/server-helper.sh.template" "${OUTPUT_DIR}/scripts/server-helper.sh"
+  chmod +x "${OUTPUT_DIR}/scripts/server-helper.sh"
+fi
+
 # Generate server setup script from template
 if [ -f "${TEMPLATE_DIR}/server-setup.sh.template" ]; then
   render_template "${TEMPLATE_DIR}/server-setup.sh.template" "${OUTPUT_DIR}/server-setup.sh"
