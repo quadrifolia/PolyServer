@@ -3374,6 +3374,17 @@ EOF
     chmod 644 /etc/nginx/conf.d/security.conf
     chmod 644 /etc/nginx/conf.d/proxy_params
 
+    # Copy default index.html if available
+    if [ -f "/opt/polyserver/config/www/html/index.html" ]; then
+        echo "Installing default index.html..."
+        mkdir -p /var/www/html
+        cp /opt/polyserver/config/www/html/index.html /var/www/html/index.html
+        chown {{USERNAME}}:{{USERNAME}} /var/www/html
+        chown {{USERNAME}}:{{USERNAME}} /var/www/html/index.html
+        chmod 644 /var/www/html/index.html
+        echo "✅ Default index.html installed to /var/www/html/"
+    fi
+
     echo "✅ Nginx security configuration installed"
 else
     echo "⏭️  Skipping Nginx security configuration (INSTALL_NGINX=false)"
