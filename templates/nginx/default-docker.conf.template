@@ -37,23 +37,9 @@ server {
 
     # Main application proxy
     location / {
-        # Try to proxy to the main application container
         proxy_pass http://backend;
-        
-        # Include proxy parameters
         include /etc/nginx/conf.d/proxy_params;
-        
-        # Specific proxy settings
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        
-        # WebSocket support
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        
+
         # Caching for static assets (if served by app)
         location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
             proxy_pass http://backend;
@@ -75,16 +61,10 @@ server {
     # API endpoints with specific rate limiting
     location /api/ {
         limit_req zone=api_limit burst=30 nodelay;
-        
+
         proxy_pass http://backend;
         include /etc/nginx/conf.d/proxy_params;
-        
-        # API-specific settings
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        
+
         # Disable caching for API calls
         proxy_cache off;
         add_header Cache-Control "no-cache, no-store, must-revalidate";
@@ -93,15 +73,9 @@ server {
     # Authentication endpoints with stricter rate limiting
     location ~ ^/(login|logout|register|auth|signin|signup)$ {
         limit_req zone=login_limit burst=5 nodelay;
-        
+
         proxy_pass http://backend;
         include /etc/nginx/conf.d/proxy_params;
-        
-        # Security for auth endpoints
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
     }
 
     # Error pages
@@ -163,16 +137,6 @@ server {
 #     location / {
 #         proxy_pass http://backend;
 #         include /etc/nginx/conf.d/proxy_params;
-#         
-#         proxy_set_header Host $host;
-#         proxy_set_header X-Real-IP $remote_addr;
-#         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-#         proxy_set_header X-Forwarded-Proto $scheme;
-#         
-#         # WebSocket support
-#         proxy_http_version 1.1;
-#         proxy_set_header Upgrade $http_upgrade;
-#         proxy_set_header Connection "upgrade";
 #     }
 #
 #     # API endpoints
