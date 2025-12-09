@@ -92,6 +92,37 @@ http {
     send_timeout 10;
 
     ##
+    # Security Maps
+    ##
+    # Hide nginx version
+    server_tokens off;
+
+    # Block common vulnerability scanners and bad user agents
+    map $http_user_agent $block_user_agent {
+        default 0;
+        ~*(nikto|sqlmap|fimap|nessus|openvas|nmap|masscan|zmap|zap|burp|netsparker|acunetix|appscan|webscarab|w3af|skipfish|wapiti|whatweb|gobuster|dirb|dirbuster|ffuf|feroxbuster|nuclei|httpx|subfinder) 1;
+        "~^$" 1; # Empty user agent
+    }
+
+    # Block suspicious referrers
+    map $http_referer $block_referrer {
+        default 0;
+        ~*(babes|click|diamond|forsale|girl|jewelry|love|nudit|organic|poker|porn|sex|teen|video|webcam|zippo) 1;
+    }
+
+    # Block SQL injection attempts in query strings
+    map $args $block_sql_injection {
+        default 0;
+        ~*(union|select|insert|delete|update|drop|create|alter|exec|execute|script|javascript|vbscript) 1;
+    }
+
+    # Block suspicious query strings
+    map $args $block_suspicious_args {
+        default 0;
+        ~*(\.\./|<script|GLOBALS|globals|javascript:|vbscript:|onload|onerror|onclick) 1;
+    }
+
+    ##
     # Virtual Host Configs
     ##
     include /etc/nginx/conf.d/*.conf;
