@@ -32,15 +32,8 @@ server {
         deny all;
     }
 
-    # Block access to hidden files
-    location ~ /\. {
-        access_log off;
-        log_not_found off;
-        deny all;
-    }
-
-    # Security configuration include
-    include /etc/nginx/conf.d/security.conf;
+    # Security configuration include (map-based blocks and location rules)
+    include /etc/nginx/snippets/security-locations.conf;
 
     # Main application proxy
     location / {
@@ -163,15 +156,8 @@ server {
 #         add_header Content-Type text/plain;
 #     }
 #
-#     # Block access to hidden files
-#     location ~ /\. {
-#         access_log off;
-#         log_not_found off;
-#         deny all;
-#     }
-#
-#     # Security configuration include
-#     include /etc/nginx/conf.d/security.conf;
+#     # Security configuration include (map-based blocks and location rules)
+#     include /etc/nginx/snippets/security-locations.conf;
 #
 #     # Main application proxy (same as HTTP config)
 #     location / {
