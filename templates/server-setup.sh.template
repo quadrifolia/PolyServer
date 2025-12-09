@@ -3213,10 +3213,57 @@ fi
 
 # Install comprehensive nginx security configuration (only if nginx is installed)
 if [ "$INSTALL_NGINX" = "true" ]; then
-    echo "===== 10.2.1 Installing Nginx Security Configuration ====="
+    echo "===== 10.2.1 Installing Nginx Configuration Files ====="
 
-    # Create HTTP-level security configuration (if-based rules)
-    cat > /etc/nginx/conf.d/security.conf << 'EOF'
+    # Install generated nginx configs from deployed config directory
+    if [ -d "/opt/polyserver/config/nginx" ]; then
+        echo "Installing generated nginx configurations..."
+
+        # Backup existing nginx.conf
+        if [ -f "/etc/nginx/nginx.conf" ]; then
+            cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.backup-$(date +%Y%m%d-%H%M%S)
+            echo "✅ Backed up existing nginx.conf"
+        fi
+
+        # Install main nginx.conf
+        if [ -f "/opt/polyserver/config/nginx/nginx.conf" ]; then
+            cp /opt/polyserver/config/nginx/nginx.conf /etc/nginx/nginx.conf
+            echo "✅ Installed nginx.conf from template"
+        fi
+
+        # Backup and install default site config
+        if [ -f "/etc/nginx/sites-enabled/default" ]; then
+            cp /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/default.backup-$(date +%Y%m%d-%H%M%S)
+            echo "✅ Backed up existing default site"
+        fi
+
+        if [ -f "/opt/polyserver/config/nginx/conf.d/default.conf" ]; then
+            # Disable Debian default site
+            rm -f /etc/nginx/sites-enabled/default
+            # Install our default config
+            cp /opt/polyserver/config/nginx/conf.d/default.conf /etc/nginx/conf.d/default.conf
+            echo "✅ Installed default.conf from template"
+        fi
+
+        # Install proxy params if exists
+        if [ -f "/opt/polyserver/config/nginx/conf.d/proxy_params" ]; then
+            cp /opt/polyserver/config/nginx/conf.d/proxy_params /etc/nginx/conf.d/proxy_params
+            echo "✅ Installed proxy_params from template"
+        fi
+
+        # Check if template security.conf exists
+        SECURITY_CONF_INSTALLED=false
+        if [ -f "/opt/polyserver/config/nginx/conf.d/security.conf" ]; then
+            cp /opt/polyserver/config/nginx/conf.d/security.conf /etc/nginx/conf.d/security.conf
+            echo "✅ Installed security.conf from template"
+            SECURITY_CONF_INSTALLED=true
+        fi
+    fi
+
+    # Create inline security configuration if not installed from template
+    if [ "${SECURITY_CONF_INSTALLED:-false}" = "false" ]; then
+        echo "Creating inline security configuration..."
+        cat > /etc/nginx/conf.d/security.conf << 'EOF'
 # Nginx Security Configuration - HTTP Level Rules
 # These rules work at the http{} level (no location blocks allowed here)
 # For location-based rules, include /etc/nginx/snippets/security-locations.conf in your server blocks
@@ -3245,6 +3292,7 @@ map $args $block_suspicious_args {
     ~*(\.\./|<script|GLOBALS|globals|javascript:|vbscript:|onload|onerror|onclick) 1;
 }
 EOF
+    fi
 
     # Create location-based security rules as a snippet
     mkdir -p /etc/nginx/snippets
@@ -3385,7 +3433,22 @@ EOF
         echo "✅ Default index.html installed to /var/www/html/"
     fi
 
-    echo "✅ Nginx security configuration installed"
+    # Test and reload nginx configuration
+    echo "Testing nginx configuration..."
+    if nginx -t; then
+        systemctl reload nginx
+        echo "✅ Nginx configuration reloaded successfully"
+    else
+        echo "⚠️  Nginx configuration test failed - please check /var/log/nginx/error.log"
+        echo "⚠️  Restoring backup configurations..."
+        if [ -f "/etc/nginx/nginx.conf.backup-"* ]; then
+            LATEST_BACKUP=$(ls -t /etc/nginx/nginx.conf.backup-* | head -1)
+            cp "$LATEST_BACKUP" /etc/nginx/nginx.conf
+            echo "✅ Restored nginx.conf from backup"
+        fi
+    fi
+
+    echo "✅ Nginx configuration installed and tested"
 else
     echo "⏭️  Skipping Nginx security configuration (INSTALL_NGINX=false)"
 fi
