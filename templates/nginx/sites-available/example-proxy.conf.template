@@ -1,21 +1,27 @@
-# Docker Mode Nginx configuration for PolyServer
-# Reverse proxy to containerized applications
+# Example Application Proxy Configuration
+# This file demonstrates how to configure nginx as a reverse proxy
+# Copy this file and customize it for your application
+#
+# To enable: sudo ln -s /etc/nginx/sites-available/your-app.conf /etc/nginx/sites-enabled/
+# To disable: sudo rm /etc/nginx/sites-enabled/your-app.conf
 
 server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name _;
+    listen 80;
+    listen [::]:80;
+    server_name {{APPLICATION_DOMAIN}};
 
     # Security headers
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-XSS-Protection "1; mode=block" always;
     add_header Referrer-Policy "no-referrer-when-downgrade" always;
-    add_header X-Robots-Tag "noindex, noarchive, nofollow" always;
 
-    # Rate limiting
+    # Rate limiting (general)
     limit_req zone=general_limit burst=20 nodelay;
     limit_req_status 429;
+
+    # Security configuration (blocks malicious requests)
+    include /etc/nginx/snippets/security-locations.conf;
 
     # Health check endpoint (served by nginx directly)
     location /health {
@@ -32,9 +38,6 @@ server {
         deny all;
     }
 
-    # Security configuration include (map-based blocks and location rules)
-    include /etc/nginx/snippets/security-locations.conf;
-
     # Main application proxy
     location / {
         proxy_pass http://backend;
@@ -44,14 +47,14 @@ server {
         location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
             proxy_pass http://backend;
             include /etc/nginx/conf.d/proxy_params;
-            
+
             # Cache static assets
             proxy_cache app_cache;
             proxy_cache_valid 200 1h;
             proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
             proxy_cache_revalidate on;
             proxy_cache_lock on;
-            
+
             # Add cache headers
             add_header X-Cache-Status $upstream_cache_status;
             expires 1h;
@@ -80,13 +83,12 @@ server {
 
     # Error pages
     error_page 404 /404.html;
-    error_page 500 502 503 504 /50x.html;
-    
     location = /404.html {
         root /var/www/html;
         internal;
     }
-    
+
+    error_page 500 502 503 504 /50x.html;
     location = /50x.html {
         root /var/www/html;
         internal;
@@ -95,18 +97,18 @@ server {
 
 # HTTPS configuration (uncomment when SSL certificate is available)
 # server {
-#     listen 443 ssl http2 default_server;
-#     listen [::]:443 ssl http2 default_server;
-#     server_name {{BASE_DOMAIN}};
+#     listen 443 ssl http2;
+#     listen [::]:443 ssl http2;
+#     server_name {{APPLICATION_DOMAIN}};
 #
 #     # SSL configuration
-#     ssl_certificate /etc/letsencrypt/live/{{BASE_DOMAIN}}/fullchain.pem;
-#     ssl_certificate_key /etc/letsencrypt/live/{{BASE_DOMAIN}}/privkey.pem;
+#     ssl_certificate /etc/letsencrypt/live/{{APPLICATION_DOMAIN}}/fullchain.pem;
+#     ssl_certificate_key /etc/letsencrypt/live/{{APPLICATION_DOMAIN}}/privkey.pem;
 #     ssl_session_timeout 1d;
 #     ssl_session_cache shared:SSL:50m;
 #     ssl_session_tickets off;
 #
-#     # Modern configuration
+#     # Modern SSL configuration
 #     ssl_protocols TLSv1.2 TLSv1.3;
 #     ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
 #     ssl_prefer_server_ciphers off;
@@ -123,15 +125,15 @@ server {
 #     # Rate limiting
 #     limit_req zone=general_limit burst=20 nodelay;
 #
+#     # Security configuration
+#     include /etc/nginx/snippets/security-locations.conf;
+#
 #     # Health check endpoint
 #     location /health {
 #         access_log off;
 #         return 200 "OK\n";
 #         add_header Content-Type text/plain;
 #     }
-#
-#     # Security configuration include (map-based blocks and location rules)
-#     include /etc/nginx/snippets/security-locations.conf;
 #
 #     # Main application proxy (same as HTTP config)
 #     location / {
@@ -151,5 +153,18 @@ server {
 #         limit_req zone=login_limit burst=5 nodelay;
 #         proxy_pass http://backend;
 #         include /etc/nginx/conf.d/proxy_params;
+#     }
+#
+#     # Error pages
+#     error_page 404 /404.html;
+#     location = /404.html {
+#         root /var/www/html;
+#         internal;
+#     }
+#
+#     error_page 500 502 503 504 /50x.html;
+#     location = /50x.html {
+#         root /var/www/html;
+#         internal;
 #     }
 # }

@@ -3245,195 +3245,63 @@ if [ "$INSTALL_NGINX" = "true" ]; then
             echo "✅ Disabled Debian default site"
         fi
 
-        if [ -f "/opt/polyserver/config/nginx/conf.d/default.conf" ]; then
-            # Install our default config
-            cp /opt/polyserver/config/nginx/conf.d/default.conf /etc/nginx/conf.d/default.conf
-            echo "✅ Installed default.conf from template"
+        # Install sites-available configurations
+        if [ -f "/opt/polyserver/config/nginx/sites-available/default" ]; then
+            mkdir -p /etc/nginx/sites-available
+            mkdir -p /etc/nginx/sites-enabled
+            cp /opt/polyserver/config/nginx/sites-available/default /etc/nginx/sites-available/default
+
+            # Enable default site
+            ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
+            echo "✅ Installed and enabled default site"
+        fi
+
+        # Install example proxy site (not enabled by default)
+        if [ -f "/opt/polyserver/config/nginx/sites-available/example-proxy.conf" ]; then
+            cp /opt/polyserver/config/nginx/sites-available/example-proxy.conf /etc/nginx/sites-available/example-proxy.conf
+            echo "✅ Installed example-proxy.conf (not enabled - see sites-available/)"
         fi
 
         # Install proxy params if exists
         if [ -f "/opt/polyserver/config/nginx/conf.d/proxy_params" ]; then
             cp /opt/polyserver/config/nginx/conf.d/proxy_params /etc/nginx/conf.d/proxy_params
-            echo "✅ Installed proxy_params from template"
-        fi
-
-        # Check if template security.conf exists
-        SECURITY_CONF_INSTALLED=false
-        if [ -f "/opt/polyserver/config/nginx/conf.d/security.conf" ]; then
-            cp /opt/polyserver/config/nginx/conf.d/security.conf /etc/nginx/conf.d/security.conf
-            echo "✅ Installed security.conf from template"
-            SECURITY_CONF_INSTALLED=true
+            chmod 644 /etc/nginx/conf.d/proxy_params
+            echo "✅ Installed proxy_params"
         fi
 
         # Install security-locations snippet if exists
         if [ -f "/opt/polyserver/config/nginx/snippets/security-locations.conf" ]; then
             mkdir -p /etc/nginx/snippets
             cp /opt/polyserver/config/nginx/snippets/security-locations.conf /etc/nginx/snippets/security-locations.conf
+            chmod 644 /etc/nginx/snippets/security-locations.conf
             echo "✅ Installed security-locations.conf snippet"
         fi
     fi
 
-    # Create inline security configuration if not installed from template
-    if [ "${SECURITY_CONF_INSTALLED:-false}" = "false" ]; then
-        echo "Creating inline security configuration..."
-        cat > /etc/nginx/conf.d/security.conf << 'EOF'
-# Nginx Security Configuration - HTTP Level Rules
-# These rules work at the http{} level (no location blocks allowed here)
-# For location-based rules, include /etc/nginx/snippets/security-locations.conf in your server blocks
-
-# Block common vulnerability scanners and bad user agents
-map $http_user_agent $block_user_agent {
-    default 0;
-    ~*(nikto|sqlmap|fimap|nessus|openvas|nmap|masscan|zmap|zap|burp|netsparker|acunetix|appscan|webscarab|w3af|skipfish|wapiti|whatweb|gobuster|dirb|dirbuster|ffuf|feroxbuster|nuclei|httpx|subfinder) 1;
-}
-
-# Block suspicious referrers
-map $http_referer $block_referrer {
-    default 0;
-    ~*(babes|click|diamond|forsale|girl|jewelry|love|nudit|organic|poker|porn|sex|teen|video|webcam|zippo) 1;
-}
-
-# Block SQL injection attempts in query strings
-map $args $block_sql_injection {
-    default 0;
-    ~*(union|select|insert|delete|update|drop|create|alter|exec|execute|script|javascript|vbscript) 1;
-}
-
-# Block suspicious query strings
-map $args $block_suspicious_args {
-    default 0;
-    ~*(\.\./|<script|GLOBALS|globals|javascript:|vbscript:|onload|onerror|onclick) 1;
-}
-EOF
+    # Install www HTML files (index, error pages)
+    if [ -f "/opt/polyserver/config/www/html/index.html" ]; then
+        echo "Installing HTML files..."
+        mkdir -p /var/www/html
+        cp /opt/polyserver/config/www/html/index.html /var/www/html/index.html
+        chown {{USERNAME}}:{{USERNAME}} /var/www/html 2>/dev/null || chown www-data:www-data /var/www/html
+        chown {{USERNAME}}:{{USERNAME}} /var/www/html/index.html 2>/dev/null || chown www-data:www-data /var/www/html/index.html
+        chmod 644 /var/www/html/index.html
+        echo "✅ Default index.html installed to /var/www/html/"
     fi
 
-    # Create location-based security rules as a snippet
-    mkdir -p /etc/nginx/snippets
-    cat > /etc/nginx/snippets/security-locations.conf << 'EOF'
-# Security Location Blocks - Include this file in your server {} blocks
-# Usage: include /etc/nginx/snippets/security-locations.conf;
+    if [ -f "/opt/polyserver/config/www/html/404.html" ]; then
+        cp /opt/polyserver/config/www/html/404.html /var/www/html/404.html
+        chown {{USERNAME}}:{{USERNAME}} /var/www/html/404.html 2>/dev/null || chown www-data:www-data /var/www/html/404.html
+        chmod 644 /var/www/html/404.html
+        echo "✅ 404.html installed to /var/www/html/"
+    fi
 
-# Block based on maps from security.conf
-if ($block_user_agent) {
-    return 444;
-}
-
-if ($block_referrer) {
-    return 444;
-}
-
-if ($block_sql_injection) {
-    return 444;
-}
-
-if ($block_suspicious_args) {
-    return 444;
-}
-
-# Block empty user agents
-if ($http_user_agent ~ ^$) {
-    return 444;
-}
-
-# Block access to hidden files (.git, .env, .htaccess, etc.)
-location ~ /\. {
-    deny all;
-    access_log off;
-    log_not_found off;
-}
-
-# Allow Let's Encrypt ACME challenge (exception to hidden files rule)
-location ~ ^/(\.well-known/acme-challenge/)(.*)$ {
-    allow all;
-}
-
-# Block access to common sensitive files
-location ~* \.(env|git|gitignore|gitmodules|htaccess|htpasswd|ini|log|sh|sql|conf|config|bak|backup|swp|tmp)$ {
-    deny all;
-    access_log off;
-    log_not_found off;
-}
-
-# Block access to README and documentation files
-location ~* ^/(readme|README|changelog|CHANGELOG|license|LICENSE|install|INSTALL|upgrade|UPGRADE|todo|TODO).*$ {
-    deny all;
-    access_log off;
-    log_not_found off;
-}
-
-# Block access to common admin paths (application-agnostic protection)
-location ~* ^/(admin|administrator|wp-admin|wp-login|wp-config|wp-content|wp-includes|wp-json|xmlrpc|phpmyadmin|pma|mysql|adminer|cpanel|plesk|webmail|roundcube|squirrelmail)(.*)$ {
-    return 444;
-    access_log off;
-}
-
-# Block access to common CMS and framework paths
-location ~* ^/(drupal|joomla|wordpress|magento|prestashop|opencart|typo3|concrete5|modx|craft|laravel|symfony|codeigniter|cakephp|zend|yii)(.*)$ {
-    return 444;
-    access_log off;
-}
-
-# Block access to common development/testing paths
-location ~* ^/(test|tests|testing|dev|development|staging|demo|backup|backups|old|new|temp|tmp|cache|logs|vendor|node_modules|bower_components)(.*)$ {
-    return 444;
-    access_log off;
-}
-
-# Block access to common exploit paths
-location ~* ^/(shell|webshell|c99|c100|r57|r99|backdoor|hack|hacked|exploit|virus|trojan|worm|bot|zombie|scanner|scan|probe|brute|force|attack)(.*)$ {
-    return 444;
-    access_log off;
-}
-
-# Block requests for non-existent scripts that are commonly probed
-location ~* \.(asp|aspx|jsp|cgi|pl|py|rb|php3|php4|php5|phtml|shtml)$ {
-    return 444;
-    access_log off;
-}
-EOF
-
-    echo "✅ Created /etc/nginx/snippets/security-locations.conf"
-    echo "   Include this file in server blocks for location-based security rules"
-
-    # Create proxy parameters file for reusable proxy settings
-    cat > /etc/nginx/conf.d/proxy_params << 'EOF'
-# Common proxy parameters for applications
-# This file contains reusable proxy settings
-
-# Timeout settings
-proxy_connect_timeout 90s;
-proxy_send_timeout 240s;
-proxy_read_timeout 240s;
-
-# Use HTTP/1.1 for proxying
-proxy_http_version 1.1;
-
-# Enable WebSockets support
-proxy_set_header Upgrade $http_upgrade;
-proxy_set_header Connection "upgrade";
-
-# Pass important headers for proper operation
-proxy_set_header Host $http_host;
-proxy_set_header X-Real-IP $remote_addr;
-proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-proxy_set_header X-Forwarded-Proto $scheme;
-proxy_set_header X-Forwarded-Host $http_host;
-proxy_set_header X-Forwarded-Port $server_port;
-
-# Performance optimizations
-proxy_buffering off;
-proxy_request_buffering off;
-proxy_cache_bypass $http_upgrade;
-proxy_redirect off;
-
-# Security settings
-proxy_hide_header X-Powered-By;
-proxy_hide_header Server;
-EOF
-
-    # Set proper permissions
-    chmod 644 /etc/nginx/conf.d/security.conf
-    chmod 644 /etc/nginx/conf.d/proxy_params
+    if [ -f "/opt/polyserver/config/www/html/50x.html" ]; then
+        cp /opt/polyserver/config/www/html/50x.html /var/www/html/50x.html
+        chown {{USERNAME}}:{{USERNAME}} /var/www/html/50x.html 2>/dev/null || chown www-data:www-data /var/www/html/50x.html
+        chmod 644 /var/www/html/50x.html
+        echo "✅ 50x.html installed to /var/www/html/"
+    fi
 
     # Copy default index.html if available
     if [ -f "/opt/polyserver/config/www/html/index.html" ]; then

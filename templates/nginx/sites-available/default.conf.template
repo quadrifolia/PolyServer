@@ -1,10 +1,15 @@
-# Default Nginx configuration for PolyServer
-# This provides a basic setup that can be extended for specific applications
+# Default site configuration for PolyServer
+# This is a minimal, secure default server
+# For application proxy configurations, see example-proxy.conf
 
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
     server_name _;
+
+    # Root directory for default pages
+    root /var/www/html;
+    index index.html index.htm;
 
     # Security headers
     add_header X-Frame-Options "SAMEORIGIN" always;
@@ -13,27 +18,17 @@ server {
     add_header Referrer-Policy "no-referrer-when-downgrade" always;
     add_header X-Robots-Tag "noindex, noarchive, nofollow" always;
 
-    # Basic rate limiting
-    limit_req zone=general_limit burst=10 nodelay;
-    limit_req_status 429;
+    # Security configuration (blocks malicious requests)
+    include /etc/nginx/snippets/security-locations.conf;
 
-    # Default root directory
-    root /var/www/html;
-    index index.html index.htm;
-
-    # Default location block
-    location / {
-        try_files $uri $uri/ =404;
-    }
-
-    # Health check endpoint
+    # Health check endpoint (for monitoring)
     location /health {
         access_log off;
         return 200 "OK\n";
         add_header Content-Type text/plain;
     }
 
-    # Nginx status endpoint (for Netdata monitoring)
+    # Nginx status endpoint (localhost only)
     location /nginx-status {
         stub_status;
         access_log off;
@@ -41,29 +36,31 @@ server {
         deny all;
     }
 
-    # Security location rules (blocking, rate limiting, etc.)
-    include /etc/nginx/snippets/security-locations.conf;
+    # Default location - serve static files
+    location / {
+        try_files $uri $uri/ =404;
+    }
 
     # Error pages
     error_page 404 /404.html;
-    error_page 500 502 503 504 /50x.html;
-    
     location = /404.html {
-        root /var/www/html;
         internal;
     }
-    
+
+    error_page 500 502 503 504 /50x.html;
     location = /50x.html {
-        root /var/www/html;
         internal;
     }
 }
 
-# HTTPS redirect (uncomment when SSL certificate is available)
+# HTTPS configuration (uncomment when SSL certificate is available)
 # server {
 #     listen 443 ssl http2 default_server;
 #     listen [::]:443 ssl http2 default_server;
 #     server_name {{BASE_DOMAIN}};
+#
+#     root /var/www/html;
+#     index index.html index.htm;
 #
 #     # SSL configuration
 #     ssl_certificate /etc/letsencrypt/live/{{BASE_DOMAIN}}/fullchain.pem;
@@ -72,7 +69,7 @@ server {
 #     ssl_session_cache shared:SSL:50m;
 #     ssl_session_tickets off;
 #
-#     # Modern configuration
+#     # Modern SSL configuration
 #     ssl_protocols TLSv1.2 TLSv1.3;
 #     ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
 #     ssl_prefer_server_ciphers off;
@@ -86,24 +83,29 @@ server {
 #     add_header X-XSS-Protection "1; mode=block" always;
 #     add_header Referrer-Policy "no-referrer-when-downgrade" always;
 #
-#     # Rate limiting
-#     limit_req zone=general_limit burst=10 nodelay;
+#     # Security configuration
+#     include /etc/nginx/snippets/security-locations.conf;
 #
-#     root /var/www/html;
-#     index index.html index.htm;
+#     # Health check
+#     location /health {
+#         access_log off;
+#         return 200 "OK\n";
+#         add_header Content-Type text/plain;
+#     }
 #
+#     # Default location
 #     location / {
 #         try_files $uri $uri/ =404;
 #     }
 #
-#     # Nginx status endpoint (for Netdata monitoring)
-#     location /nginx-status {
-#         stub_status;
-#         access_log off;
-#         allow 127.0.0.1;
-#         deny all;
+#     # Error pages
+#     error_page 404 /404.html;
+#     location = /404.html {
+#         internal;
 #     }
 #
-#     # Security location rules
-#     include /etc/nginx/snippets/security-locations.conf;
+#     error_page 500 502 503 504 /50x.html;
+#     location = /50x.html {
+#         internal;
+#     }
 # }
