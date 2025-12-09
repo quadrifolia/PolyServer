@@ -140,6 +140,12 @@ if [ -f "${TEMPLATE_DIR}/nginx/security.conf.template" ]; then
   render_template "${TEMPLATE_DIR}/nginx/security.conf.template" "${OUTPUT_DIR}/nginx/conf.d/security.conf"
 fi
 
+# Generate nginx security locations snippet
+if [ -f "${TEMPLATE_DIR}/nginx/security-locations.conf.template" ]; then
+  mkdir -p "${OUTPUT_DIR}/nginx/snippets"
+  render_template "${TEMPLATE_DIR}/nginx/security-locations.conf.template" "${OUTPUT_DIR}/nginx/snippets/security-locations.conf"
+fi
+
 # Generate nginx proxy parameters
 if [ -f "${TEMPLATE_DIR}/nginx/proxy_params.template" ]; then
   render_template "${TEMPLATE_DIR}/nginx/proxy_params.template" "${OUTPUT_DIR}/nginx/conf.d/proxy_params"

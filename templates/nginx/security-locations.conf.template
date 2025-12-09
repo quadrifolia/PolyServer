@@ -1,0 +1,74 @@
+# Nginx Security Location Blocks - Server Context
+# Include this file in your server {} blocks:
+# include /etc/nginx/snippets/security-locations.conf;
+
+# Block requests based on maps from security.conf
+if ($block_user_agent) {
+    return 444;
+}
+
+if ($block_referrer) {
+    return 444;
+}
+
+if ($block_sql_injection) {
+    return 444;
+}
+
+if ($block_suspicious_args) {
+    return 444;
+}
+
+# Uncomment if using Host header blocking
+# if ($block_invalid_host) {
+#     return 444;
+# }
+
+# Block access to hidden files (.git, .env, .htaccess, etc.)
+location ~ /\. {
+    log_not_found off;
+    deny all;
+}
+
+# Allow Let's Encrypt ACME challenge (exception to hidden files rule)
+location ~ ^/(\.well-known/acme-challenge/)(.*)$ {
+    allow all;
+}
+
+# Block access to sensitive file extensions
+location ~* \.(env|git|gitignore|gitmodules|htaccess|htpasswd|ini|log|sh|sql|conf|config|bak|backup|swp|tmp)$ {
+    log_not_found off;
+    deny all;
+}
+
+# Block access to README and documentation files
+location ~* ^/(readme|README|changelog|CHANGELOG|license|LICENSE|install|INSTALL|upgrade|UPGRADE|todo|TODO).*$ {
+    log_not_found off;
+    deny all;
+}
+
+# Block common admin/CMS paths
+location ~* ^/(admin|administrator|wp-admin|wp-login|wp-config|phpmyadmin|pma|cpanel|webmail)(.*)$ {
+    return 444;
+}
+
+# Block common development/testing paths
+location ~* ^/(test|tests|dev|development|staging|backup|backups|old|temp|tmp|vendor|node_modules)(.*)$ {
+    return 444;
+}
+
+# Block common exploit paths
+location ~* ^/(shell|webshell|backdoor|hack|exploit)(.*)$ {
+    return 444;
+}
+
+# Rate limiting for static assets
+location ~* \.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+    limit_req zone=static_limit burst=100 nodelay;
+    limit_req_status 429;
+
+    # Cache static assets
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+    add_header X-Content-Type-Options "nosniff" always;
+}

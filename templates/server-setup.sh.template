@@ -3219,11 +3219,19 @@ if [ "$INSTALL_NGINX" = "true" ]; then
     if [ -d "/opt/polyserver/config/nginx" ]; then
         echo "Installing generated nginx configurations..."
 
-        # Backup existing nginx.conf
-        if [ -f "/etc/nginx/nginx.conf" ]; then
-            cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.backup-$(date +%Y%m%d-%H%M%S)
-            echo "✅ Backed up existing nginx.conf"
-        fi
+        # Create complete nginx snapshot backup
+        BACKUP_DIR="/etc/nginx/backups/snapshot-$(date +%Y%m%d-%H%M%S)"
+        mkdir -p "$BACKUP_DIR"
+
+        echo "Creating complete nginx configuration snapshot..."
+        cp /etc/nginx/nginx.conf "$BACKUP_DIR/" 2>/dev/null || true
+        cp -r /etc/nginx/sites-available "$BACKUP_DIR/" 2>/dev/null || true
+        cp -r /etc/nginx/sites-enabled "$BACKUP_DIR/" 2>/dev/null || true
+        cp -r /etc/nginx/conf.d "$BACKUP_DIR/" 2>/dev/null || true
+        cp -r /etc/nginx/snippets "$BACKUP_DIR/" 2>/dev/null || true
+
+        echo "✅ Complete nginx state backed up to $BACKUP_DIR"
+        echo "   To restore: sudo cp -r $BACKUP_DIR/* /etc/nginx/ && sudo systemctl reload nginx"
 
         # Install main nginx.conf
         if [ -f "/opt/polyserver/config/nginx/nginx.conf" ]; then
@@ -3231,15 +3239,13 @@ if [ "$INSTALL_NGINX" = "true" ]; then
             echo "✅ Installed nginx.conf from template"
         fi
 
-        # Backup and install default site config
+        # Disable Debian default site
         if [ -f "/etc/nginx/sites-enabled/default" ]; then
-            cp /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/default.backup-$(date +%Y%m%d-%H%M%S)
-            echo "✅ Backed up existing default site"
+            rm -f /etc/nginx/sites-enabled/default
+            echo "✅ Disabled Debian default site"
         fi
 
         if [ -f "/opt/polyserver/config/nginx/conf.d/default.conf" ]; then
-            # Disable Debian default site
-            rm -f /etc/nginx/sites-enabled/default
             # Install our default config
             cp /opt/polyserver/config/nginx/conf.d/default.conf /etc/nginx/conf.d/default.conf
             echo "✅ Installed default.conf from template"
@@ -3257,6 +3263,13 @@ if [ "$INSTALL_NGINX" = "true" ]; then
             cp /opt/polyserver/config/nginx/conf.d/security.conf /etc/nginx/conf.d/security.conf
             echo "✅ Installed security.conf from template"
             SECURITY_CONF_INSTALLED=true
+        fi
+
+        # Install security-locations snippet if exists
+        if [ -f "/opt/polyserver/config/nginx/snippets/security-locations.conf" ]; then
+            mkdir -p /etc/nginx/snippets
+            cp /opt/polyserver/config/nginx/snippets/security-locations.conf /etc/nginx/snippets/security-locations.conf
+            echo "✅ Installed security-locations.conf snippet"
         fi
     fi
 
@@ -3440,11 +3453,19 @@ EOF
         echo "✅ Nginx configuration reloaded successfully"
     else
         echo "⚠️  Nginx configuration test failed - please check /var/log/nginx/error.log"
-        echo "⚠️  Restoring backup configurations..."
-        if [ -f "/etc/nginx/nginx.conf.backup-"* ]; then
-            LATEST_BACKUP=$(ls -t /etc/nginx/nginx.conf.backup-* | head -1)
-            cp "$LATEST_BACKUP" /etc/nginx/nginx.conf
-            echo "✅ Restored nginx.conf from backup"
+        echo "⚠️  Restoring complete nginx configuration from backup..."
+        if [ -n "$BACKUP_DIR" ] && [ -d "$BACKUP_DIR" ]; then
+            cp -r "$BACKUP_DIR"/* /etc/nginx/
+            echo "✅ Restored complete nginx configuration from $BACKUP_DIR"
+            nginx -t && systemctl reload nginx
+        else
+            # Find the most recent snapshot
+            LATEST_SNAPSHOT=$(ls -td /etc/nginx/backups/snapshot-* 2>/dev/null | head -1)
+            if [ -n "$LATEST_SNAPSHOT" ]; then
+                cp -r "$LATEST_SNAPSHOT"/* /etc/nginx/
+                echo "✅ Restored complete nginx configuration from $LATEST_SNAPSHOT"
+                nginx -t && systemctl reload nginx
+            fi
         fi
     fi
 

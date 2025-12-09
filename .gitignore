@@ -40,3 +40,4 @@ fix-postfix.sh
 fix-aide.sh
 fix-audit-rules.sh
 disable-smt.sh
+fix-nginx-config.sh

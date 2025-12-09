@@ -41,15 +41,8 @@ server {
         deny all;
     }
 
-    # Block access to hidden files
-    location ~ /\. {
-        access_log off;
-        log_not_found off;
-        deny all;
-    }
-
-    # Security configuration include
-    include /etc/nginx/conf.d/security.conf;
+    # Security location rules (blocking, rate limiting, etc.)
+    include /etc/nginx/snippets/security-locations.conf;
 
     # Error pages
     error_page 404 /404.html;
@@ -111,6 +104,6 @@ server {
 #         deny all;
 #     }
 #
-#     # Include security configuration
-#     include /etc/nginx/conf.d/security.conf;
+#     # Security location rules
+#     include /etc/nginx/snippets/security-locations.conf;
 # }
