@@ -30,7 +30,6 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 
 # Create output directories
-mkdir -p "${OUTPUT_DIR}/nginx/conf.d"
 mkdir -p "${OUTPUT_DIR}/scripts"
 mkdir -p "${OUTPUT_DIR}/unbound"
 
@@ -110,55 +109,59 @@ render_template() {
 # Applications should generate their own systemd services
 # Skipping systemd service generation for base server deployment
 
-# Generate base nginx configurations
-mkdir -p "${OUTPUT_DIR}/nginx/conf.d"
-mkdir -p "${OUTPUT_DIR}/nginx/sites-available"
-mkdir -p "${OUTPUT_DIR}/nginx/snippets"
+# Generate nginx configurations (only if INSTALL_NGINX is enabled)
+if _is_truthy "${INSTALL_NGINX:-true}"; then
+  mkdir -p "${OUTPUT_DIR}/nginx/conf.d"
+  mkdir -p "${OUTPUT_DIR}/nginx/sites-available"
+  mkdir -p "${OUTPUT_DIR}/nginx/snippets"
 
-# Generate main nginx configuration based on deployment mode
-if [ "$DEPLOYMENT_MODE" = "docker" ]; then
-  if [ -f "${TEMPLATE_DIR}/nginx/nginx-docker.conf.template" ]; then
-    render_template "${TEMPLATE_DIR}/nginx/nginx-docker.conf.template" "${OUTPUT_DIR}/nginx/nginx.conf"
+  # Generate main nginx configuration based on deployment mode
+  if [ "$DEPLOYMENT_MODE" = "docker" ]; then
+    if [ -f "${TEMPLATE_DIR}/nginx/nginx-docker.conf.template" ]; then
+      render_template "${TEMPLATE_DIR}/nginx/nginx-docker.conf.template" "${OUTPUT_DIR}/nginx/nginx.conf"
+    fi
+  else
+    # Bare metal mode
+    if [ -f "${TEMPLATE_DIR}/nginx/nginx-baremetal.conf.template" ]; then
+      render_template "${TEMPLATE_DIR}/nginx/nginx-baremetal.conf.template" "${OUTPUT_DIR}/nginx/nginx.conf"
+    fi
+  fi
+
+  # Generate sites-available configurations
+  if [ -f "${TEMPLATE_DIR}/nginx/sites-available/default.conf.template" ]; then
+    render_template "${TEMPLATE_DIR}/nginx/sites-available/default.conf.template" "${OUTPUT_DIR}/nginx/sites-available/default"
+  fi
+
+  if [ -f "${TEMPLATE_DIR}/nginx/sites-available/example-proxy.conf.template" ]; then
+    render_template "${TEMPLATE_DIR}/nginx/sites-available/example-proxy.conf.template" "${OUTPUT_DIR}/nginx/sites-available/example-proxy.conf"
+  fi
+
+  # Generate nginx security locations snippet
+  if [ -f "${TEMPLATE_DIR}/nginx/security-locations.conf.template" ]; then
+    render_template "${TEMPLATE_DIR}/nginx/security-locations.conf.template" "${OUTPUT_DIR}/nginx/snippets/security-locations.conf"
+  fi
+
+  # Generate nginx proxy parameters
+  if [ -f "${TEMPLATE_DIR}/nginx/proxy_params.template" ]; then
+    render_template "${TEMPLATE_DIR}/nginx/proxy_params.template" "${OUTPUT_DIR}/nginx/conf.d/proxy_params"
+  fi
+
+  # Generate www HTML files
+  mkdir -p "${OUTPUT_DIR}/www/html"
+
+  if [ -f "${TEMPLATE_DIR}/www/html/index.html.template" ]; then
+    render_template "${TEMPLATE_DIR}/www/html/index.html.template" "${OUTPUT_DIR}/www/html/index.html"
+  fi
+
+  if [ -f "${TEMPLATE_DIR}/www/html/404.html.template" ]; then
+    render_template "${TEMPLATE_DIR}/www/html/404.html.template" "${OUTPUT_DIR}/www/html/404.html"
+  fi
+
+  if [ -f "${TEMPLATE_DIR}/www/html/50x.html.template" ]; then
+    render_template "${TEMPLATE_DIR}/www/html/50x.html.template" "${OUTPUT_DIR}/www/html/50x.html"
   fi
 else
-  # Bare metal mode
-  if [ -f "${TEMPLATE_DIR}/nginx/nginx-baremetal.conf.template" ]; then
-    render_template "${TEMPLATE_DIR}/nginx/nginx-baremetal.conf.template" "${OUTPUT_DIR}/nginx/nginx.conf"
-  fi
-fi
-
-# Generate sites-available configurations
-if [ -f "${TEMPLATE_DIR}/nginx/sites-available/default.conf.template" ]; then
-  render_template "${TEMPLATE_DIR}/nginx/sites-available/default.conf.template" "${OUTPUT_DIR}/nginx/sites-available/default"
-fi
-
-if [ -f "${TEMPLATE_DIR}/nginx/sites-available/example-proxy.conf.template" ]; then
-  render_template "${TEMPLATE_DIR}/nginx/sites-available/example-proxy.conf.template" "${OUTPUT_DIR}/nginx/sites-available/example-proxy.conf"
-fi
-
-# Generate nginx security locations snippet
-if [ -f "${TEMPLATE_DIR}/nginx/security-locations.conf.template" ]; then
-  render_template "${TEMPLATE_DIR}/nginx/security-locations.conf.template" "${OUTPUT_DIR}/nginx/snippets/security-locations.conf"
-fi
-
-# Generate nginx proxy parameters
-if [ -f "${TEMPLATE_DIR}/nginx/proxy_params.template" ]; then
-  render_template "${TEMPLATE_DIR}/nginx/proxy_params.template" "${OUTPUT_DIR}/nginx/conf.d/proxy_params"
-fi
-
-# Generate www HTML files
-mkdir -p "${OUTPUT_DIR}/www/html"
-
-if [ -f "${TEMPLATE_DIR}/www/html/index.html.template" ]; then
-  render_template "${TEMPLATE_DIR}/www/html/index.html.template" "${OUTPUT_DIR}/www/html/index.html"
-fi
-
-if [ -f "${TEMPLATE_DIR}/www/html/404.html.template" ]; then
-  render_template "${TEMPLATE_DIR}/www/html/404.html.template" "${OUTPUT_DIR}/www/html/404.html"
-fi
-
-if [ -f "${TEMPLATE_DIR}/www/html/50x.html.template" ]; then
-  render_template "${TEMPLATE_DIR}/www/html/50x.html.template" "${OUTPUT_DIR}/www/html/50x.html"
+  echo "Skipping nginx configuration generation (INSTALL_NGINX=${INSTALL_NGINX:-false})"
 fi
 
 # Generate backup scripts
