@@ -3376,66 +3376,71 @@ if [ "$INSTALL_PHP" = "true" ]; then
     if [ -d "/opt/polyserver/config/php" ]; then
         echo "Installing PHP configurations..."
 
-        # Create PHP log directory
-        mkdir -p /var/log/php
-        chown www-data:www-data /var/log/php
-        chmod 755 /var/log/php
+        # Check if PHP 8.4 is installed
+        if [ -d "/etc/php/8.4" ] && getent passwd www-data >/dev/null 2>&1; then
+            # Create PHP log directory
+            mkdir -p /var/log/php
+            chown www-data:www-data /var/log/php
+            chmod 755 /var/log/php
 
-        # Install PHP CLI configuration
-        if [ -f "/opt/polyserver/config/php/cli/conf.d/99-polyserver.ini" ]; then
-            cp /opt/polyserver/config/php/cli/conf.d/99-polyserver.ini /etc/php/8.4/cli/conf.d/99-polyserver.ini
-            echo "✅ PHP CLI configuration installed"
-        fi
-
-        # Install PHP FPM configuration
-        if [ -f "/opt/polyserver/config/php/fpm/conf.d/99-polyserver.ini" ]; then
-            cp /opt/polyserver/config/php/fpm/conf.d/99-polyserver.ini /etc/php/8.4/fpm/conf.d/99-polyserver.ini
-            echo "✅ PHP FPM configuration installed"
-        fi
-
-        # Install security configuration
-        if [ -f "/opt/polyserver/config/php/mods-available/99-security.ini" ]; then
-            cp /opt/polyserver/config/php/mods-available/99-security.ini /etc/php/8.4/mods-available/99-security.ini
-            # Enable the security module (only if PHP is already installed)
-            if command -v phpenmod >/dev/null 2>&1; then
-                phpenmod 99-security
-                echo "✅ PHP security configuration installed and enabled"
-            else
-                echo "✅ PHP security configuration installed (will be enabled after PHP installation)"
+            # Install PHP CLI configuration
+            if [ -f "/opt/polyserver/config/php/cli/conf.d/99-polyserver.ini" ]; then
+                cp /opt/polyserver/config/php/cli/conf.d/99-polyserver.ini /etc/php/8.4/cli/conf.d/99-polyserver.ini
+                echo "✅ PHP CLI configuration installed"
             fi
-        fi
 
-        # Install FPM pool configurations
-        if [ -f "/opt/polyserver/config/php/fpm/pool.d/www.conf" ]; then
-            cp /opt/polyserver/config/php/fpm/pool.d/www.conf /etc/php/8.4/fpm/pool.d/www.conf
-            echo "✅ PHP-FPM www pool configuration installed"
-        fi
+            # Install PHP FPM configuration
+            if [ -f "/opt/polyserver/config/php/fpm/conf.d/99-polyserver.ini" ]; then
+                cp /opt/polyserver/config/php/fpm/conf.d/99-polyserver.ini /etc/php/8.4/fpm/conf.d/99-polyserver.ini
+                echo "✅ PHP FPM configuration installed"
+            fi
 
-        if [ -f "/opt/polyserver/config/php/fpm/pool.d/security.conf" ]; then
-            cp /opt/polyserver/config/php/fpm/pool.d/security.conf /etc/php/8.4/fpm/pool.d/security.conf
-            echo "✅ PHP-FPM security pool configuration installed"
-        fi
+            # Install security configuration
+            if [ -f "/opt/polyserver/config/php/mods-available/99-security.ini" ]; then
+                cp /opt/polyserver/config/php/mods-available/99-security.ini /etc/php/8.4/mods-available/99-security.ini
+                # Enable the security module (only if PHP is already installed)
+                if command -v phpenmod >/dev/null 2>&1; then
+                    phpenmod 99-security
+                    echo "✅ PHP security configuration installed and enabled"
+                else
+                    echo "✅ PHP security configuration installed (will be enabled after PHP installation)"
+                fi
+            fi
 
-        # Install Xdebug configuration if dev tools are enabled
-        if [ "$INSTALL_PHP_DEV_TOOLS" = "true" ] && [ -f "/opt/polyserver/config/php/mods-available/xdebug.ini" ]; then
-            cp /opt/polyserver/config/php/mods-available/xdebug.ini /etc/php/8.4/mods-available/xdebug.ini
-            echo "✅ Xdebug configuration installed (disabled by default - enable with: phpenmod xdebug)"
-        fi
+            # Install FPM pool configurations
+            if [ -f "/opt/polyserver/config/php/fpm/pool.d/www.conf" ]; then
+                cp /opt/polyserver/config/php/fpm/pool.d/www.conf /etc/php/8.4/fpm/pool.d/www.conf
+                echo "✅ PHP-FPM www pool configuration installed"
+            fi
 
-        # Update PHP-FPM with resource-optimized settings (only if PHP is installed)
-        if command -v php-fpm8.4 >/dev/null 2>&1; then
-            update_php_fpm_config
+            if [ -f "/opt/polyserver/config/php/fpm/pool.d/security.conf" ]; then
+                cp /opt/polyserver/config/php/fpm/pool.d/security.conf /etc/php/8.4/fpm/pool.d/security.conf
+                echo "✅ PHP-FPM security pool configuration installed"
+            fi
 
-            # Test and reload PHP-FPM
-            echo "Testing PHP-FPM configuration..."
-            if php-fpm8.4 -t; then
-                systemctl reload php8.4-fpm
-                echo "✅ PHP-FPM configuration reloaded successfully"
+            # Install Xdebug configuration if dev tools are enabled
+            if [ "$INSTALL_PHP_DEV_TOOLS" = "true" ] && [ -f "/opt/polyserver/config/php/mods-available/xdebug.ini" ]; then
+                cp /opt/polyserver/config/php/mods-available/xdebug.ini /etc/php/8.4/mods-available/xdebug.ini
+                echo "✅ Xdebug configuration installed (disabled by default - enable with: phpenmod xdebug)"
+            fi
+
+            # Update PHP-FPM with resource-optimized settings (only if PHP is installed)
+            if command -v php-fpm8.4 >/dev/null 2>&1; then
+                update_php_fpm_config
+
+                # Test and reload PHP-FPM
+                echo "Testing PHP-FPM configuration..."
+                if php-fpm8.4 -t; then
+                    systemctl reload php8.4-fpm
+                    echo "✅ PHP-FPM configuration reloaded successfully"
+                else
+                    echo "⚠️  PHP-FPM configuration test failed"
+                fi
             else
-                echo "⚠️  PHP-FPM configuration test failed"
+                echo "ℹ️  PHP-FPM will use new configuration after installation"
             fi
         else
-            echo "ℹ️  PHP-FPM will use new configuration after installation"
+            echo "ℹ️  PHP not installed yet - configuration will be installed during PHP setup"
         fi
     else
         echo "⚠️  PHP config directory not found at /opt/polyserver/config/php"
@@ -3451,23 +3456,28 @@ if [ "$INSTALL_MARIADB" = "true" ]; then
     if [ -d "/opt/polyserver/config/mariadb" ]; then
         echo "Installing MariaDB configurations..."
 
-        # Backup existing configuration
-        if [ -f "/etc/mysql/mariadb.conf.d/50-server.cnf" ]; then
-            cp /etc/mysql/mariadb.conf.d/50-server.cnf "/etc/mysql/mariadb.conf.d/50-server.cnf.backup-$(date +%Y%m%d-%H%M%S)"
-        fi
-
-        # Install MariaDB configuration
-        if [ -f "/opt/polyserver/config/mariadb/conf.d/50-server.cnf" ]; then
-            cp /opt/polyserver/config/mariadb/conf.d/50-server.cnf /etc/mysql/mariadb.conf.d/50-server.cnf
-            echo "✅ MariaDB configuration installed"
-
-            # Restart MariaDB to apply changes (only if already installed)
-            if systemctl is-active --quiet mariadb 2>/dev/null; then
-                systemctl restart mariadb
-                echo "✅ MariaDB restarted with new configuration"
-            else
-                echo "ℹ️  MariaDB will use new configuration after installation"
+        # Check if MariaDB config directory exists
+        if [ -d "/etc/mysql/mariadb.conf.d" ]; then
+            # Backup existing configuration
+            if [ -f "/etc/mysql/mariadb.conf.d/50-server.cnf" ]; then
+                cp /etc/mysql/mariadb.conf.d/50-server.cnf "/etc/mysql/mariadb.conf.d/50-server.cnf.backup-$(date +%Y%m%d-%H%M%S)"
             fi
+
+            # Install MariaDB configuration
+            if [ -f "/opt/polyserver/config/mariadb/conf.d/50-server.cnf" ]; then
+                cp /opt/polyserver/config/mariadb/conf.d/50-server.cnf /etc/mysql/mariadb.conf.d/50-server.cnf
+                echo "✅ MariaDB configuration installed"
+
+                # Restart MariaDB to apply changes (only if already installed)
+                if systemctl is-active --quiet mariadb 2>/dev/null; then
+                    systemctl restart mariadb
+                    echo "✅ MariaDB restarted with new configuration"
+                else
+                    echo "ℹ️  MariaDB will use new configuration after installation"
+                fi
+            fi
+        else
+            echo "ℹ️  MariaDB not installed yet - configuration will be installed during MariaDB setup"
         fi
     else
         echo "⚠️  MariaDB config directory not found at /opt/polyserver/config/mariadb"
@@ -3483,7 +3493,12 @@ if [ "$INSTALL_POSTGRESQL" = "true" ]; then
     if [ -d "/opt/polyserver/config/postgresql" ]; then
         echo "Installing PostgreSQL configurations..."
 
-        PG_VERSION=$(find /etc/postgresql -maxdepth 1 -mindepth 1 -type d -printf '%f\n' 2>/dev/null | head -1)
+        # Check if PostgreSQL is installed first
+        if [ -d "/etc/postgresql" ]; then
+            PG_VERSION=$(find /etc/postgresql -maxdepth 1 -mindepth 1 -type d -printf '%f\n' 2>/dev/null | head -1 || true)
+        else
+            PG_VERSION=""
+        fi
 
         if [ -n "$PG_VERSION" ]; then
             # Backup existing configurations
@@ -3530,25 +3545,30 @@ if [ "$INSTALL_REDIS" = "true" ]; then
     if [ -d "/opt/polyserver/config/redis" ]; then
         echo "Installing Redis configurations..."
 
-        # Backup existing configuration
-        if [ -f "/etc/redis/redis.conf" ]; then
-            cp /etc/redis/redis.conf "/etc/redis/redis.conf.backup-$(date +%Y%m%d-%H%M%S)"
-        fi
-
-        # Install Redis configuration
-        if [ -f "/opt/polyserver/config/redis/redis.conf" ]; then
-            cp /opt/polyserver/config/redis/redis.conf /etc/redis/redis.conf
-            chown redis:redis /etc/redis/redis.conf
-            chmod 640 /etc/redis/redis.conf
-            echo "✅ Redis configuration installed"
-
-            # Restart Redis to apply changes (only if already installed)
-            if systemctl is-active --quiet redis-server 2>/dev/null; then
-                systemctl restart redis-server
-                echo "✅ Redis restarted with new configuration"
-            else
-                echo "ℹ️  Redis will use new configuration after installation"
+        # Check if Redis config directory exists
+        if [ -d "/etc/redis" ] && getent passwd redis >/dev/null 2>&1; then
+            # Backup existing configuration
+            if [ -f "/etc/redis/redis.conf" ]; then
+                cp /etc/redis/redis.conf "/etc/redis/redis.conf.backup-$(date +%Y%m%d-%H%M%S)"
             fi
+
+            # Install Redis configuration
+            if [ -f "/opt/polyserver/config/redis/redis.conf" ]; then
+                cp /opt/polyserver/config/redis/redis.conf /etc/redis/redis.conf
+                chown redis:redis /etc/redis/redis.conf
+                chmod 640 /etc/redis/redis.conf
+                echo "✅ Redis configuration installed"
+
+                # Restart Redis to apply changes (only if already installed)
+                if systemctl is-active --quiet redis-server 2>/dev/null; then
+                    systemctl restart redis-server
+                    echo "✅ Redis restarted with new configuration"
+                else
+                    echo "ℹ️  Redis will use new configuration after installation"
+                fi
+            fi
+        else
+            echo "ℹ️  Redis not installed yet - configuration will be installed during Redis setup"
         fi
     else
         echo "⚠️  Redis config directory not found at /opt/polyserver/config/redis"
