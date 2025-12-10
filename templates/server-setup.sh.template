@@ -660,6 +660,9 @@ create_rollback_point() {
     # Create encrypted backup if gpg is available
     if command -v gpg >/dev/null 2>&1; then
         local encrypted_file="${rollback_file}.gpg"
+
+        # Temporarily disable exit on error for backup creation
+        set +e
         tar -czf - \
             /etc/ssh \
             /etc/ufw \
@@ -667,10 +670,14 @@ create_rollback_point() {
             /etc/nginx \
             /etc/postfix \
             2>/dev/null | gpg --symmetric --cipher-algo AES256 --compress-algo 1 --batch --yes --passphrase "server-backup-$(hostname)-$timestamp" > "$encrypted_file" 2>/dev/null
-        
-        if [ -f "$encrypted_file" ]; then
+        local backup_result=$?
+        set -e
+
+        if [ $backup_result -eq 0 ] && [ -f "$encrypted_file" ] && [ -s "$encrypted_file" ]; then
             echo "$encrypted_file" > "${BACKUP_DIR}/latest-rollback"
             log_message "✅ Encrypted rollback point created: $checkpoint"
+        else
+            log_message "⚠️ Some files missing during encrypted rollback creation (non-critical)"
         fi
     else
         # Fallback to unencrypted backup
