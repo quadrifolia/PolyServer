@@ -3396,9 +3396,13 @@ if [ "$INSTALL_PHP" = "true" ]; then
         # Install security configuration
         if [ -f "/opt/polyserver/config/php/mods-available/99-security.ini" ]; then
             cp /opt/polyserver/config/php/mods-available/99-security.ini /etc/php/8.4/mods-available/99-security.ini
-            # Enable the security module
-            phpenmod 99-security
-            echo "✅ PHP security configuration installed and enabled"
+            # Enable the security module (only if PHP is already installed)
+            if command -v phpenmod >/dev/null 2>&1; then
+                phpenmod 99-security
+                echo "✅ PHP security configuration installed and enabled"
+            else
+                echo "✅ PHP security configuration installed (will be enabled after PHP installation)"
+            fi
         fi
 
         # Install FPM pool configurations
@@ -3418,16 +3422,20 @@ if [ "$INSTALL_PHP" = "true" ]; then
             echo "✅ Xdebug configuration installed (disabled by default - enable with: phpenmod xdebug)"
         fi
 
-        # Update PHP-FPM with resource-optimized settings
-        update_php_fpm_config
+        # Update PHP-FPM with resource-optimized settings (only if PHP is installed)
+        if command -v php-fpm8.4 >/dev/null 2>&1; then
+            update_php_fpm_config
 
-        # Test and reload PHP-FPM
-        echo "Testing PHP-FPM configuration..."
-        if php-fpm8.4 -t; then
-            systemctl reload php8.4-fpm
-            echo "✅ PHP-FPM configuration reloaded successfully"
+            # Test and reload PHP-FPM
+            echo "Testing PHP-FPM configuration..."
+            if php-fpm8.4 -t; then
+                systemctl reload php8.4-fpm
+                echo "✅ PHP-FPM configuration reloaded successfully"
+            else
+                echo "⚠️  PHP-FPM configuration test failed"
+            fi
         else
-            echo "⚠️  PHP-FPM configuration test failed"
+            echo "ℹ️  PHP-FPM will use new configuration after installation"
         fi
     else
         echo "⚠️  PHP config directory not found at /opt/polyserver/config/php"
@@ -3453,9 +3461,13 @@ if [ "$INSTALL_MARIADB" = "true" ]; then
             cp /opt/polyserver/config/mariadb/conf.d/50-server.cnf /etc/mysql/mariadb.conf.d/50-server.cnf
             echo "✅ MariaDB configuration installed"
 
-            # Restart MariaDB to apply changes
-            systemctl restart mariadb
-            echo "✅ MariaDB restarted with new configuration"
+            # Restart MariaDB to apply changes (only if already installed)
+            if systemctl is-active --quiet mariadb 2>/dev/null; then
+                systemctl restart mariadb
+                echo "✅ MariaDB restarted with new configuration"
+            else
+                echo "ℹ️  MariaDB will use new configuration after installation"
+            fi
         fi
     else
         echo "⚠️  MariaDB config directory not found at /opt/polyserver/config/mariadb"
@@ -3494,9 +3506,13 @@ if [ "$INSTALL_POSTGRESQL" = "true" ]; then
                 echo "✅ PostgreSQL HBA configuration installed"
             fi
 
-            # Restart PostgreSQL to apply changes
-            systemctl restart postgresql
-            echo "✅ PostgreSQL restarted with new configuration"
+            # Restart PostgreSQL to apply changes (only if already installed)
+            if systemctl is-active --quiet postgresql 2>/dev/null; then
+                systemctl restart postgresql
+                echo "✅ PostgreSQL restarted with new configuration"
+            else
+                echo "ℹ️  PostgreSQL will use new configuration after installation"
+            fi
         else
             echo "⚠️  PostgreSQL version not found in /etc/postgresql/"
         fi
@@ -3526,9 +3542,13 @@ if [ "$INSTALL_REDIS" = "true" ]; then
             chmod 640 /etc/redis/redis.conf
             echo "✅ Redis configuration installed"
 
-            # Restart Redis to apply changes
-            systemctl restart redis-server
-            echo "✅ Redis restarted with new configuration"
+            # Restart Redis to apply changes (only if already installed)
+            if systemctl is-active --quiet redis-server 2>/dev/null; then
+                systemctl restart redis-server
+                echo "✅ Redis restarted with new configuration"
+            else
+                echo "ℹ️  Redis will use new configuration after installation"
+            fi
         fi
     else
         echo "⚠️  Redis config directory not found at /opt/polyserver/config/redis"
