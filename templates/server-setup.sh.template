@@ -3233,18 +3233,18 @@ if [ "$INSTALL_NGINX" = "true" ]; then
         echo "Installing generated nginx configurations..."
 
         # Create complete nginx snapshot backup
-        BACKUP_DIR="/etc/nginx/backups/snapshot-$(date +%Y%m%d-%H%M%S)"
-        mkdir -p "$BACKUP_DIR"
+        NGINX_BACKUP_DIR="/etc/nginx/backups/snapshot-$(date +%Y%m%d-%H%M%S)"
+        mkdir -p "$NGINX_BACKUP_DIR"
 
         echo "Creating complete nginx configuration snapshot..."
-        cp /etc/nginx/nginx.conf "$BACKUP_DIR/" 2>/dev/null || true
-        cp -r /etc/nginx/sites-available "$BACKUP_DIR/" 2>/dev/null || true
-        cp -r /etc/nginx/sites-enabled "$BACKUP_DIR/" 2>/dev/null || true
-        cp -r /etc/nginx/conf.d "$BACKUP_DIR/" 2>/dev/null || true
-        cp -r /etc/nginx/snippets "$BACKUP_DIR/" 2>/dev/null || true
+        cp /etc/nginx/nginx.conf "$NGINX_BACKUP_DIR/" 2>/dev/null || true
+        cp -r /etc/nginx/sites-available "$NGINX_BACKUP_DIR/" 2>/dev/null || true
+        cp -r /etc/nginx/sites-enabled "$NGINX_BACKUP_DIR/" 2>/dev/null || true
+        cp -r /etc/nginx/conf.d "$NGINX_BACKUP_DIR/" 2>/dev/null || true
+        cp -r /etc/nginx/snippets "$NGINX_BACKUP_DIR/" 2>/dev/null || true
 
-        echo "✅ Complete nginx state backed up to $BACKUP_DIR"
-        echo "   To restore: sudo cp -r $BACKUP_DIR/* /etc/nginx/ && sudo systemctl reload nginx"
+        echo "✅ Complete nginx state backed up to $NGINX_BACKUP_DIR"
+        echo "   To restore: sudo cp -r $NGINX_BACKUP_DIR/* /etc/nginx/ && sudo systemctl reload nginx"
 
         # Install main nginx.conf
         if [ -f "/opt/polyserver/config/nginx/nginx.conf" ]; then
@@ -3335,9 +3335,9 @@ if [ "$INSTALL_NGINX" = "true" ]; then
     else
         echo "⚠️  Nginx configuration test failed - please check /var/log/nginx/error.log"
         echo "⚠️  Restoring complete nginx configuration from backup..."
-        if [ -n "$BACKUP_DIR" ] && [ -d "$BACKUP_DIR" ]; then
-            cp -r "$BACKUP_DIR"/* /etc/nginx/
-            echo "✅ Restored complete nginx configuration from $BACKUP_DIR"
+        if [ -n "$NGINX_BACKUP_DIR" ] && [ -d "$NGINX_BACKUP_DIR" ]; then
+            cp -r "$NGINX_BACKUP_DIR"/* /etc/nginx/
+            echo "✅ Restored complete nginx configuration from $NGINX_BACKUP_DIR"
             nginx -t && systemctl reload nginx
         else
             # Find the most recent snapshot (sorted by name, which works with YYYYMMDD-HHMMSS format)
