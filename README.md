@@ -1426,6 +1426,51 @@ INSTALL_GIT=true                # Git version control
   - Optional replication support
   - **Configuration templates**: See `templates/postgresql/` for optimized configs
 
+#### Database Configuration Architecture
+
+Both MariaDB and PostgreSQL use a **layered configuration approach** that combines template-based customization with automatic system-specific optimization:
+
+**Configuration Layers (loaded in order):**
+
+1. **Base Configuration** (from your templates)
+   - MariaDB: `50-server.cnf` (generated from `templates/mariadb/50-server.cnf.template`)
+   - PostgreSQL: `postgresql.conf` (generated from `templates/postgresql/postgresql.conf.template`)
+   - Contains your customized security settings, networking, logging, and feature flags
+
+2. **System-Specific Optimizations** (auto-generated during installation)
+   - MariaDB: `60-performance.cnf` (automatically created based on detected CPU/RAM)
+   - PostgreSQL: `conf.d/99-polyserver-optimization.conf` (automatically created)
+   - Overrides only performance-critical settings (buffer pools, connections, worker threads)
+   - Calculated based on: Total RAM, CPU cores, whether other databases are co-installed
+
+**Installation Process:**
+1. Package installation creates vendor defaults
+2. Vendor defaults backed up (`.backup-YYYYMMDD-HHMMSS` files)
+3. Your template-based configs installed from `/opt/polyserver/config/` (if deployed)
+4. System-specific optimization layer added on top
+5. Service started with layered configuration active
+
+**Benefits:**
+- **Customization**: Full control over base settings via templates (security, behavior, features)
+- **Optimization**: Automatic hardware-aware resource allocation
+- **Flexibility**: Optimizations override only performance settings, not your security/networking configs
+- **Safety**: All defaults backed up before any modifications
+
+**Example Resource Allocation (256GB RAM server with 32 CPU cores):**
+- **Primary database** (MariaDB only): ~75% RAM (193GB buffer pool)
+- **Secondary setup** (MariaDB + PostgreSQL): MariaDB gets ~75% (193GB), PostgreSQL gets ~20% (51GB)
+- **Worker threads**: Automatically scaled to CPU count (32 cores = 64-128 workers)
+- **Your settings preserved**: bind-address, security options, logging configs remain unchanged
+
+**Viewing Active Configuration:**
+```bash
+# MariaDB - see all loaded configs in order
+mysql -e "SHOW VARIABLES LIKE 'performance%';"
+
+# PostgreSQL - see effective configuration
+sudo -u postgres psql -c "SHOW ALL;" | grep shared_buffers
+```
+
 #### Database User Configuration for Private Networks
 
 Both MariaDB and PostgreSQL are installed with localhost-only access by default (`bind-address = 127.0.0.1` for MariaDB, `listen_addresses = 'localhost'` for PostgreSQL). For production deployments with application servers on separate machines or private networks, you'll need to configure database access appropriately.
