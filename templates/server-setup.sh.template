@@ -1072,6 +1072,7 @@ if [ "$CPU_VENDOR" = "AuthenticAMD" ]; then
     
     # Install AMD microcode
     if apt-cache search amd64-microcode | grep -q amd64-microcode; then
+        wait_for_dpkg_lock
         apt-get install -y amd64-microcode
         echo "✅ AMD microcode installed successfully"
         echo "⚠️  Microcode will be active after next reboot"
@@ -1172,18 +1173,23 @@ echo ""
 
 echo "===== 6.1 Installing incident response and monitoring tools ====="
 # System monitoring
+wait_for_dpkg_lock
 apt-get install -y htop iotop sysstat atop bmon
 
 # Network monitoring
+wait_for_dpkg_lock
 apt-get install -y iftop nethogs tcpdump ethtool iperf3 netcat-openbsd
 
 # Network diagnostics
+wait_for_dpkg_lock
 apt-get install -y mtr-tiny arp-scan dnsutils net-tools traceroute whois
 
 # Disk and hardware monitoring tools
+wait_for_dpkg_lock
 apt-get install -y nvme-cli smartmontools
 
 # File integrity
+wait_for_dpkg_lock
 apt-get install -y debsums aide
 
 # Configure lm-sensors with enhanced detection and logwatch integration
@@ -1337,18 +1343,22 @@ EOF
     fi
 else
     echo "Sensors command not available - installing lm-sensors package"
+    wait_for_dpkg_lock
     apt-get update && apt-get install -y lm-sensors
     echo "✅ lm-sensors installed - rerun script or manually run sensors-detect"
 fi
 
 # Log monitoring
+wait_for_dpkg_lock
 apt-get install -y logcheck logcheck-database
 
 # Audit framework
+wait_for_dpkg_lock
 apt-get install -y auditd audispd-plugins
 
 # Enhanced shell environment
 echo "===== 6.2 Installing enhanced shell environment ====="
+wait_for_dpkg_lock
 apt-get install -y zsh vim git curl locales
 
 # Configure locale to avoid character encoding issues
@@ -1622,6 +1632,7 @@ echo "postfix postfix/main_mailer_type string 'Internet Site'" | debconf-set-sel
 echo "postfix postfix/mailname string $(hostname -f)" | debconf-set-selections
 
 # Install mail system
+wait_for_dpkg_lock
 apt-get install -y mailutils postfix
 
 # Stop postfix for configuration
@@ -1629,8 +1640,9 @@ systemctl stop postfix 2>/dev/null || true
 
 if [ "$SMTP_ENABLED" = "true" ]; then
     echo "Configuring external SMTP for reliable email delivery..."
-    
+
     # Install SASL packages for SMTP authentication
+    wait_for_dpkg_lock
     apt-get install -y libsasl2-modules
     
     # Configure postfix for external SMTP relay
@@ -3143,6 +3155,7 @@ EOF
 echo "===== 10.2 Configuring ModSecurity Web Application Firewall ====="
 if [ "$DOCKER_MODE" = "false" ]; then
     # Install ModSecurity for Nginx (Debian 13)
+    wait_for_dpkg_lock
     apt-get install -y libmodsecurity3 libnginx-mod-http-modsecurity modsecurity-crs
 
     # Enable ModSecurity in Nginx
