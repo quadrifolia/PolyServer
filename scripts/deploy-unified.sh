@@ -7,6 +7,7 @@
 #
 # Options:
 #   -e, --env-file FILE       Environment file (default: templates/defaults.env)
+#   -c, --config-dir DIR     Config directory (default: config/)
 #   -u, --user USER          SSH user (default: from env file DEPLOY_USER)
 #   -h, --host HOST          SSH host (required)
 #   -p, --port PORT          SSH port (default: from env file SSH_PORT or 22)
@@ -16,6 +17,7 @@
 # Examples:
 #   ./deploy-unified.sh -h server.example.com
 #   ./deploy-unified.sh -h server.example.com -u deploy -p 2222 -i ~/.ssh/id_ed25519
+#   ./deploy-unified.sh -h db-server.com -e templates/defaults_db.env -c config_db
 
 set -e
 
@@ -23,10 +25,11 @@ set -e
 SCRIPT_DIR="$(dirname "$0")"
 TEMPLATE_DIR="$(dirname "$0")/../templates"
 DEFAULT_ENV="${TEMPLATE_DIR}/defaults.env"
-CONFIG_DIR="$(dirname "$0")/../config"
+DEFAULT_CONFIG_DIR="$(dirname "$0")/../config"
 
 # Defaults
 ENV_FILE="$DEFAULT_ENV"
+CONFIG_DIR="$DEFAULT_CONFIG_DIR"
 SSH_USER=""
 SSH_HOST=""
 SSH_PORT=""
@@ -43,6 +46,10 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         -e|--env-file)
             ENV_FILE="$2"
+            shift 2
+            ;;
+        -c|--config-dir)
+            CONFIG_DIR="$2"
             shift 2
             ;;
         -u|--user)
@@ -123,6 +130,7 @@ SSH_CMD="$SSH_CMD -p $SSH_PORT"
 SCP_CMD="$SCP_CMD -P $SSH_PORT"
 
 echo "===== PolyServer Configuration Deployment ====="
+echo "Config directory: $CONFIG_DIR"
 echo "Target: ${SSH_USER}@${SSH_HOST}:${SSH_PORT}"
 echo "Deploy directory: ${DEPLOY_DIR:-/opt/polyserver}"
 if [ -n "$SSH_IDENTITY" ]; then
