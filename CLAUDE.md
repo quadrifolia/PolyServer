@@ -199,16 +199,53 @@ The main server setup now includes a comprehensive optional component installati
   - Automatic secure installation
   - Localhost-only binding and secure file privileges
   - Optimized resource limits
-  
+
 - **PostgreSQL**: Advanced relational database with security configuration
-  - Secure authentication (md5 instead of peer)
+  - Secure authentication (scram-sha-256)
   - Localhost-only listening
   - Production-ready default settings
-  
+
 - **Redis**: In-memory data structure store
   - Password protection and localhost-only binding
   - Memory limits and LRU eviction policy
   - Secure default configuration
+
+#### Database Configuration Architecture
+
+Both MariaDB and PostgreSQL use a **layered configuration approach** that combines template-based customization with system-specific optimization:
+
+**Configuration Layers (loaded in order):**
+
+1. **Base Configuration** (from templates)
+   - MariaDB: `50-server.cnf` (from `templates/mariadb/50-server.cnf.template`)
+   - PostgreSQL: `postgresql.conf` (from `templates/postgresql/postgresql.conf.template`)
+   - Your customized settings and defaults
+
+2. **System-Specific Optimizations** (auto-generated during installation)
+   - MariaDB: `60-performance.cnf` (generated based on detected CPU/RAM)
+   - PostgreSQL: `conf.d/99-polyserver-optimization.conf` (generated based on detected CPU/RAM)
+   - Overrides performance-critical settings for optimal resource utilization
+   - Calculated based on: Total RAM, CPU cores, whether other databases are installed
+
+**Installation Process:**
+1. Package installation creates system defaults
+2. Defaults are backed up (`.backup-YYYYMMDD-HHMMSS`)
+3. Template-based configs installed (if present in `/opt/polyserver/config/`)
+4. System-specific optimizations added
+5. Service started with layered configuration
+
+**Benefits:**
+- **Customization**: Control base settings via templates (security, features, behavior)
+- **Optimization**: Automatic resource allocation based on hardware
+- **Flexibility**: Optimization layer overrides only performance-critical settings
+- **Safety**: All defaults backed up before modifications
+
+**Example:**
+On a 256GB RAM server with 32 cores and both databases installed:
+- MariaDB gets ~75% RAM for InnoDB buffer pool (primary database)
+- PostgreSQL gets ~20% RAM for shared buffers (secondary database)
+- Both get thread/worker pools sized to CPU count
+- Your template settings for security, networking, logging remain unchanged
 
 ### Node.js Development Environment
 - **Node.js LTS**: Latest long-term support version
