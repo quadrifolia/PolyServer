@@ -3327,8 +3327,8 @@ if [ "$INSTALL_NGINX" = "true" ]; then
             echo "✅ Restored complete nginx configuration from $BACKUP_DIR"
             nginx -t && systemctl reload nginx
         else
-            # Find the most recent snapshot
-            LATEST_SNAPSHOT=$(ls -td /etc/nginx/backups/snapshot-* 2>/dev/null | head -1)
+            # Find the most recent snapshot (sorted by name, which works with YYYYMMDD-HHMMSS format)
+            LATEST_SNAPSHOT=$(find /etc/nginx/backups -maxdepth 1 -name "snapshot-*" -type d 2>/dev/null | sort -r | head -1)
             if [ -n "$LATEST_SNAPSHOT" ]; then
                 cp -r "$LATEST_SNAPSHOT"/* /etc/nginx/
                 echo "✅ Restored complete nginx configuration from $LATEST_SNAPSHOT"
@@ -3418,7 +3418,7 @@ if [ "$INSTALL_MARIADB" = "true" ]; then
 
         # Backup existing configuration
         if [ -f "/etc/mysql/mariadb.conf.d/50-server.cnf" ]; then
-            cp /etc/mysql/mariadb.conf.d/50-server.cnf /etc/mysql/mariadb.conf.d/50-server.cnf.backup-$(date +%Y%m%d-%H%M%S)
+            cp /etc/mysql/mariadb.conf.d/50-server.cnf "/etc/mysql/mariadb.conf.d/50-server.cnf.backup-$(date +%Y%m%d-%H%M%S)"
         fi
 
         # Install MariaDB configuration
@@ -3444,16 +3444,16 @@ if [ "$INSTALL_POSTGRESQL" = "true" ]; then
     if [ -d "/opt/polyserver/config/postgresql" ]; then
         echo "Installing PostgreSQL configurations..."
 
-        PG_VERSION=$(ls /etc/postgresql/ | head -1)
+        PG_VERSION=$(find /etc/postgresql -maxdepth 1 -mindepth 1 -type d -printf '%f\n' 2>/dev/null | head -1)
 
         if [ -n "$PG_VERSION" ]; then
             # Backup existing configurations
             if [ -f "/etc/postgresql/$PG_VERSION/main/postgresql.conf" ]; then
-                cp /etc/postgresql/$PG_VERSION/main/postgresql.conf /etc/postgresql/$PG_VERSION/main/postgresql.conf.backup-$(date +%Y%m%d-%H%M%S)
+                cp /etc/postgresql/$PG_VERSION/main/postgresql.conf "/etc/postgresql/$PG_VERSION/main/postgresql.conf.backup-$(date +%Y%m%d-%H%M%S)"
             fi
 
             if [ -f "/etc/postgresql/$PG_VERSION/main/pg_hba.conf" ]; then
-                cp /etc/postgresql/$PG_VERSION/main/pg_hba.conf /etc/postgresql/$PG_VERSION/main/pg_hba.conf.backup-$(date +%Y%m%d-%H%M%S)
+                cp /etc/postgresql/$PG_VERSION/main/pg_hba.conf "/etc/postgresql/$PG_VERSION/main/pg_hba.conf.backup-$(date +%Y%m%d-%H%M%S)"
             fi
 
             # Install PostgreSQL configurations
@@ -3489,7 +3489,7 @@ if [ "$INSTALL_REDIS" = "true" ]; then
 
         # Backup existing configuration
         if [ -f "/etc/redis/redis.conf" ]; then
-            cp /etc/redis/redis.conf /etc/redis/redis.conf.backup-$(date +%Y%m%d-%H%M%S)
+            cp /etc/redis/redis.conf "/etc/redis/redis.conf.backup-$(date +%Y%m%d-%H%M%S)"
         fi
 
         # Install Redis configuration
