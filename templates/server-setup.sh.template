@@ -661,7 +661,8 @@ create_rollback_point() {
     if command -v gpg >/dev/null 2>&1; then
         local encrypted_file="${rollback_file}.gpg"
 
-        # Temporarily disable exit on error for backup creation
+        # Temporarily disable exit on error and ERR trap for backup creation
+        trap - ERR
         set +e
         tar -czf - \
             /etc/ssh \
@@ -672,6 +673,7 @@ create_rollback_point() {
             2>/dev/null | gpg --symmetric --cipher-algo AES256 --compress-algo 1 --batch --yes --passphrase "server-backup-$(hostname)-$timestamp" > "$encrypted_file" 2>/dev/null
         local backup_result=$?
         set -e
+        trap 'error_trap $LINENO' ERR
 
         if [ $backup_result -eq 0 ] && [ -f "$encrypted_file" ] && [ -s "$encrypted_file" ]; then
             echo "$encrypted_file" > "${BACKUP_DIR}/latest-rollback"
