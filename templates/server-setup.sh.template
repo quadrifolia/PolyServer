@@ -3523,33 +3523,38 @@ else
     echo "⏭️  Skipping Redis configuration (INSTALL_REDIS=false)"
 fi
 
-# Install Netdata Docker monitoring (if Docker is enabled)
+# Install Netdata Docker monitoring (if Docker is enabled and Netdata is installed)
 if [ "$INSTALL_DOCKER" = "true" ]; then
     echo "===== 10.2.6 Installing Netdata Docker Monitoring Configuration ====="
 
-    if [ -d "/opt/polyserver/config/netdata" ]; then
-        echo "Installing Netdata Docker monitoring configuration..."
+    # Check if Netdata is installed before configuring
+    if command -v netdata >/dev/null 2>&1 && [ -d /etc/netdata ]; then
+        if [ -d "/opt/polyserver/config/netdata" ]; then
+            echo "Installing Netdata Docker monitoring configuration..."
 
-        # Create Netdata custom config directory if it doesn't exist
-        mkdir -p /etc/netdata/go.d
+            # Create Netdata custom config directory if it doesn't exist
+            mkdir -p /etc/netdata/go.d
 
-        # Install Docker monitoring configuration
-        if [ -f "/opt/polyserver/config/netdata/docker.conf" ]; then
-            cp /opt/polyserver/config/netdata/docker.conf /etc/netdata/go.d/docker.conf
-            chown netdata:netdata /etc/netdata/go.d/docker.conf
-            chmod 644 /etc/netdata/go.d/docker.conf
-            echo "✅ Netdata Docker monitoring configuration installed"
+            # Install Docker monitoring configuration
+            if [ -f "/opt/polyserver/config/netdata/docker.conf" ]; then
+                cp /opt/polyserver/config/netdata/docker.conf /etc/netdata/go.d/docker.conf
+                chown netdata:netdata /etc/netdata/go.d/docker.conf
+                chmod 644 /etc/netdata/go.d/docker.conf
+                echo "✅ Netdata Docker monitoring configuration installed"
 
-            # Add netdata user to docker group for socket access
-            usermod -aG docker netdata
-            echo "✅ Added netdata user to docker group"
+                # Add netdata user to docker group for socket access
+                usermod -aG docker netdata
+                echo "✅ Added netdata user to docker group"
 
-            # Restart Netdata to apply changes
-            systemctl restart netdata
-            echo "✅ Netdata restarted with Docker monitoring enabled"
+                # Restart Netdata to apply changes
+                systemctl restart netdata
+                echo "✅ Netdata restarted with Docker monitoring enabled"
+            fi
+        else
+            echo "⚠️  Netdata config directory not found at /opt/polyserver/config/netdata"
         fi
     else
-        echo "⚠️  Netdata config directory not found at /opt/polyserver/config/netdata"
+        echo "⚠️  Netdata not installed yet - Docker monitoring will be configured after Netdata installation"
     fi
 else
     echo "⏭️  Skipping Netdata Docker monitoring (INSTALL_DOCKER=false)"
@@ -4690,6 +4695,26 @@ EOF
 
         # Restart Netdata to apply changes
         systemctl restart netdata
+    fi
+
+    # Configure Docker monitoring if Docker is installed and config exists
+    if [ "${INSTALL_DOCKER,,}" = "true" ] && [ -f "/opt/polyserver/config/netdata/docker.conf" ]; then
+        echo "Configuring Netdata Docker monitoring..."
+
+        # Create Netdata custom config directory if it doesn't exist
+        mkdir -p /etc/netdata/go.d
+
+        # Install Docker monitoring configuration
+        cp /opt/polyserver/config/netdata/docker.conf /etc/netdata/go.d/docker.conf
+        chown netdata:netdata /etc/netdata/go.d/docker.conf
+        chmod 644 /etc/netdata/go.d/docker.conf
+
+        # Add netdata user to docker group for socket access
+        usermod -aG docker netdata
+
+        # Restart Netdata to apply changes
+        systemctl restart netdata
+        echo "✅ Netdata Docker monitoring configured"
     fi
 
 elif [ "$DOCKER_MODE" = "false" ] && [ "$NETDATA_ENABLED" != "true" ]; then
