@@ -7336,6 +7336,11 @@ MARIADB_SEC_EOF
                     chown mysql:mysql /var/log/mysql
                     chmod 750 /var/log/mysql
 
+                    # Create secure-file-priv directory
+                    mkdir -p /var/lib/mysql-files
+                    chown mysql:mysql /var/lib/mysql-files
+                    chmod 750 /var/lib/mysql-files
+
                     # Start MariaDB
                     systemctl start mariadb
                     systemctl enable mariadb
