@@ -38,7 +38,7 @@ innodb_read_io_threads = {{MYSQL_INNODB_READ_IO_THREADS}}
 innodb_write_io_threads = {{MYSQL_INNODB_WRITE_IO_THREADS}}
 
 # File format and performance
-innodb_file_format = Barracuda
+# Note: innodb_file_format removed in MariaDB 10.6+ (Barracuda is now default)
 innodb_file_per_table = 1
 innodb_flush_log_at_trx_commit = 1
 innodb_flush_method = O_DIRECT
