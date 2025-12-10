@@ -7720,11 +7720,40 @@ jit = off
 huge_pages = try
 PGSQL_PERF_EOF
 
-                    # Update listen_addresses
-                    sed -i "s/#listen_addresses = 'localhost'/listen_addresses = 'localhost'/" "${PG_CONF_DIR}/postgresql.conf"
+                    # Backup default PostgreSQL configurations
+                    if [ -f "${PG_CONF_DIR}/postgresql.conf" ]; then
+                        cp "${PG_CONF_DIR}/postgresql.conf" "${PG_CONF_DIR}/postgresql.conf.backup-$(date +%Y%m%d-%H%M%S)"
+                        echo "✅ Backed up default postgresql.conf"
+                    fi
 
-                    # Configure pg_hba.conf for secure authentication
-                    cat > "${PG_CONF_DIR}/pg_hba.conf" << 'PGHBA_EOF'
+                    if [ -f "${PG_CONF_DIR}/pg_hba.conf" ]; then
+                        cp "${PG_CONF_DIR}/pg_hba.conf" "${PG_CONF_DIR}/pg_hba.conf.backup-$(date +%Y%m%d-%H%M%S)"
+                        echo "✅ Backed up default pg_hba.conf"
+                    fi
+
+                    # Install deployed PostgreSQL configurations if they exist
+                    if [ -d "/opt/polyserver/config/postgresql" ]; then
+                        echo "Installing deployed PostgreSQL configurations..."
+
+                        # Install main postgresql.conf from deployed config
+                        if [ -f "/opt/polyserver/config/postgresql/conf.d/postgresql.conf" ]; then
+                            cp /opt/polyserver/config/postgresql/conf.d/postgresql.conf "${PG_CONF_DIR}/postgresql.conf"
+                            echo "✅ Installed deployed postgresql.conf"
+                        fi
+
+                        # Install pg_hba.conf from deployed config
+                        if [ -f "/opt/polyserver/config/postgresql/pg_hba.conf" ]; then
+                            cp /opt/polyserver/config/postgresql/pg_hba.conf "${PG_CONF_DIR}/pg_hba.conf"
+                            echo "✅ Installed deployed pg_hba.conf"
+                        fi
+                    else
+                        echo "No deployed configs found, using generated defaults..."
+
+                        # Update listen_addresses
+                        sed -i "s/#listen_addresses = 'localhost'/listen_addresses = 'localhost'/" "${PG_CONF_DIR}/postgresql.conf"
+
+                        # Configure pg_hba.conf for secure authentication
+                        cat > "${PG_CONF_DIR}/pg_hba.conf" << 'PGHBA_EOF'
 # PostgreSQL Client Authentication Configuration
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
 
@@ -7743,6 +7772,7 @@ local   replication     all                                     peer
 host    replication     all             127.0.0.1/32            scram-sha-256
 host    replication     all             ::1/128                 scram-sha-256
 PGHBA_EOF
+                    fi
 
                     # Start PostgreSQL
                     systemctl start postgresql
