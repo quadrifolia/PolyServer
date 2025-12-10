@@ -164,6 +164,37 @@ else
   echo "Skipping nginx configuration generation (INSTALL_NGINX=${INSTALL_NGINX:-false})"
 fi
 
+# Generate MariaDB configurations (only if INSTALL_MARIADB is enabled)
+if _is_truthy "${INSTALL_MARIADB:-false}"; then
+  mkdir -p "${OUTPUT_DIR}/mariadb/conf.d"
+
+  if [ -f "${TEMPLATE_DIR}/mariadb/50-server.cnf.template" ]; then
+    render_template "${TEMPLATE_DIR}/mariadb/50-server.cnf.template" "${OUTPUT_DIR}/mariadb/conf.d/50-server.cnf"
+    echo "Generated MariaDB configuration"
+  fi
+else
+  echo "Skipping MariaDB configuration generation (INSTALL_MARIADB=${INSTALL_MARIADB:-false})"
+fi
+
+# Generate PostgreSQL configurations (only if INSTALL_POSTGRESQL is enabled)
+if _is_truthy "${INSTALL_POSTGRESQL:-false}"; then
+  mkdir -p "${OUTPUT_DIR}/postgresql/conf.d"
+
+  if [ -f "${TEMPLATE_DIR}/postgresql/postgresql.conf.template" ]; then
+    render_template "${TEMPLATE_DIR}/postgresql/postgresql.conf.template" "${OUTPUT_DIR}/postgresql/conf.d/postgresql.conf"
+  fi
+
+  if [ -f "${TEMPLATE_DIR}/postgresql/pg_hba.conf.template" ]; then
+    render_template "${TEMPLATE_DIR}/postgresql/pg_hba.conf.template" "${OUTPUT_DIR}/postgresql/pg_hba.conf"
+  fi
+
+  if [ -d "${OUTPUT_DIR}/postgresql" ]; then
+    echo "Generated PostgreSQL configuration"
+  fi
+else
+  echo "Skipping PostgreSQL configuration generation (INSTALL_POSTGRESQL=${INSTALL_POSTGRESQL:-false})"
+fi
+
 # Generate backup scripts
 mkdir -p "${OUTPUT_DIR}/scripts"
 render_template "${TEMPLATE_DIR}/scripts/backup.sh.template" "${OUTPUT_DIR}/scripts/backup.sh"
