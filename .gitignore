@@ -1,6 +1,5 @@
 # Generated configuration files
-/config/
-/scripts/backup.sh
+/config*/
 
 # Environment files
 .env
@@ -8,7 +7,9 @@
 !.env.example
 
 # User-specific configuration (should be copied from .example files)
-/templates/defaults.env
+/templates/*.env
+/templates/*.env.*
+!/templates/*.env.example
 
 # Logs
 *.log
@@ -27,18 +28,3 @@ Thumbs.db
 
 # Claude Code files
 .claude/
-
-# Local testing files
-/local-config
-/local-backup.sql
-/local-backup.db
-/local-backup.mv.db
-/nginx-conf
-fix-sensor-log.sh
-fix-unbound-apparmor.sh
-fix-postfix.sh
-fix-aide.sh
-fix-audit-rules.sh
-disable-smt.sh
-fix-nginx-config.sh
-_config/
