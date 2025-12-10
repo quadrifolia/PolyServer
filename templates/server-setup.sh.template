@@ -7738,12 +7738,16 @@ PGSQL_PERF_EOF
                         # Install PostgreSQL config to conf.d/ directory (not as main postgresql.conf)
                         if [ -f "/opt/polyserver/config/postgresql/conf.d/postgresql.conf" ]; then
                             cp /opt/polyserver/config/postgresql/conf.d/postgresql.conf "${PG_CONF_DIR}/conf.d/50-polyserver.conf"
+                            chown postgres:postgres "${PG_CONF_DIR}/conf.d/50-polyserver.conf"
+                            chmod 644 "${PG_CONF_DIR}/conf.d/50-polyserver.conf"
                             echo "✅ Installed deployed config as conf.d/50-polyserver.conf"
                         fi
 
                         # Install pg_hba.conf from deployed config
                         if [ -f "/opt/polyserver/config/postgresql/pg_hba.conf" ]; then
                             cp /opt/polyserver/config/postgresql/pg_hba.conf "${PG_CONF_DIR}/pg_hba.conf"
+                            chown postgres:postgres "${PG_CONF_DIR}/pg_hba.conf"
+                            chmod 640 "${PG_CONF_DIR}/pg_hba.conf"
                             echo "✅ Installed deployed pg_hba.conf"
                         fi
 
