@@ -7735,10 +7735,10 @@ PGSQL_PERF_EOF
                     if [ -d "/opt/polyserver/config/postgresql" ]; then
                         echo "Installing deployed PostgreSQL configurations..."
 
-                        # Install main postgresql.conf from deployed config
+                        # Install PostgreSQL config to conf.d/ directory (not as main postgresql.conf)
                         if [ -f "/opt/polyserver/config/postgresql/conf.d/postgresql.conf" ]; then
-                            cp /opt/polyserver/config/postgresql/conf.d/postgresql.conf "${PG_CONF_DIR}/postgresql.conf"
-                            echo "✅ Installed deployed postgresql.conf"
+                            cp /opt/polyserver/config/postgresql/conf.d/postgresql.conf "${PG_CONF_DIR}/conf.d/50-polyserver.conf"
+                            echo "✅ Installed deployed config as conf.d/50-polyserver.conf"
                         fi
 
                         # Install pg_hba.conf from deployed config
@@ -7746,6 +7746,9 @@ PGSQL_PERF_EOF
                             cp /opt/polyserver/config/postgresql/pg_hba.conf "${PG_CONF_DIR}/pg_hba.conf"
                             echo "✅ Installed deployed pg_hba.conf"
                         fi
+
+                        # Ensure listen_addresses is set
+                        sed -i "s/#listen_addresses = 'localhost'/listen_addresses = 'localhost'/" "${PG_CONF_DIR}/postgresql.conf"
                     else
                         echo "No deployed configs found, using generated defaults..."
 
