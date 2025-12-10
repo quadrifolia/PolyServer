@@ -3162,7 +3162,7 @@ EOF
 
 # Configure ModSecurity WAF
 echo "===== 10.2 Configuring ModSecurity Web Application Firewall ====="
-if [ "$DOCKER_MODE" = "false" ] && [ "$INSTALL_NGINX" = "true" ]; then
+if [ "${MODSECURITY_ENABLED:-true}" = "true" ] && [ "$INSTALL_NGINX" = "true" ]; then
     # Install ModSecurity for Nginx (Debian 13)
     wait_for_dpkg_lock
     apt-get install -y libmodsecurity3 libnginx-mod-http-modsecurity modsecurity-crs
@@ -3229,11 +3229,12 @@ EOF
 modsecurity on;
 modsecurity_rules_file /etc/nginx/modsec/main.conf;
 EOF
+    echo "✅ ModSecurity WAF configured and enabled"
 else
-    if [ "$DOCKER_MODE" = "true" ]; then
-        echo "🐳 Skipping ModSecurity configuration in Docker mode (module not available)"
-    else
-        echo "⏭️  Skipping ModSecurity configuration (INSTALL_NGINX=false)"
+    if [ "${MODSECURITY_ENABLED:-true}" = "false" ]; then
+        echo "⏭️  Skipping ModSecurity (MODSECURITY_ENABLED=false)"
+    elif [ "$INSTALL_NGINX" = "false" ]; then
+        echo "⏭️  Skipping ModSecurity (requires INSTALL_NGINX=true)"
     fi
 fi
 
