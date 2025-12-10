@@ -201,6 +201,41 @@ if [ -d "$CONFIG_DIR/www" ]; then
     echo -e "${GREEN}✓ WWW files deployed${NC}"
 fi
 
+# Copy MariaDB configurations (if enabled)
+if [ -d "$CONFIG_DIR/mariadb" ] && [ "${INSTALL_MARIADB:-false}" = "true" ]; then
+    echo "Copying MariaDB configurations..."
+    $SCP_CMD -r "$CONFIG_DIR/mariadb" "$SSH_USER@$SSH_HOST:${DEPLOY_DIR:-/opt/polyserver}/config/"
+    echo -e "${GREEN}✓ MariaDB configurations deployed${NC}"
+fi
+
+# Copy PostgreSQL configurations (if enabled)
+if [ -d "$CONFIG_DIR/postgresql" ] && [ "${INSTALL_POSTGRESQL:-false}" = "true" ]; then
+    echo "Copying PostgreSQL configurations..."
+    $SCP_CMD -r "$CONFIG_DIR/postgresql" "$SSH_USER@$SSH_HOST:${DEPLOY_DIR:-/opt/polyserver}/config/"
+    echo -e "${GREEN}✓ PostgreSQL configurations deployed${NC}"
+fi
+
+# Copy PHP configurations (if enabled)
+if [ -d "$CONFIG_DIR/php" ] && [ "${INSTALL_PHP:-false}" = "true" ]; then
+    echo "Copying PHP configurations..."
+    $SCP_CMD -r "$CONFIG_DIR/php" "$SSH_USER@$SSH_HOST:${DEPLOY_DIR:-/opt/polyserver}/config/"
+    echo -e "${GREEN}✓ PHP configurations deployed${NC}"
+fi
+
+# Copy Redis configurations (if enabled)
+if [ -d "$CONFIG_DIR/redis" ] && [ "${INSTALL_REDIS:-false}" = "true" ]; then
+    echo "Copying Redis configurations..."
+    $SCP_CMD -r "$CONFIG_DIR/redis" "$SSH_USER@$SSH_HOST:${DEPLOY_DIR:-/opt/polyserver}/config/"
+    echo -e "${GREEN}✓ Redis configurations deployed${NC}"
+fi
+
+# Copy Netdata Docker monitoring configurations (if enabled)
+if [ -d "$CONFIG_DIR/netdata" ] && [ "${INSTALL_DOCKER:-false}" = "true" ]; then
+    echo "Copying Netdata Docker monitoring configurations..."
+    $SCP_CMD -r "$CONFIG_DIR/netdata" "$SSH_USER@$SSH_HOST:${DEPLOY_DIR:-/opt/polyserver}/config/"
+    echo -e "${GREEN}✓ Netdata Docker monitoring deployed${NC}"
+fi
+
 # Copy audit configurations (if enabled)
 if [ -d "$CONFIG_DIR/audit" ] && [ "${AUDIT_ENABLED:-false}" = "true" ]; then
     echo "Copying audit configurations..."
