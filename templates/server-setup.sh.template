@@ -7943,7 +7943,7 @@ NETDATA_PG_EOF
                         cat > /etc/netdata/go.d/postgres.conf << NETDATA_POSTGRES_EOF
 jobs:
   - name: local
-    dsn: 'postgres://netdata:${NETDATA_PG_PASSWORD}@localhost:5432/postgres'
+    dsn: 'postgres://netdata:${NETDATA_PG_PASSWORD}@127.0.0.1:5432/postgres'
     timeout: 5
     collect_databases_metrics: yes
 NETDATA_POSTGRES_EOF
