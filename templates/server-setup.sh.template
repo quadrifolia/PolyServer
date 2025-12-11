@@ -2518,8 +2518,9 @@ chmod 755 /etc/cron.daily/maldet-scan
     rm -rf /tmp/maldet
 fi
 
-# Create daily scan script
-cat > /etc/cron.daily/clamscan << 'EOF'
+# Create daily scan script (only if ClamAV is installed)
+if command -v clamscan >/dev/null 2>&1; then
+    cat > /etc/cron.daily/clamscan << 'EOF'
 #!/bin/bash
 LOGFILE="/var/log/clamav/daily_scan.log"
 DIRTOSCAN="/home /opt/polyserver /var/www"
@@ -2541,7 +2542,11 @@ if grep -q "Infected files: [1-9]" $LOGFILE; then
     echo "WARNING - $VIRUS_COUNT VIRUS(ES) FOUND ON $(hostname)" | mail -s "VIRUS ALERT on $(hostname)" "${LOGWATCH_EMAIL:-root}"
 fi
 EOF
-chmod 755 /etc/cron.daily/clamscan
+    chmod 755 /etc/cron.daily/clamscan
+    echo "✅ ClamAV daily scan cron job configured"
+else
+    echo "⏭️  Skipping ClamAV cron job (ClamAV not installed)"
+fi
 
 # Configure Logcheck
 echo "===== 9. Configuring Logcheck ====="
@@ -3895,14 +3900,16 @@ cat > /etc/logrotate.d/suricata << 'EOF'
 }
 EOF
 
-# Install Trivy for container scanning
-curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+# Install Trivy for container scanning (only if Docker is installed)
+if [ "$INSTALL_DOCKER" = "true" ] && command -v docker >/dev/null 2>&1; then
+    echo "Installing Trivy for container vulnerability scanning..."
+    curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
 
-# Create directory for security logs
-mkdir -p /var/log/security/trivy
+    # Create directory for security logs
+    mkdir -p /var/log/security/trivy
 
-# Create cron job for daily container scanning
-cat > /etc/cron.daily/trivy-scan << 'EOF'
+    # Create cron job for daily container scanning
+    cat > /etc/cron.daily/trivy-scan << 'EOF'
 #!/bin/bash
 # Daily container vulnerability scanning
 
@@ -3938,7 +3945,11 @@ fi
 find $REPORT_DIR -name "trivy-*.log" -mtime +30 -delete
 EOF
 
-chmod 755 /etc/cron.daily/trivy-scan
+    chmod 755 /etc/cron.daily/trivy-scan
+    echo "✅ Trivy container scanning configured"
+else
+    echo "⏭️  Skipping Trivy installation (Docker not installed or INSTALL_DOCKER=false)"
+fi
 
     # Configure Suricata systemd resource limits
     echo "===== 10.4.1 Configuring Suricata Resource Management ====="
@@ -7860,10 +7871,28 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
 }
 
+# Check if PostgreSQL is running
+if ! systemctl is-active --quiet postgresql; then
+    log "⏭️  PostgreSQL is not running, skipping backup"
+    exit 0
+fi
+
+# Check if psql command exists
+if ! command -v psql >/dev/null 2>&1; then
+    log "⏭️  PostgreSQL client not found, skipping backup"
+    exit 0
+fi
+
 log "Starting PostgreSQL backup..."
 
 # Get list of databases
-DATABASES=$(sudo -u postgres psql -t -c "SELECT datname FROM pg_database WHERE datistemplate = false AND datname != 'postgres';" | grep -v '^$')
+DATABASES=$(sudo -u postgres psql -t -c "SELECT datname FROM pg_database WHERE datistemplate = false AND datname != 'postgres';" | grep -v '^$' || true)
+
+# Check if there are databases to backup
+if [ -z "$DATABASES" ]; then
+    log "ℹ️  No user databases found to backup"
+    exit 0
+fi
 
 # Backup each database
 for DB in $DATABASES; do
