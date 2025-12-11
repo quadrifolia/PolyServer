@@ -2498,11 +2498,17 @@ echo "Linux Malware Detect daily scan started at $(date)" > $LOGFILE
 echo "Linux Malware Detect daily scan completed at $(date)" >> $LOGFILE
 
 # Check for detections
-if grep -q "malware hits" $LOGFILE; then
-    HITS=$(grep "malware hits" $LOGFILE | grep -o '[0-9]\+')
-    if [ "$HITS" -gt 0 ]; then
-        # Send email alert if malware found
-        cat $LOGFILE | mail -s "⚠️ MALWARE WARNING: $HITS malware hits found on $(hostname)" "${LOGWATCH_EMAIL:-root}"
+if grep -q "malware hits" "$LOGFILE"; then
+    # Extract the *last* malware hits line and get the number after "malware hits"
+    HITS=$(
+        grep "malware hits" "$LOGFILE" \
+        | tail -n1 \
+        | sed -E 's/.*malware hits[^0-9]*([0-9]+).*/\1/'
+    )
+
+    # Only proceed if HITS is non-empty and numeric > 0
+    if [ -n "$HITS" ] && [ "$HITS" -gt 0 ] 2>/dev/null; then
+        mail -s "⚠️ MALWARE WARNING: $HITS malware hits found on $(hostname)" "${LOGWATCH_EMAIL:-root}" < "$LOGFILE"
     fi
 fi
 EOF
