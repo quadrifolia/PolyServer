@@ -261,6 +261,18 @@ else
   echo "Skipping Docker monitoring configuration (INSTALL_DOCKER=${INSTALL_DOCKER:-false})"
 fi
 
+# Generate Netdata health alarm notification configuration (only if NETDATA_ENABLED is enabled)
+if _is_truthy "${NETDATA_ENABLED:-true}"; then
+  mkdir -p "${OUTPUT_DIR}/netdata"
+
+  if [ -f "${TEMPLATE_DIR}/netdata/health_alarm_notify.conf.template" ]; then
+    render_template "${TEMPLATE_DIR}/netdata/health_alarm_notify.conf.template" "${OUTPUT_DIR}/netdata/health_alarm_notify.conf"
+    echo "Generated Netdata health alarm notification configuration"
+  fi
+else
+  echo "Skipping Netdata health alarm notification configuration (NETDATA_ENABLED=${NETDATA_ENABLED:-true})"
+fi
+
 # Generate backup scripts
 mkdir -p "${OUTPUT_DIR}/scripts"
 render_template "${TEMPLATE_DIR}/scripts/backup.sh.template" "${OUTPUT_DIR}/scripts/backup.sh"

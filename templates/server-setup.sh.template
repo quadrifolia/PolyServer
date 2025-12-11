@@ -4771,6 +4771,46 @@ EOF
         echo "✅ Netdata Docker monitoring configured"
     fi
 
+    # Configure Netdata health alarm notifications if config exists
+    if [ -f "/opt/polyserver/config/netdata/health_alarm_notify.conf" ]; then
+        echo "Configuring Netdata health alarm notifications..."
+
+        # Backup existing configuration if present
+        if [ -f "/etc/netdata/health_alarm_notify.conf" ]; then
+            cp /etc/netdata/health_alarm_notify.conf "/etc/netdata/health_alarm_notify.conf.backup-$(date +%Y%m%d-%H%M%S)"
+            echo "✅ Backed up existing health_alarm_notify.conf"
+        fi
+
+        # Install health alarm notification configuration
+        cp /opt/polyserver/config/netdata/health_alarm_notify.conf /etc/netdata/health_alarm_notify.conf
+        chown root:netdata /etc/netdata/health_alarm_notify.conf
+        chmod 640 /etc/netdata/health_alarm_notify.conf
+
+        # Restart Netdata to apply notification settings
+        systemctl restart netdata
+        echo "✅ Netdata health alarm notifications configured"
+
+        # Show which notification methods are enabled
+        if grep -q 'SEND_DISCORD="YES"' /etc/netdata/health_alarm_notify.conf 2>/dev/null || \
+           grep -q 'SEND_DISCORD="yes"' /etc/netdata/health_alarm_notify.conf 2>/dev/null; then
+            echo "   • Discord notifications: ENABLED"
+        fi
+        if grep -q 'SEND_SLACK="YES"' /etc/netdata/health_alarm_notify.conf 2>/dev/null || \
+           grep -q 'SEND_SLACK="yes"' /etc/netdata/health_alarm_notify.conf 2>/dev/null; then
+            echo "   • Slack notifications: ENABLED"
+        fi
+        if grep -q 'SEND_TELEGRAM="YES"' /etc/netdata/health_alarm_notify.conf 2>/dev/null || \
+           grep -q 'SEND_TELEGRAM="yes"' /etc/netdata/health_alarm_notify.conf 2>/dev/null; then
+            echo "   • Telegram notifications: ENABLED"
+        fi
+        if grep -q 'SEND_EMAIL="YES"' /etc/netdata/health_alarm_notify.conf 2>/dev/null || \
+           grep -q 'SEND_EMAIL="yes"' /etc/netdata/health_alarm_notify.conf 2>/dev/null; then
+            echo "   • Email notifications: ENABLED"
+        fi
+    else
+        echo "ℹ️  Netdata health alarm notification config not found (will use Netdata defaults)"
+    fi
+
 elif [ "$DOCKER_MODE" = "false" ] && [ "$NETDATA_ENABLED" != "true" ]; then
     echo "📊 Netdata monitoring disabled (NETDATA_ENABLED=false)"
     echo "   To enable: Set NETDATA_ENABLED=true in your configuration"

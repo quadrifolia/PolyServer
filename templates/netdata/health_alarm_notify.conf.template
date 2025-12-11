@@ -6,6 +6,8 @@
 # Enable/disable sending discord notifications
 SEND_DISCORD="{{DISCORD_ENABLED}}"
 DISCORD_WEBHOOK_URL="{{DISCORD_WEBHOOK_URL}}"
+# if a role's recipients are not configured, send to this discord channel
+DEFAULT_RECIPIENT_DISCORD="discord"
 
 # Enable/disable sending slack notifications
 SEND_SLACK="{{SLACK_ENABLED}}"
@@ -16,6 +18,7 @@ DEFAULT_RECIPIENT_SLACK="#monitoring"
 SEND_TELEGRAM="{{TELEGRAM_ENABLED}}"
 TELEGRAM_BOT_TOKEN="{{TELEGRAM_BOT_TOKEN}}"
 TELEGRAM_CHAT_ID="{{TELEGRAM_CHAT_ID}}"
+DEFAULT_RECIPIENT_TELEGRAM=""
 
 # Enable/disable sending email notifications
 SEND_EMAIL="{{EMAIL_NOTIFICATION}}"
