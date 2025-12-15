@@ -854,8 +854,8 @@ EOF
 *                                                                        *
 *                 AUTHORIZED ACCESS ONLY                                 *
 *                                                                        *
-*  This system is for authorized users only. All activities may be      *
-*  monitored and recorded. Unauthorized access is prohibited.           *
+*  This system is for authorized users only. All activities may be       *
+*  monitored and recorded. Unauthorized access is prohibited.            *
 *                                                                        *
 **************************************************************************
 EOF
@@ -4885,6 +4885,78 @@ echo "===== 9. Setting up PolyServer directories ====="
 mkdir -p /opt/polyserver/{data,backups,config,scripts}
 chown -R $USERNAME:$USERNAME /opt/polyserver
 chmod -R 750 /opt/polyserver
+
+# ========= Setup S3 Backup Integration =========
+# Check if S3 credentials are configured and install rclone
+if [ -n "{{S3_ACCESS_KEY_ID}}" ] && [ "{{S3_ACCESS_KEY_ID}}" != "{{S3""_ACCESS_KEY_ID}}" ]; then
+    echo "===== S3 Backup Configuration Detected ====="
+    echo "Setting up rclone for S3-compatible storage..."
+
+    # Install rclone
+    if ! command -v rclone >/dev/null 2>&1; then
+        echo "Installing rclone..."
+        apt-get install -y rclone
+        echo "✅ rclone installed"
+    else
+        echo "✅ rclone already installed"
+    fi
+
+    # Verify s3backup.sh script exists
+    if [ -f "/opt/polyserver/scripts/s3backup.sh" ]; then
+        echo "S3 backup script found: /opt/polyserver/scripts/s3backup.sh"
+
+        # Source the env file to get S3 credentials for cron
+        if [ -f "/opt/polyserver/config/.env" ] || [ -f "/opt/polyserver/config/defaults.env" ]; then
+            ENV_FILE="/opt/polyserver/config/.env"
+            if [ ! -f "$ENV_FILE" ]; then
+                ENV_FILE="/opt/polyserver/config/defaults.env"
+            fi
+
+            # Setup daily backup cron job for root user (S3 credentials need to be sourced)
+            CRON_JOB="0 3 * * * . $ENV_FILE && /opt/polyserver/scripts/s3backup.sh >> /opt/polyserver/backups/s3backup.log 2>&1"
+
+            # Check if cron job already exists
+            if ! crontab -l 2>/dev/null | grep -F "/opt/polyserver/scripts/s3backup.sh" >/dev/null; then
+                echo "Setting up daily S3 backup cron job (runs at 3:00 AM)..."
+                (crontab -l 2>/dev/null; echo "# S3 Backup - Daily backup to S3-compatible object storage at 3:00 AM") | crontab -
+                (crontab -l 2>/dev/null; echo "$CRON_JOB") | crontab -
+                echo "✅ S3 backup cron job configured"
+            else
+                echo "✅ S3 backup cron job already configured"
+            fi
+
+            # Create log directory and initial log file
+            touch /opt/polyserver/backups/s3backup.log
+            chown $USERNAME:$USERNAME /opt/polyserver/backups/s3backup.log
+
+            # Show S3 configuration
+            echo ""
+            echo "S3 Backup Configuration:"
+            echo "  Bucket: {{S3_BUCKET}}"
+            echo "  Prefix: {{S3_PREFIX}}"
+            echo "  Region: {{S3_REGION}}"
+            if [ -n "{{S3_ENDPOINT}}" ] && [ "{{S3_ENDPOINT}}" != "{{S3""_ENDPOINT}}" ]; then
+                echo "  Endpoint: {{S3_ENDPOINT}}"
+            fi
+            echo "  Schedule: Daily at 3:00 AM"
+            echo "  Log: /opt/polyserver/backups/s3backup.log"
+            echo ""
+            echo "✅ S3 backup integration configured successfully"
+            echo ""
+            echo "To manually run backup: sudo /opt/polyserver/scripts/s3backup.sh"
+            echo "To view backup logs: tail -f /opt/polyserver/backups/s3backup.log"
+        else
+            echo "⚠️  Environment file not found. S3 credentials may not be available to cron job."
+            echo "   Expected location: /opt/polyserver/config/.env or /opt/polyserver/config/defaults.env"
+        fi
+    else
+        echo "⚠️  S3 backup script not found at /opt/polyserver/scripts/s3backup.sh"
+        echo "   The script should be deployed before running server-setup.sh"
+    fi
+else
+    echo "⏭️  S3 credentials not configured, skipping S3 backup setup"
+    echo "   To enable S3 backups, configure S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY"
+fi
 
 # ========= Setup Unbound DNS Cache =========
 echo "===== 10. Setting up Unbound DNS cache ====="

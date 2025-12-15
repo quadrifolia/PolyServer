@@ -1,6 +1,6 @@
 #!/bin/bash
 # s3backup.sh - Application backup script with S3 Object Storage upload
-# This script creates local backups and uploads them to S3-compatible storage
+# This script creates local backups and uploads them to S3-compatible storage using rclone
 
 set -e
 
@@ -8,6 +8,11 @@ set -e
 # Source environment variables
 if [ -f {{DEPLOY_DIR}}/config/.env ]; then
   source {{DEPLOY_DIR}}/config/.env
+elif [ -f {{DEPLOY_DIR}}/config/defaults.env ]; then
+  source {{DEPLOY_DIR}}/config/defaults.env
+else
+  echo "ERROR: No environment file found at {{DEPLOY_DIR}}/config/.env or {{DEPLOY_DIR}}/config/defaults.env"
+  exit 1
 fi
 
 # Local backup directory
@@ -21,7 +26,6 @@ S3_PREFIX="${S3_PREFIX:-{{S3_PREFIX}}}"
 S3_REGION="${S3_REGION:-{{S3_REGION}}}"
 
 # S3 Endpoint (provider-specific)
-# If S3_ENDPOINT is not set, will default to AWS S3 standard endpoint
 if [ -n "{{S3_ENDPOINT}}" ] && [ "{{S3_ENDPOINT}}" != "{{S3""_ENDPOINT}}" ]; then
   S3_ENDPOINT="{{S3_ENDPOINT}}"
 else
@@ -37,33 +41,35 @@ TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 BACKUP_NAME="${APPLICATION_NAME}_${TIMESTAMP}.tar.gz"
 LOG_FILE="${LOCAL_BACKUP_DIR}/backup_${TIMESTAMP}.log"
 
+# Rclone remote name
+RCLONE_REMOTE="s3backup"
+
 # ========= Helper Functions =========
 log() {
   echo "[$(date +"%Y-%m-%d %H:%M:%S")] $1" | tee -a "$LOG_FILE"
 }
 
 check_s3_configured() {
-  # Support both generic S3_* names and AWS_* names for backwards compatibility
-  # Export as AWS_* since the AWS CLI requires these specific names
-  if [ -n "${S3_ACCESS_KEY_ID:-}" ]; then
-    export AWS_ACCESS_KEY_ID="${S3_ACCESS_KEY_ID}"
-  fi
-  if [ -n "${S3_SECRET_ACCESS_KEY:-}" ]; then
-    export AWS_SECRET_ACCESS_KEY="${S3_SECRET_ACCESS_KEY}"
-  fi
-
-  # Check if credentials are set (either via S3_* or AWS_* variables)
-  if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+  # Check if credentials are set
+  if [ -z "${S3_ACCESS_KEY_ID:-}" ] || [ -z "${S3_SECRET_ACCESS_KEY:-}" ]; then
     log "ERROR: S3 credentials not configured. Set S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY"
-    log "       (or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY for backwards compatibility)"
     return 1
   fi
 
-  # Check if AWS CLI is installed
-  if ! command -v aws &> /dev/null; then
-    log "ERROR: AWS CLI not installed. Please install with: apt-get install -y awscli"
+  # Check if rclone is installed
+  if ! command -v rclone &> /dev/null; then
+    log "ERROR: rclone not installed. Please install with: apt-get install -y rclone"
     return 1
   fi
+
+  # Configure rclone on-the-fly (no config file needed)
+  # Set environment variables for rclone to match working Cloudflare R2 config
+  export RCLONE_CONFIG_S3BACKUP_TYPE=s3
+  export RCLONE_CONFIG_S3BACKUP_PROVIDER=Cloudflare
+  export RCLONE_CONFIG_S3BACKUP_ACCESS_KEY_ID="${S3_ACCESS_KEY_ID}"
+  export RCLONE_CONFIG_S3BACKUP_SECRET_ACCESS_KEY="${S3_SECRET_ACCESS_KEY}"
+  export RCLONE_CONFIG_S3BACKUP_ENDPOINT="${S3_ENDPOINT}"
+  export RCLONE_CONFIG_S3BACKUP_NO_CHECK_BUCKET=true
 
   return 0
 }
@@ -77,32 +83,43 @@ log "===== Starting ${APPLICATION_NAME} backup with S3 upload ====="
 # ========= Application-Specific Backup Logic =========
 # CUSTOMIZE THIS SECTION FOR YOUR APPLICATION TYPE
 
-# Example for file-based applications:
+# IMPORTANT: For multiple databases, dump them to DATA_DIR first, then archive everything.
+# This ensures all databases are included in one backup file without overwriting each other.
+
+# Example: Backup PostgreSQL databases (uncomment and customize):
+# log "Backing up PostgreSQL databases"
+# sudo -u postgres pg_dump database1 | gzip > "${DATA_DIR}/db_pg_database1_${TIMESTAMP}.sql.gz"
+# sudo -u postgres pg_dump database2 | gzip > "${DATA_DIR}/db_pg_database2_${TIMESTAMP}.sql.gz"
+
+# Example: Backup MySQL/MariaDB databases (uncomment and customize):
+# log "Backing up MySQL databases"
+# mysqldump database1 | gzip > "${DATA_DIR}/db_mysql_database1_${TIMESTAMP}.sql.gz"
+# mysqldump database2 | gzip > "${DATA_DIR}/db_mysql_database2_${TIMESTAMP}.sql.gz"
+
+# Example: Backup SQLite database:
+# sqlite3 "${DATA_DIR}/app.db" ".backup '${DATA_DIR}/db_sqlite_${TIMESTAMP}.db'"
+# gzip -f "${DATA_DIR}/db_sqlite_${TIMESTAMP}.db"
+
+# Create archive of DATA_DIR (includes files + database dumps)
 if [ -d "$DATA_DIR" ]; then
-  log "Creating data directory backup"
+  log "Creating backup archive of data directory"
   tar -czf "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" -C "$DATA_DIR" .
+
+  # Cleanup temporary database dumps from DATA_DIR (they're now in the archive)
+  rm -f "${DATA_DIR}"/db_*_${TIMESTAMP}.sql.gz 2>/dev/null || true
+  rm -f "${DATA_DIR}"/db_*_${TIMESTAMP}.db.gz 2>/dev/null || true
 else
   log "WARNING: Data directory $DATA_DIR not found"
 fi
 
-# Example for database applications (uncomment and customize):
-# For PostgreSQL:
-# pg_dump -h localhost -U app_user app_database | gzip > "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
-
-# For MySQL:
-# mysqldump -u app_user -p app_database | gzip > "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
-
-# For SQLite:
-# sqlite3 "${DATA_DIR}/app.db" ".backup '${LOCAL_BACKUP_DIR}/${APPLICATION_NAME}_${TIMESTAMP}.db'"
-# gzip -f "${LOCAL_BACKUP_DIR}/${APPLICATION_NAME}_${TIMESTAMP}.db"
-
-# For containerized applications:
-# docker exec app_container backup_command
+# Alternative: For ONLY database backup (no files), dump directly to backup file
+# Uncomment this ONLY if you don't have files to backup:
+# sudo -u postgres pg_dumpall | gzip > "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
 
 # Encrypt the backup if encryption key is available
 if [ -n "${BACKUP_ENCRYPTION_KEY:-}" ]; then
   log "Encrypting backup"
-  openssl enc -aes-256-cbc -salt -in "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" \
+  openssl enc -aes-256-cbc -salt -pbkdf2 -in "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" \
     -out "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}.enc" -pass "pass:${BACKUP_ENCRYPTION_KEY}"
   # Replace original with encrypted version
   mv "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}.enc" "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
@@ -113,69 +130,52 @@ fi
 BACKUP_SIZE=$(du -h "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" | cut -f1)
 log "Backup created: ${BACKUP_NAME} (${BACKUP_SIZE})"
 
-# ========= Upload to S3-Compatible Object Storage =========
+# ========= Upload to S3-Compatible Object Storage using rclone =========
 if check_s3_configured; then
-  log "Uploading backup to S3-compatible object storage"
+  log "Uploading backup to S3-compatible object storage using rclone"
 
-  # Configure AWS CLI with custom endpoint if specified
-  AWS_OPTS=""
   if [ -n "${S3_ENDPOINT}" ]; then
-    log "Using custom S3 endpoint: ${S3_ENDPOINT}"
-    aws configure set default.s3.endpoint_url "${S3_ENDPOINT}"
-    AWS_OPTS="--endpoint-url ${S3_ENDPOINT}"
+    log "Using S3 endpoint: ${S3_ENDPOINT}"
   fi
 
-  # Check if bucket exists, create if it doesn't
-  if ! aws s3 ls "s3://${S3_BUCKET}" --region "${S3_REGION}" ${AWS_OPTS} &>/dev/null; then
-    log "Creating S3 bucket: ${S3_BUCKET}"
-    aws s3 mb "s3://${S3_BUCKET}" --region "${S3_REGION}" ${AWS_OPTS}
-  fi
-
-  # Upload backup file
-  aws s3 cp "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" "s3://${S3_BUCKET}/${S3_PREFIX}/${BACKUP_NAME}" \
-    --region "${S3_REGION}" ${AWS_OPTS}
-  
-  if [ $? -eq 0 ]; then
-    log "Backup uploaded to s3://${S3_BUCKET}/${S3_PREFIX}/${BACKUP_NAME}"
+  # Upload backup file (quiet mode, only show errors)
+  if rclone copy "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" "${RCLONE_REMOTE}:${S3_BUCKET}/${S3_PREFIX}/" --quiet 2>&1 | tee -a "$LOG_FILE"; then
+    log "✅ Backup uploaded to s3://${S3_BUCKET}/${S3_PREFIX}/${BACKUP_NAME}"
   else
-    log "ERROR: Failed to upload backup to S3"
+    log "❌ ERROR: Failed to upload backup to S3 (check credentials and permissions)"
+    exit 1
   fi
-  
+
   # Cleanup old backups in S3
   if [ -n "$S3_RETENTION" ] && [ "$S3_RETENTION" -gt 0 ]; then
     log "Cleaning up S3 backups older than ${S3_RETENTION} days"
 
-    # Get list of backups older than retention period
-    RETENTION_DATE=$(date -d "-${S3_RETENTION} days" +"%Y-%m-%d")
-
-    # List objects and filter by date
-    aws s3api list-objects-v2 --bucket "${S3_BUCKET}" --prefix "${S3_PREFIX}/" \
-      --region "${S3_REGION}" ${AWS_OPTS} --query "Contents[?LastModified<='${RETENTION_DATE}'].Key" \
-      --output text | while read -r KEY; do
-
-      if [ -n "$KEY" ]; then
-        log "Deleting old S3 backup: ${KEY}"
-        aws s3 rm "s3://${S3_BUCKET}/${KEY}" --region "${S3_REGION}" ${AWS_OPTS}
-      fi
-    done
+    # Use rclone to delete files older than retention period
+    if rclone delete "${RCLONE_REMOTE}:${S3_BUCKET}/${S3_PREFIX}/" \
+      --min-age "${S3_RETENTION}d" \
+      --include "${APPLICATION_NAME}_*.tar.gz" \
+      --quiet 2>&1 | tee -a "$LOG_FILE"; then
+      log "✅ Old backups cleaned up from S3"
+    else
+      log "⚠️  Warning: Failed to cleanup old S3 backups"
+    fi
   fi
-  
+
   # Count S3 backups
-  S3_COUNT=$(aws s3 ls "s3://${S3_BUCKET}/${S3_PREFIX}/" --region "${S3_REGION}" ${AWS_OPTS} | wc -l)
+  S3_COUNT=$(rclone ls "${RCLONE_REMOTE}:${S3_BUCKET}/${S3_PREFIX}/" --quiet 2>/dev/null | wc -l || echo "0")
   log "S3 backups available: ${S3_COUNT}"
 else
-  log "WARN: S3 not configured or AWS CLI not installed, skipping S3 upload"
+  log "WARN: S3 not configured or rclone not installed, skipping S3 upload"
 fi
 
 # ========= Cleanup Old Local Backups =========
-# Local cleanup
 log "Cleaning up local backups older than ${LOCAL_RETENTION} days"
-find "${LOCAL_BACKUP_DIR}" -name "${APPLICATION_NAME}_*.tar.gz" -type f -mtime +${LOCAL_RETENTION} -delete
-find "${LOCAL_BACKUP_DIR}" -name "backup_*.log" -type f -mtime +${LOCAL_RETENTION} -delete
+find "${LOCAL_BACKUP_DIR}" -name "${APPLICATION_NAME}_*.tar.gz" -type f -mtime +${LOCAL_RETENTION} -delete 2>/dev/null || true
+find "${LOCAL_BACKUP_DIR}" -name "backup_*.log" -type f -mtime +${LOCAL_RETENTION} -delete 2>/dev/null || true
 
 # ========= Backup Verification =========
 # Count backups
-LOCAL_COUNT=$(find "${LOCAL_BACKUP_DIR}" -name "${APPLICATION_NAME}_*.tar.gz" | wc -l)
+LOCAL_COUNT=$(find "${LOCAL_BACKUP_DIR}" -name "${APPLICATION_NAME}_*.tar.gz" 2>/dev/null | wc -l)
 log "Local backups available: ${LOCAL_COUNT}"
 
 log "===== Backup completed successfully ====="

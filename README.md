@@ -1874,7 +1874,7 @@ After any update, verify that all systems are functioning properly:
 
 ## SSL Certificate Management
 
-SSL certificates are automatically managed by Certbot. The initial certificate is obtained during the first deployment, and renewal is handled automatically.
+Certbot automatically manages SSL certificates. The initial certificate is obtained during the first deployment, and renewal is handled automatically.
 
 ## Backup Strategy
 
@@ -1892,6 +1892,8 @@ S3-compatible object storage is the recommended backup solution with many advant
 - **Lifecycle policies**: Automate retention and deletion of old backups
 - **Immutability options**: Prevent backups from being modified or deleted for compliance
 - **Company-wide storage**: Can be organized across departments using buckets and prefixes
+
+**Backup Tool**: PolyServer uses **rclone** for S3 backups – a modern, reliable tool with excellent support for S3-compatible providers including Cloudflare R2, OVH, AWS S3, and others.
 
 #### Supported S3-Compatible Providers
 
@@ -1950,7 +1952,38 @@ The backup system works with any S3-compatible object storage provider:
    # Without this key, encrypted backups cannot be restored!
    ```
 
-4. **The S3 backup process will run automatically** according to the configured schedule (default: daily at 2 AM).
+4. **The S3 backup process will run automatically** according to the configured schedule (default: daily at 3:00 AM).
+
+   When S3 credentials are configured, the server setup automatically:
+   - Installs **rclone**
+   - Configures the backup script to use rclone
+   - Sets up a daily cron job at 3:00 AM
+   - Creates backup log at `/opt/polyserver/backups/s3backup.log`
+
+#### How S3 Backups Work
+
+Understanding the backup workflow:
+
+1. **Local Backup Creation**: The script creates a local backup in `/opt/polyserver/backups/`
+   - Compresses data from `DATA_DIR` (default: `/opt/polyserver/data/`)
+   - Creates a timestamped tar.gz file: `application_YYYYMMDD_HHMMSS.tar.gz`
+
+2. **Encryption** (if `BACKUP_ENCRYPTION_KEY` is set):
+   - Encrypts the backup with AES-256-CBC using PBKDF2
+   - Replaces the original with the encrypted version
+
+3. **Upload to S3**:
+   - Uses rclone to upload the backup to your S3 bucket
+   - Uploads to: `s3://${S3_BUCKET}/${S3_PREFIX}/application_YYYYMMDD_HHMMSS.tar.gz`
+
+4. **Cleanup**:
+   - Removes local backups older than `LOCAL_RETENTION` days
+   - Removes S3 backups older than `S3_RETENTION` days
+
+**Important**:
+- The `/opt/polyserver/backups/` directory stores LOCAL backups and logs
+- It is NOT the source of what gets backed up
+- The source is configured in the backup script (default: `/opt/polyserver/data/`)
 
 #### What Gets Backed Up
 
@@ -1977,21 +2010,92 @@ nano templates/scripts/s3backup.sh.template
 
 **Example customizations**:
 
-1. **Back up a PostgreSQL database**:
+**⚠️ IMPORTANT**: For **multiple databases**, dump them to `DATA_DIR` first, then archive everything. This ensures all databases are included in ONE backup file without overwriting each other.
+
+1. **Back up PostgreSQL databases** (using Unix socket – most secure for local):
 
    ```bash
-   # Uncomment and customize in the script:
-   pg_dump -h localhost -U myapp_user myapp_db | gzip > "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
+   # Dump databases to DATA_DIR (temporary)
+   log "Backing up PostgreSQL databases"
+   sudo -u postgres pg_dump database1 | gzip > "${DATA_DIR}/db_pg_database1_${TIMESTAMP}.sql.gz"
+   sudo -u postgres pg_dump database2 | gzip > "${DATA_DIR}/db_pg_database2_${TIMESTAMP}.sql.gz"
+
+   # Archive DATA_DIR (includes files + database dumps)
+   tar -czf "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" -C "$DATA_DIR" .
+
+   # Cleanup temporary database dumps (they're now in the archive)
+   rm -f "${DATA_DIR}"/db_pg_*_${TIMESTAMP}.sql.gz
    ```
 
-2. **Back up a MySQL/MariaDB database**:
+   **Alternative methods** (if the Unix socket doesn't work):
+   - **Using .pgpass file**: Create `~/.pgpass` with format `localhost:5432:dbname:user:password` (chmod 600)
+   - **Using environment variable**: `PGPASSWORD="${DB_PASSWORD}" pg_dump -h localhost -U user dbname`
+
+2. **Back up MySQL/MariaDB databases** (using .my.cnf):
 
    ```bash
-   # Uncomment and customize in the script:
-   mysqldump -u myapp_user -p'password' myapp_db | gzip > "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}"
+   # Dump databases to DATA_DIR (temporary)
+   log "Backing up MySQL databases"
+   mysqldump database1 | gzip > "${DATA_DIR}/db_mysql_database1_${TIMESTAMP}.sql.gz"
+   mysqldump database2 | gzip > "${DATA_DIR}/db_mysql_database2_${TIMESTAMP}.sql.gz"
+
+   # Archive DATA_DIR (includes files + database dumps)
+   tar -czf "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" -C "$DATA_DIR" .
+
+   # Cleanup temporary database dumps (they're now in the archive)
+   rm -f "${DATA_DIR}"/db_mysql_*_${TIMESTAMP}.sql.gz
    ```
 
-3. **Back up multiple directories**:
+   **Setup .my.cnf once** (one-time):
+   ```bash
+   cat > ~/.my.cnf << EOF
+   [client]
+   user=root
+   password=your_mysql_root_password
+   EOF
+   chmod 600 ~/.my.cnf
+   ```
+
+3. **Complete example with PostgreSQL + MySQL + Files**:
+
+   ```bash
+   # Backup PostgreSQL databases
+   log "Backing up PostgreSQL databases"
+   sudo -u postgres pg_dump metabase | gzip > "${DATA_DIR}/db_pg_metabase_${TIMESTAMP}.sql.gz"
+
+   # Backup MySQL databases
+   log "Backing up MySQL databases"
+   mysqldump polypublisher | gzip > "${DATA_DIR}/db_mysql_polypublisher_${TIMESTAMP}.sql.gz"
+   mysqldump warehouse | gzip > "${DATA_DIR}/db_mysql_warehouse_${TIMESTAMP}.sql.gz"
+
+   # Archive everything in DATA_DIR (files + all database dumps)
+   log "Creating backup archive"
+   tar -czf "${LOCAL_BACKUP_DIR}/${BACKUP_NAME}" -C "$DATA_DIR" .
+
+   # Cleanup temporary database dumps from DATA_DIR
+   rm -f "${DATA_DIR}"/db_*_${TIMESTAMP}.sql.gz
+
+   log "Backup completed: ${BACKUP_NAME}"
+   ```
+
+   **Result**: One backup file containing:
+   - All files from `DATA_DIR`
+   - PostgreSQL database dump
+   - MySQL database dumps
+
+   **⚠️ SECURITY WARNING**: Never hardcode passwords directly in backup scripts!
+
+   ```bash
+   # ❌ NEVER DO THIS:
+   mysqldump -u root -p'hardcoded_password' mydb
+
+   # ✅ ALWAYS DO THIS:
+   # - Use .my.cnf or .pgpass files (chmod 600)
+   # - Use environment variables from secure config files
+   # - Use Unix socket / peer authentication when possible
+   ```
+
+4. **Back up multiple directories**:
 
    ```bash
    # Add to the script:
@@ -2001,7 +2105,7 @@ nano templates/scripts/s3backup.sh.template
      /opt/myapp/config
    ```
 
-4. **Back up Docker volumes**:
+5. **Back up Docker volumes**:
 
    ```bash
    # Add to the script:
@@ -2009,7 +2113,7 @@ nano templates/scripts/s3backup.sh.template
      alpine tar -czf /backup/${BACKUP_NAME} /data
    ```
 
-5. **Custom application backup**:
+6. **Custom application backup**:
 
    ```bash
    # Add your application's backup command:
@@ -2020,6 +2124,75 @@ After customizing, regenerate configs:
 
 ```bash
 ./scripts/generate-configs.sh
+```
+
+#### Database Password Security Best Practices
+
+**Is it safe to store passwords in backup scripts?** NO! Here's how to handle credentials securely:
+
+**❌ Never Do**:
+- Hardcode passwords directly in scripts
+- Store passwords in git-tracked files
+- Use world-readable credential files
+- Pass passwords as command-line arguments (visible in the process list)
+
+**✅ Always Do**:
+
+1. **Use dedicated credential files** (.pgpass, .my.cnf):
+   - Store in the user's home directory
+   - Set permissions to 600 (owner read/write only)
+   - Not tracked by git
+
+2. **Use environment variables from secure config**:
+   - Store in `/opt/polyserver/config/defaults.env` (git-ignored)
+   - File has 640 permissions (owner/group read only)
+   - Script sources the env file before backup
+
+3. **Use Unix socket authentication**:
+   - PostgreSQL peer authentication
+   - MySQL/MariaDB auth_socket plugin
+   - No password needed for local connections
+
+4. **Encrypt the entire backup**:
+   - Even if someone gets the backup file, database dumps are encrypted
+   - Use `BACKUP_ENCRYPTION_KEY` in defaults.env
+
+**Example secure setup**:
+
+```bash
+# 1. Store database password in defaults.env (git-ignored)
+echo "DB_PASSWORD=$(openssl rand -base64 32)" >> /opt/polyserver/config/defaults.env
+
+# 2. Create .pgpass file for PostgreSQL
+cat > ~/.pgpass << EOF
+localhost:5432:*:myapp_user:$(grep DB_PASSWORD /opt/polyserver/config/defaults.env | cut -d= -f2)
+EOF
+chmod 600 ~/.pgpass
+
+# 3. Create .my.cnf for MySQL/MariaDB
+cat > ~/.my.cnf << EOF
+[client]
+user=myapp_user
+password=$(grep DB_PASSWORD /opt/polyserver/config/defaults.env | cut -d= -f2)
+EOF
+chmod 600 ~/.my.cnf
+
+# 4. Now database backups work without exposing passwords
+sudo -u postgres pg_dump myapp_db | gzip > backup.sql.gz  # PostgreSQL
+mysqldump myapp_db | gzip > backup.sql.gz                   # MySQL/MariaDB
+```
+
+**File Permissions Summary**:
+```bash
+# Backup script (contains no passwords)
+-rwxr-x--- 1 deploy deploy /opt/polyserver/scripts/s3backup.sh  # 750
+
+# Environment file (contains passwords)
+-rw-r----- 1 deploy deploy /opt/polyserver/config/defaults.env  # 640
+
+# Credential files (contains passwords)
+-rw------- 1 deploy deploy ~/.pgpass   # 600
+-rw------- 1 deploy deploy ~/.my.cnf   # 600
 ```
 
 #### Modifying Backups After Server Setup
@@ -2141,7 +2314,7 @@ S3_RETENTION=90
 
 #### Backup Encryption
 
-Backups can be encrypted with AES-256-CBC:
+Backups can be encrypted with AES-256-CBC using PBKDF2 key derivation:
 
 ```bash
 # In templates/defaults.env:
@@ -2153,16 +2326,35 @@ BACKUP_ENCRYPTION_KEY="your-strong-encryption-key-here"
 
 **IMPORTANT**: Store your encryption key securely outside the server! Without it, encrypted backups cannot be restored.
 
-**To restore an encrypted backup**:
+**How to decrypt and restore an encrypted backup**:
 
 ```bash
-# Decrypt the backup
-openssl enc -d -aes-256-cbc -in backup.tar.gz -out backup_decrypted.tar.gz \
+# 1. Download the encrypted backup from S3 (see Manual S3 Access section below)
+# 2. Decrypt the backup
+openssl enc -d -aes-256-cbc -pbkdf2 \
+  -in application_20231215_030000.tar.gz \
+  -out application_20231215_030000_decrypted.tar.gz \
   -pass "pass:your-encryption-key"
 
-# Extract
-tar -xzf backup_decrypted.tar.gz
+# 3. Extract to restore
+tar -xzf application_20231215_030000_decrypted.tar.gz -C /restore/location/
+
+# 4. Verify the contents
+ls -lh /restore/location/
 ```
+
+**Encryption Details**:
+- **Algorithm**: AES-256-CBC (256-bit Advanced Encryption Standard in Cipher Block Chaining mode)
+- **Key Derivation**: PBKDF2 (Password-Based Key Derivation Function 2)
+- **Salt**: Automatically added by OpenSSL for additional security
+- **Recommended Key Length**: 32 bytes (256 bits) encoded in base64
+
+**Security Best Practices**:
+1. **Store the key separately**: Never store the encryption key only on the server being backed up
+2. **Use a password manager**: Store the key in a secure password manager (1Password, Bitwarden, etc.)
+3. **Document the key**: Add it to your disaster recovery documentation
+4. **Test decryption**: Regularly test that you can decrypt backups successfully
+5. **Rotate keys**: Consider rotating encryption keys annually and re-encrypting old backups
 
 #### Monitoring Backups
 
@@ -2172,21 +2364,266 @@ Check backup status and logs:
 # View recent backup logs
 ls -lh /opt/polyserver/backups/*.log | tail -5
 
-# View last backup log
-tail -50 /opt/polyserver/backups/backup_*.log | tail -50
+# View last backup log (for s3backup.sh)
+tail -50 /opt/polyserver/backups/s3backup.log
 
-# Check S3 backups
-aws s3 ls s3://your-bucket/your-prefix/ --region your-region
+# View all backup logs
+tail -100 /opt/polyserver/backups/backup_*.log
 
 # Count local backups
-ls -1 /opt/polyserver/backups/*.tar.gz | wc -l
+ls -1 /opt/polyserver/backups/*.tar.gz 2>/dev/null | wc -l
 ```
 
 The backup script logs:
 - Backup creation time and size
+- Encryption status (if enabled)
 - Upload status to S3
 - Cleanup operations (old backups deleted)
 - Any errors encountered
+
+#### Manual S3 Access with rclone
+
+PolyServer uses rclone for S3 backups. You can use rclone manually to list, download, upload, or mount your S3 backups.
+
+##### Configure rclone for Manual Access
+
+The backup script uses environment variables for rclone configuration. You can use the same method for manual access:
+
+```bash
+# Source your environment file
+source /opt/polyserver/config/defaults.env
+
+# Configure rclone via environment variables (no config file needed)
+export RCLONE_CONFIG_S3BACKUP_TYPE=s3
+export RCLONE_CONFIG_S3BACKUP_PROVIDER=Cloudflare  # Or your provider
+export RCLONE_CONFIG_S3BACKUP_ACCESS_KEY_ID="${S3_ACCESS_KEY_ID}"
+export RCLONE_CONFIG_S3BACKUP_SECRET_ACCESS_KEY="${S3_SECRET_ACCESS_KEY}"
+export RCLONE_CONFIG_S3BACKUP_ENDPOINT="${S3_ENDPOINT}"
+export RCLONE_CONFIG_S3BACKUP_NO_CHECK_BUCKET=true
+
+# Now you can use rclone with the remote name "s3backup"
+```
+
+**Alternative**: Create a persistent rclone config file:
+
+```bash
+# Create config directory
+mkdir -p ~/.config/rclone
+
+# Create config file
+cat > ~/.config/rclone/rclone.conf << EOF
+[s3backup]
+type = s3
+provider = Cloudflare
+access_key_id = your_access_key_id
+secret_access_key = your_secret_access_key
+endpoint = https://your-account-id.r2.cloudflarestorage.com
+no_check_bucket = true
+EOF
+
+# Secure the config file
+chmod 600 ~/.config/rclone/rclone.conf
+```
+
+##### List Backups
+
+```bash
+# List all backups in your bucket
+rclone ls s3backup:polydata/production/
+
+# List with human-readable sizes
+rclone lsl s3backup:polydata/production/
+
+# List only directories
+rclone lsd s3backup:polydata/
+
+# Count total backups
+rclone ls s3backup:polydata/production/ | wc -l
+
+# Show total size
+rclone size s3backup:polydata/production/
+```
+
+##### Download Backups
+
+```bash
+# Download a specific backup
+rclone copy s3backup:polydata/production/application_20231215_030000.tar.gz /restore/
+
+# Download with progress indicator
+rclone copy s3backup:polydata/production/application_20231215_030000.tar.gz /restore/ --progress
+
+# Download all backups from a specific date
+rclone copy s3backup:polydata/production/ /restore/ --include "*20231215*.tar.gz" --progress
+
+# Download the latest backup
+LATEST=$(rclone lsl s3backup:polydata/production/ | tail -1 | awk '{print $NF}')
+rclone copy "s3backup:polydata/production/$LATEST" /restore/ --progress
+```
+
+##### Upload Backups
+
+```bash
+# Upload a local backup to S3
+rclone copy /opt/polyserver/backups/application_20231215_030000.tar.gz s3backup:polydata/production/ --progress
+
+# Upload multiple files
+rclone copy /opt/polyserver/backups/ s3backup:polydata/production/ --include "application_*.tar.gz" --progress
+
+# Sync entire backup directory (be careful - this deletes files not present locally)
+rclone sync /opt/polyserver/backups/ s3backup:polydata/production/ --progress
+```
+
+##### Mount S3 as Filesystem
+
+Mount your S3 bucket as a local directory for easy browsing:
+
+```bash
+# Install fuse (if not already installed)
+sudo apt-get install -y fuse3
+
+# Create mount point
+mkdir -p /mnt/s3-backups
+
+# Mount the S3 bucket (foreground mode for testing)
+rclone mount s3backup:polydata/production/ /mnt/s3-backups --read-only
+
+# Mount in background (daemon mode)
+rclone mount s3backup:polydata/production/ /mnt/s3-backups --read-only --daemon
+
+# Now you can browse backups like local files
+ls -lh /mnt/s3-backups/
+cd /mnt/s3-backups/
+
+# Copy files normally
+cp /mnt/s3-backups/application_20231215_030000.tar.gz /restore/
+
+# Unmount when done
+fusermount -u /mnt/s3-backups
+```
+
+**Mount Options**:
+```bash
+# Mount with caching for better performance
+rclone mount s3backup:polydata/production/ /mnt/s3-backups \
+  --read-only \
+  --daemon \
+  --vfs-cache-mode full \
+  --cache-dir /tmp/rclone-cache
+
+# Allow other users to access
+rclone mount s3backup:polydata/production/ /mnt/s3-backups \
+  --read-only \
+  --daemon \
+  --allow-other
+```
+
+##### Check Backup Integrity
+
+```bash
+# Verify a backup exists and check its size
+rclone lsl s3backup:polydata/production/ | grep application_20231215_030000.tar.gz
+
+# Calculate checksum (MD5)
+rclone md5sum s3backup:polydata/production/application_20231215_030000.tar.gz
+
+# Compare local and remote file
+rclone check /opt/polyserver/backups/ s3backup:polydata/production/
+
+# Dry-run to see what would be synced
+rclone sync /opt/polyserver/backups/ s3backup:polydata/production/ --dry-run
+```
+
+##### Delete Old Backups Manually
+
+```bash
+# Delete backups older than 90 days
+rclone delete s3backup:polydata/production/ --min-age 90d --include "application_*.tar.gz"
+
+# Delete a specific backup
+rclone delete s3backup:polydata/production/application_20231215_030000.tar.gz
+
+# Preview what would be deleted (dry-run)
+rclone delete s3backup:polydata/production/ --min-age 90d --include "application_*.tar.gz" --dry-run
+```
+
+##### Complete Restore Example
+
+Here's a complete example of downloading and restoring a backup:
+
+```bash
+# 1. List available backups
+echo "Available backups:"
+rclone ls s3backup:polydata/production/ | tail -10
+
+# 2. Download the latest backup
+LATEST=$(rclone lsl s3backup:polydata/production/ | tail -1 | awk '{print $NF}')
+echo "Downloading: $LATEST"
+rclone copy "s3backup:polydata/production/$LATEST" /restore/ --progress
+
+# 3. Decrypt the backup (if encrypted)
+source /opt/polyserver/config/defaults.env
+openssl enc -d -aes-256-cbc -pbkdf2 \
+  -in "/restore/$LATEST" \
+  -out "/restore/${LATEST%.tar.gz}_decrypted.tar.gz" \
+  -pass "pass:${BACKUP_ENCRYPTION_KEY}"
+
+# 4. Extract the backup
+tar -xzf "/restore/${LATEST%.tar.gz}_decrypted.tar.gz" -C /opt/polyserver/data/
+
+# 5. Set correct permissions
+sudo chown -R deploy:deploy /opt/polyserver/data/
+sudo chmod -R 750 /opt/polyserver/data/
+
+# 6. Restart your application
+sudo systemctl restart your-application
+
+echo "✅ Restore completed successfully!"
+```
+
+##### rclone Tips and Tricks
+
+**Bandwidth Limiting**:
+```bash
+# Limit upload speed to 10MB/s
+rclone copy /backup/ s3backup:polydata/production/ --bwlimit 10M
+
+# Limit download speed
+rclone copy s3backup:polydata/production/backup.tar.gz /restore/ --bwlimit 5M
+```
+
+**Parallel Transfers**:
+```bash
+# Use multiple connections for faster transfers
+rclone copy /backup/ s3backup:polydata/production/ --transfers 10 --progress
+```
+
+**Filtering**:
+```bash
+# Only files matching pattern
+rclone ls s3backup:polydata/production/ --include "application_202312*.tar.gz"
+
+# Exclude files
+rclone ls s3backup:polydata/production/ --exclude "*.log"
+
+# Files larger than 100MB
+rclone ls s3backup:polydata/production/ --min-size 100M
+
+# Files from last 7 days
+rclone ls s3backup:polydata/production/ --max-age 7d
+```
+
+**Logging**:
+```bash
+# Verbose output for debugging
+rclone copy /backup/ s3backup:polydata/production/ -v
+
+# Very verbose (includes API calls)
+rclone copy /backup/ s3backup:polydata/production/ -vv
+
+# Log to file
+rclone copy /backup/ s3backup:polydata/production/ --log-file /var/log/rclone.log
+```
 
 #### Organization Strategy for Company-Wide Storage
 
@@ -2826,6 +3263,8 @@ sudo nano /etc/logcheck/ignore.d.server/local-custom
 **Pattern breakdown:**
 ```regex
 ^\w{3} [ :0-9]{11} [._[:alnum:]-]+ clamd\[[0-9]+\]: .* -> SelfCheck: Database status OK\.$
+```
+```
 │     │            │                │           │                                        │
 │     │            │                │           │                                        └─ Literal period (escaped)
 │     │            │                │           └─ Match the actual message
@@ -2837,7 +3276,7 @@ sudo nano /etc/logcheck/ignore.d.server/local-custom
 
 **Tips for creating patterns:**
 
-1. **Start specific, then generalize:**
+1. **Start specifically, then generalize:**
    ```bash
    # Too specific (breaks if format changes)
    Dec 13 05:01:59 server-1 clamd[123]: message
@@ -2934,7 +3373,7 @@ find /etc/logcheck/ignore.d.server/ -type f -exec wc -l {} + | tail -1
 3. Verify email configuration: `echo "test" | mail -s "Test" your@email.com`
 4. Check logcheck logs: `sudo grep logcheck /var/log/syslog`
 
-**Pattern not working?**
+**Is the pattern not working?**
 1. Test it against actual log entries
 2. Check for hidden characters or encoding issues
 3. Verify regex syntax (use a regex tester)
