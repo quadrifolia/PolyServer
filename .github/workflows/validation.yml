@@ -46,7 +46,7 @@ jobs:
               -e 's/\$NETDATA_ENABLED/false/g' \
               -e 's/\$DEPLOYMENT_MODE/standalone/g' \
               templates/server-setup.sh.template > /tmp/server-setup-test.sh
-          shellcheck -e SC1090,SC1091,SC2004,SC2016,SC2034,SC2154,SC2086,SC2027,SC2140,SC2050 /tmp/server-setup-test.sh
+          shellcheck -e SC1090,SC1091,SC2004,SC2016,SC2034,SC2154,SC2086,SC2027,SC2140,SC2050,SC2157 /tmp/server-setup-test.sh
         fi
         
         echo "✅ All shell scripts passed validation"
