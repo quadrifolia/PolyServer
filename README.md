@@ -2753,14 +2753,192 @@ These are **historical event reports** from boot time, not real-time failures. T
 Logcheck provides server-level log analysis with daily reports, carefully filtering out normal events to highlight potential issues:
 
 - **Server log level**: Configured to show server-relevant security issues
-- **Daily reports**: Summarizes suspicious log entries
+- **Daily reports**: Summarizes suspicious log entries only (noise filtered out)
+- **Pre-configured ignore patterns**: Common routine operations (ClamAV, PostgreSQL, Netdata, etc.) are automatically filtered
 - **Same recipient**: Uses the same email address as Logwatch
 
-To customize logcheck settings:
+#### How Logcheck Works
+
+Logcheck scans system logs and emails you entries that don't match ignore patterns. The filtering happens in levels:
+
+```
+/etc/logcheck/
+├── logcheck.conf          # Main configuration
+├── ignore.d.paranoid/     # Minimal filtering (most alerts)
+├── ignore.d.server/       # Moderate filtering (default) ← You are here
+└── ignore.d.workstation/  # Maximum filtering (fewest alerts)
+```
+
+The server uses **"server"** level filtering, which balances security visibility with reduced noise.
+
+#### Pre-Configured Ignore Patterns
+
+The setup automatically creates ignore patterns for routine operations in `/etc/logcheck/ignore.d.server/application-server-ignore`:
+
+**Security Tools:**
+- ClamAV database checks and freshclam updates
+- Fail2ban ban/unban operations
+- RKHunter routine scans
+
+**Database Operations:**
+- PostgreSQL checkpoints and autovacuum
+- MariaDB/MySQL informational notes
+
+**System Services:**
+- Netdata health monitoring
+- Systemd session management
+- SSH successful authentications
+- Postfix mail delivery
+
+**Network:**
+- UFW firewall blocks (expected traffic)
+- Docker and container operations
+- Nginx routine activity
+
+#### Customizing Ignore Patterns
+
+If you're getting alerts for legitimate routine operations, add custom ignore patterns:
+
+**Create a custom ignore file:**
+
+```bash
+sudo nano /etc/logcheck/ignore.d.server/local-custom
+```
+
+**Pattern Format:** Each line is a regular expression matching log entries to ignore.
+
+**Example patterns:**
+
+```bash
+# Ignore specific application messages
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ myapp\[[0-9]+\]: Normal operation message
+
+# Ignore cron job output
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ cron\[[0-9]+\]: \(root\) CMD \(/path/to/script\.sh\)
+
+# Ignore specific systemd service restarts
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ systemd\[[0-9]+\]: Started My Application Service\.$
+
+# Support both syslog and ISO 8601 timestamp formats
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ myapp\[[0-9]+\]: .*
+```
+
+**Pattern breakdown:**
+```regex
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ clamd\[[0-9]+\]: .* -> SelfCheck: Database status OK\.$
+│     │            │                │           │                                        │
+│     │            │                │           │                                        └─ Literal period (escaped)
+│     │            │                │           └─ Match the actual message
+│     │            │                └─ Process name with PID [number]
+│     │            └─ Hostname
+│     └─ Date/time (11 chars)
+└─ Start of line, 3 letters (Dec, Jan, etc.)
+```
+
+**Tips for creating patterns:**
+
+1. **Start specific, then generalize:**
+   ```bash
+   # Too specific (breaks if format changes)
+   Dec 13 05:01:59 server-1 clamd[123]: message
+
+   # Better (works for any date/time/hostname/PID)
+   ^\w{3} [ :0-9]{11} [._[:alnum:]-]+ clamd\[[0-9]+\]: message
+   ```
+
+2. **Escape special regex characters:** `. [ ] ( ) $ ^ * + ?`
+   ```bash
+   # Wrong: clamd[123]: message.
+   # Right: clamd\[[0-9]+\]: message\.$
+   ```
+
+3. **Use `.*` for variable parts:**
+   ```bash
+   ^\w{3} [ :0-9]{11} .* -> SelfCheck: Database status OK\.$
+   ```
+
+#### Testing Ignore Patterns
+
+Before relying on new patterns, test them:
+
+```bash
+# Test mode - shows what would be sent without actually sending
+sudo logcheck -t
+
+# Debug mode - shows detailed pattern matching
+sudo logcheck -d
+
+# Test if a pattern matches a specific log line
+echo "Dec 13 05:01:59 server clamd[123]: SelfCheck: Database status OK." | \
+  grep -E "^\w{3} [ :0-9]{11} [._[:alnum:]-]+ clamd\[[0-9]+\]: .* -> SelfCheck: Database status OK\.$"
+
+# View what logcheck would report right now
+sudo -u logcheck logcheck -t 2>&1 | less
+```
+
+#### Adjusting Logcheck Frequency
+
+By default, logcheck runs daily. To change the frequency:
+
+```bash
+# Edit the cron configuration
+sudo nano /etc/cron.d/logcheck
+
+# Change from daily to every 6 hours
+0 */6 * * *   logcheck    if [ -x /usr/sbin/logcheck ]; then nice -n10 /usr/sbin/logcheck; fi
+
+# Or disable email and just check manually
+# Comment out the cron job and run manually when needed:
+sudo -u logcheck logcheck -t
+```
+
+#### Configuration File
+
+To customize other logcheck settings:
 
 ```bash
 sudo nano /etc/logcheck/logcheck.conf
+
+# Common settings:
+REPORTLEVEL="server"           # Alert level: paranoid, server, or workstation
+SENDMAILTO="your@email.com"    # Email recipient
+ATTACKSUBJECT="Security Alerts from \$HOSTNAME"
 ```
+
+#### Viewing Active Filters
+
+See which patterns are currently filtering logs:
+
+```bash
+# List all ignore pattern files
+ls -la /etc/logcheck/ignore.d.server/
+
+# View a specific pattern file
+cat /etc/logcheck/ignore.d.server/application-server-ignore
+
+# Count how many patterns are defined
+find /etc/logcheck/ignore.d.server/ -type f -exec wc -l {} + | tail -1
+```
+
+#### Troubleshooting
+
+**Getting too many emails?**
+1. Check what's being reported: `sudo logcheck -t`
+2. Identify the repetitive messages
+3. Create ignore patterns for legitimate routine operations
+4. Test the patterns before deploying
+
+**Not getting any emails?**
+1. Check if logcheck is running: `systemctl status logcheck.timer` (if using systemd timer)
+2. Check mail logs: `sudo tail -50 /var/log/mail.log`
+3. Verify email configuration: `echo "test" | mail -s "Test" your@email.com`
+4. Check logcheck logs: `sudo grep logcheck /var/log/syslog`
+
+**Pattern not working?**
+1. Test it against actual log entries
+2. Check for hidden characters or encoding issues
+3. Verify regex syntax (use a regex tester)
+4. Ensure the pattern file is readable by logcheck: `sudo chmod 644 /etc/logcheck/ignore.d.server/local-custom`
 
 ### Logwatch System Monitoring
 
