@@ -1,6 +1,6 @@
 # PolyServer - Hardened Debian Server Foundation
 
-This repository provides a comprehensive, security-hardened Debian server foundation that can be used as a base for deploying various applications including React/Next.js frontends, PHP backends, business intelligence platforms, analytics services, and other web applications.
+This repository provides a comprehensive, security-hardened Debian server foundation that can be used as a base for deploying various applications, including React/Next.js frontends, PHP backends, business intelligence platforms, analytics services, and other web applications.
 
 > **SECURITY NOTICE**: This setup creates a production-ready, hardened server environment. Review our [security configurations](./SECURITY.md) and [compliance documentation](./DSGVO.md) before deployment.
 
@@ -16,16 +16,18 @@ This repository provides a comprehensive, security-hardened Debian server founda
   - [Step 4: Run Server Hardening](#step-4-run-server-hardening)
 - [Specialized Server Deployments](#specialized-server-deployments)
   - [Bastion Host Setup](#bastion-host-setup)
-  - [MariaDB Dedicated Server](#mariadb-dedicated-server)
+  - [Dedicated Database Server](#dedicated-database-server)
 - [Application Deployment](#application-deployment)
   - [Deployment Modes](#deployment-modes)
   - [Supported Applications](#supported-applications)
   - [Deployment Examples](#deployment-examples)
   - [Next Steps](#next-steps)
 - [DSGVO/GDPR Compliance](#dsgvogdpr-compliance)
-  - [Compliance Documentation](#compliance-documentation)
-  - [Compliance Scripts](#compliance-scripts)
-  - [Compliance Setup](#compliance-setup)
+  - [What It Does](#what-it-does)
+  - [Available Documentation Templates](#available-documentation-templates)
+  - [Available Compliance Scripts](#available-compliance-scripts)
+  - [When and Where to Set Up](#when-and-where-to-set-up)
+  - [Detailed Documentation](#detailed-documentation)
 - [Base Server Features](#base-server-features)
 - [Base Server Components](#base-server-components)
 - [Optional Application Components](#optional-application-components)
@@ -38,7 +40,7 @@ This repository provides a comprehensive, security-hardened Debian server founda
   - [Update Verification](#update-verification)
 - [SSL Certificate Management](#ssl-certificate-management)
 - [Backup Strategy](#backup-strategy)
-  - [Primary: OVH Object Storage for Backups](#primary-ovh-object-storage-for-backups)
+  - [Primary: S3-Compatible Object Storage for Backups](#primary-s3-compatible-object-storage-for-backups)
   - [Optional: Block Storage for Local Backups](#optional-block-storage-for-local-backups)
 - [Server Monitoring and Security](#server-monitoring-and-security)
   - [Firewall Configuration](#firewall-configuration)
@@ -513,7 +515,7 @@ sudo bash server-setup.sh
 - Harden network and system access
 - Change SSH port to 2222 (reconnect using this port afterward)
 
-**Important:** After the script completes, SSH will be on port 2222 and you'll connect as the `deploy` user (not root).
+**Important:** After the script completes, SSH will be on port 2222, and you'll connect as the `deploy` user (not root).
 
 ## Specialized Server Deployments
 
@@ -535,7 +537,7 @@ A bastion host is a specialized server that:
 
 **Prerequisites:**
 - Fresh Debian 13 (trixie) server
-- SSH public key for authentication (required - no password auth allowed)
+- SSH public key for authentication (required – no password auth allowed)
 - **Root access to the server** (or sudo privileges)
 
 **Setup Process:**
@@ -616,18 +618,18 @@ The bastion setup provides enhanced security beyond the standard server hardenin
 
 These essential security tools are **now enabled by default** to provide comprehensive bastion protection:
 
-- **RKHunter + chkrootkit**: Rootkit detection and system integrity checking (LOW resource - ~10MB RAM)
-- **Suricata IDS**: Network intrusion detection system with real-time traffic analysis (MEDIUM resource - ~150MB RAM)
+- **RKHunter + chkrootkit**: Rootkit detection and system integrity checking (LOW resource – ~10MB RAM)
+- **Suricata IDS**: Network intrusion detection system with real-time traffic analysis (MEDIUM resource – ~150MB RAM)
 
 **Why these are enabled by default:**
 - Bastion hosts are high-value targets requiring maximum security
 - Rootkit detection is essential and has minimal resource impact
 - Network IDS is critical for monitoring all traffic through the bastion gateway
-- Combined resource usage: ~160MB RAM - acceptable for modern bastions
+- Combined resource usage: ~160MB RAM – acceptable for modern bastions
 
 #### Optional Security Components
 
-Additional security tools available for specific needs:
+Additional security tools are available for specific needs:
 
 ```bash
 # Enable optional components (disabled by default)
@@ -763,10 +765,10 @@ ssh -p 2222 -o PubkeyAuthentication=no bastion@your-bastion-ip
 - **Eliminates password brute-force attacks**: No password = no brute-forcing
 - **Enforces strong authentication**: SSH keys are cryptographically stronger than passwords
 - **Restricts privilege escalation**: Whitelisted sudo commands prevent unauthorized root access
-- **Principle of least privilege**: Bastion user can monitor but not modify system
+- **Principle of least privilege**: Bastion user can monitor but not modify the system
 - **Audit trail**: All access tied to specific SSH keys, root access via su is logged
 - **Compliance**: Meets security requirements for privileged access management (separation of duties)
-- **Defense in depth**: Even if bastion account is compromised, attacker cannot run arbitrary root commands
+- **Defense in depth**: Even if the bastion account is compromised, the attacker cannot run arbitrary root commands
 - **Emergency recovery**: Root password via console provides last-resort access
 
 **Common Issues:**
@@ -894,7 +896,7 @@ systemctl restart ssh
 - ⚠️ May cause "Read-only file system" errors
 - ⚠️ Can break apt, dpkg, and package installations
 - ⚠️ Requires console access for many admin tasks
-- ⚠️ Makes system harder to maintain and update
+- ⚠️ Makes the system harder to maintain and update
 - ✅ Provides additional filesystem-level protection
 
 #### Security Philosophy
@@ -949,7 +951,7 @@ This provides effective security while maintaining a usable, maintainable system
 - **System monitoring**: htop, iotop, atop, sysstat
 - **Custom commands**: `bastionstat` (system status), `sshmon` (SSH monitoring), `bastionmail` (local mail reader)
 
-Note: Security scanning tools (ClamAV, maldet, rkhunter, chkrootkit) are **optional** and only installed if explicitly enabled via environment variables (see Optional Security Components section above).
+Note: Security scanning tools (ClamAV, maldet, rkhunter, chkrootkit) are **optional** and only installed if explicitly enabled via environment variables (see the Optional Security Components section above).
 
 ### Using the Bastion Host
 
@@ -995,7 +997,7 @@ export NETDATA_CLAIM_TOKEN=your_claim_token
 - SSH connection tracking and analysis
 - Resource usage monitoring for security analysis
 - Network traffic correlation with security events
-- Integration with centralized monitoring dashboard
+- Integration with a centralized monitoring dashboard
 - Mobile access for remote bastion monitoring
 
 ### Security Considerations
@@ -1076,7 +1078,7 @@ After setting up the hardened base server, you can deploy various applications u
 
 #### 🐳 **Docker Mode** (`DEPLOYMENT_MODE=docker`)
 - Applications run in containers with Docker/Docker Compose
-- Nginx configured as reverse proxy to containers
+- Nginx configured as a reverse proxy to containers
 - Easy scaling, isolation, and management
 - Perfect for modern microservices architectures
 
@@ -1226,7 +1228,7 @@ Located in `scripts/`:
 
 #### Installation Process
 
-1. **Complete base server setup first** (Steps 1-4 from Base Server Setup Process above)
+1. **Complete base server setup first** (Steps 1–4 from the Base Server Setup Process above)
 
 2. **Copy the setup script to your server**:
 
@@ -1323,7 +1325,7 @@ The PolyServer foundation provides a comprehensive set of security, performance,
 #### Email & Notification System
 - **External SMTP Support**: Reliable delivery via Gmail, Amazon SES, Outlook, etc.
 - **Local Mail Fallback**: Stores notifications locally when SMTP is disabled
-- **Email Aliasing**: All local system accounts redirect to configured email address
+- **Email Aliasing**: All local system accounts redirect to a configured email address
 - **Security Notifications**: Automated alerts for malware, rootkits, failed logins, and system events
 - **Amazon SES Compatibility**: Proper sender rewriting and UTF-8 handling
 
@@ -1459,7 +1461,7 @@ Both MariaDB and PostgreSQL use a **layered configuration approach** that combin
 **Example Resource Allocation (256GB RAM server with 32 CPU cores):**
 - **Primary database** (MariaDB only): ~75% RAM (193GB buffer pool)
 - **Secondary setup** (MariaDB + PostgreSQL): MariaDB gets ~75% (193GB), PostgreSQL gets ~20% (51GB)
-- **Worker threads**: Automatically scaled to CPU count (32 cores = 64-128 workers)
+- **Worker threads**: Automatically scaled to CPU count (32 cores = 64–128 workers)
 - **Your settings preserved**: bind-address, security options, logging configs remain unchanged
 
 **Viewing Active Configuration:**
@@ -1490,7 +1492,7 @@ If using a private network (e.g., OVH vRack, AWS VPC, private VLAN):
    - Creates `/usr/local/bin/vrack-status` verification script
    - Generates comprehensive documentation in `/root/VRACK-CONFIGURATION.md`
 
-   After configuration, verify status with:
+   After configuration, verify the status with:
    ```bash
    sudo /usr/local/bin/vrack-status
    ```
@@ -1498,10 +1500,12 @@ If using a private network (e.g., OVH vRack, AWS VPC, private VLAN):
 2. **Create database users restricted to private network**:
 
    **MariaDB example**:
-   ```sql
-   -- Connect as root (uses /root/.my.cnf automatically)
+   ```bash
+   # Connect as root (uses /root/.my.cnf automatically)
    mysql
-
+   ```
+   
+   ```sql
    -- Create database
    CREATE DATABASE myapp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -1514,10 +1518,12 @@ If using a private network (e.g., OVH vRack, AWS VPC, private VLAN):
    ```
 
    **PostgreSQL example**:
-   ```sql
-   -- Connect as postgres user
+   ```bash
+   # Connect as postgres user
    sudo -u postgres psql
-
+   ```
+   
+   ```sql
    -- Create database
    CREATE DATABASE myapp OWNER postgres;
 
@@ -1597,7 +1603,7 @@ sudo ufw allow from 10.0.1.50 to any port 5432 proto tcp comment 'PostgreSQL fro
 - `'user'@'%'` - All IPs (NOT recommended, security risk!)
 
 **Security Best Practices**:
-- ✅ **Use private networks**: Never expose databases directly to public internet
+- ✅ **Use private networks**: Never expose databases directly to the public internet
 - ✅ **Restrict by IP/network**: Always limit access to specific IPs or private subnets
 - ✅ **Strong passwords**: Use `openssl rand -base64 32` to generate secure passwords
 - ✅ **Principle of least privilege**: Grant only necessary permissions
@@ -1606,7 +1612,7 @@ sudo ufw allow from 10.0.1.50 to any port 5432 proto tcp comment 'PostgreSQL fro
 
 **Testing Connectivity**:
 
-From application server:
+From the application server:
 ```bash
 # Test MariaDB connection
 mysql -h 10.0.1.10 -u myapp -p myapp
@@ -1616,7 +1622,7 @@ psql -h 10.0.1.10 -U myapp -d myapp
 ```
 
 **Troubleshooting**:
-1. Check database is listening on correct IP: `ss -tlnp | grep -E '3306|5432'`
+1. Check the database is listening on correct IP: `ss -tlnp | grep -E '3306|5432'`
 2. Check firewall rules: `sudo ufw status | grep -E '3306|5432'`
 3. Check database user host pattern: `SELECT user, host FROM mysql.user;` (MariaDB)
 4. Check pg_hba.conf entries (PostgreSQL): `sudo cat /etc/postgresql/*/main/pg_hba.conf`
@@ -1639,7 +1645,7 @@ psql -h 10.0.1.10 -U myapp -d myapp
 
 #### **Node.js Development Stack** (INSTALL_NODEJS=false by default)
 - **Node.js LTS**: JavaScript runtime
-  - Latest LTS version from official NodeSource repository
+  - Latest LTS version from the official NodeSource repository
   - NPM package manager included
   - **Note**: Consider PM2 for production process management (separate installation)
 
@@ -1701,26 +1707,26 @@ Regular updates are crucial for security and functionality. This section provide
 
 ### Update Schedule Recommendations
 
-| Component | Automatic Updates | Manual Update Frequency | Priority | Guidance |
-|-----------|-------------------|------------------------|----------|----------|
-| Applications | No | As needed | High | Follow application release notes, test in staging first |
-| Docker Engine | No | Quarterly | High | `apt upgrade docker-ce` (Docker mode only) |
-| Container Images | No | Weekly | High | `docker compose pull && docker compose up -d` (Docker mode only) |
-| Debian OS (Security) | Yes | - | High | Auto-applied nightly, check logs weekly |
-| Debian OS (Full) | No | Monthly | Medium | Apply during maintenance window |
-| Nginx | No | Semi-annually | Medium | Only when security updates are available |
-| Netdata | Yes | - | Low | Auto-updates via system package manager |
-| ClamAV | Yes | - | Medium | Signatures updated daily, verify in logs |
-| Linux Malware Detect | Yes | - | Medium | Signatures updated daily, check logs weekly |
-| ModSecurity | No | Quarterly | High | Update OWASP CRS rules with `git pull` |
-| Trivy | Yes | - | Medium | Database updates on scan, verify in logs |
-| Suricata | No | Monthly | High | Update rule sets with ET Open rules |
-| AppArmor | No | After major updates | Medium | Review after application version changes |
-| Audit Framework | No | Quarterly | High | Review and update rules to match system changes |
-| Unbound DNS | No | Quarterly | Low | Update root hints file from IANA |
-| RKHunter | Yes | Monthly | High | Database updates automatically, property DB requires manual updates |
-| chkrootkit | No | Monthly | High | Run `apt install --only-upgrade chkrootkit` |
-| AIDE | No | Monthly | High | Update database with `sudo aideinit` |
+| Component            | Automatic Updates | Manual Update Frequency | Priority | Guidance                                                            |
+|----------------------|-------------------|-------------------------|----------|---------------------------------------------------------------------|
+| Applications         | No                | As needed               | High     | Follow application release notes, test in staging first             |
+| Docker Engine        | No                | Quarterly               | High     | `apt upgrade docker-ce` (Docker mode only)                          |
+| Container Images     | No                | Weekly                  | High     | `docker compose pull && docker compose up -d` (Docker mode only)    |
+| Debian OS (Security) | Yes               | -                       | High     | Auto-applied nightly, check logs weekly                             |
+| Debian OS (Full)     | No                | Monthly                 | Medium   | Apply during maintenance window                                     |
+| Nginx                | No                | Semi-annually           | Medium   | Only when security updates are available                            |
+| Netdata              | Yes               | -                       | Low      | Auto-updates via system package manager                             |
+| ClamAV               | Yes               | -                       | Medium   | Signatures updated daily, verify in logs                            |
+| Linux Malware Detect | Yes               | -                       | Medium   | Signatures updated daily, check logs weekly                         |
+| ModSecurity          | No                | Quarterly               | High     | Update OWASP CRS rules with `git pull`                              |
+| Trivy                | Yes               | -                       | Medium   | Database updates on scan, verify in logs                            |
+| Suricata             | No                | Monthly                 | High     | Update rule sets with ET Open rules                                 |
+| AppArmor             | No                | After major updates     | Medium   | Review after application version changes                            |
+| Audit Framework      | No                | Quarterly               | High     | Review and update rules to match system changes                     |
+| Unbound DNS          | No                | Quarterly               | Low      | Update root hints file from IANA                                    |
+| RKHunter             | Yes               | Monthly                 | High     | Database updates automatically, property DB requires manual updates |
+| chkrootkit           | No                | Monthly                 | High     | Run `apt install --only-upgrade chkrootkit`                         |
+| AIDE                 | No                | Monthly                 | High     | Update database with `sudo aideinit`                                |
 
 ### Updating Applications
 
@@ -1903,46 +1909,46 @@ The backup system works with any S3-compatible object storage provider:
 
 1. **Create a storage bucket with your provider**:
    - Sign in to your provider's control panel
-   - Navigate to object storage / S3 section
+   - Navigate to the object storage / S3 section
    - Create a new bucket with a unique name (e.g., `polyserver-backups`)
    - Select a region close to your server for better performance
-   - Choose appropriate storage class (standard for backups)
+   - Choose the appropriate storage class (standard for backups)
 
 2. **Create access credentials**:
    - Generate S3-compatible access keys (access key ID and secret key)
    - Save credentials securely
-   - **SECURITY**: Apply the principle of least privilege - grant only required permissions:
+   - **SECURITY**: Apply the principle of least privilege – grant only required permissions:
      - List bucket contents
      - Upload objects (write backups)
-     - Delete objects (cleanup old backups)
+     - Delete objects (clean up old backups)
 
 3. **Configure your S3 credentials in the environment file**:
 
-```bash
-# Edit templates/defaults.env before deployment
-nano templates/defaults.env
-
-# Configure S3-compatible storage
-S3_BUCKET=polyserver-backups
-S3_REGION=us-east-1              # Your region
-S3_PREFIX=production             # Optional prefix for organization
-S3_ACCESS_KEY_ID=your_access_key
-S3_SECRET_ACCESS_KEY=your_secret_key
-
-# Optional: S3 endpoint (required for non-AWS providers)
-# Examples:
-#   OVH:          S3_ENDPOINT=https://s3.gra.cloud.ovh.net
-#   Cloudflare:   S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
-#   MinIO:        S3_ENDPOINT=https://minio.example.com
-# AWS S3:        Leave blank (auto-detected)
-# S3_ENDPOINT=https://s3.gra.cloud.ovh.net
-
-# Generate a strong encryption key for backups (highly recommended)
-BACKUP_ENCRYPTION_KEY=$(openssl rand -base64 32)
-
-# IMPORTANT: Store this encryption key safely outside the server too
-# Without this key, encrypted backups cannot be restored!
-```
+   ```bash
+   # Edit templates/defaults.env before deployment
+   nano templates/defaults.env
+   
+   # Configure S3-compatible storage
+   S3_BUCKET=polyserver-backups
+   S3_REGION=us-east-1              # Your region
+   S3_PREFIX=production             # Optional prefix for organization
+   S3_ACCESS_KEY_ID=your_access_key
+   S3_SECRET_ACCESS_KEY=your_secret_key
+   
+   # Optional: S3 endpoint (required for non-AWS providers)
+   # Examples:
+   #   OVH:          S3_ENDPOINT=https://s3.gra.cloud.ovh.net
+   #   Cloudflare:   S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+   #   MinIO:        S3_ENDPOINT=https://minio.example.com
+   # AWS S3:         Leave blank (auto-detected)
+   # S3_ENDPOINT=https://s3.gra.cloud.ovh.net
+   
+   # Generate a strong encryption key for backups (highly recommended)
+   BACKUP_ENCRYPTION_KEY=$(openssl rand -base64 32)
+   
+   # IMPORTANT: Store this encryption key safely outside the server too
+   # Without this key, encrypted backups cannot be restored!
+   ```
 
 4. **The S3 backup process will run automatically** according to the configured schedule (default: daily at 2 AM).
 
@@ -2018,7 +2024,7 @@ After customizing, regenerate configs:
 
 #### Modifying Backups After Server Setup
 
-**If your server is already deployed** and you need to add or remove files from backups:
+**If your server is already deployed,** and you need to add or remove files from backups:
 
 1. **SSH to your server**:
    ```bash
@@ -2034,7 +2040,7 @@ After customizing, regenerate configs:
    sudo nano /opt/polyserver/scripts/backup.sh
    ```
 
-3. **Modify the backup section** (around line 76-99):
+3. **Modify the backup section** (around line 76–99):
    ```bash
    # Find the "Application-Specific Backup Logic" section
    # Example: Add a database backup
@@ -2207,7 +2213,7 @@ Block storage (additional disk volumes) can be used as a secondary backup locati
 **Advantages**:
 - **Fast access**: Local disk I/O is faster than network transfers
 - **No egress fees**: No bandwidth costs for reading backups
-- **Simple setup**: Just mount and use like any local directory
+- **Simple setup**: Mount and use like any local directory
 
 **Limitations**:
 - **Single-instance mounting**: Can only be attached to one server at a time
@@ -2221,54 +2227,54 @@ If you have additional block storage attached to your server:
 
 1. **Identify the block device**:
 
-```bash
-# List all block devices
-lsblk
-
-# Example output:
-# sdb     8:16   0  100G  0 disk    <- Your additional storage
-```
+   ```bash
+   # List all block devices
+   lsblk
+   
+   # Example output:
+   # sdb     8:16   0  100G  0 disk    <- Your additional storage
+   ```
 
 2. **Format the block device if it's new** (⚠️ CAUTION: This erases all data):
 
-```bash
-# Replace /dev/sdb with your actual device
-sudo mkfs.ext4 /dev/sdb
-```
+   ```bash
+   # Replace /dev/sdb with your actual device
+   sudo mkfs.ext4 /dev/sdb
+   ```
 
 3. **Mount the storage**:
 
-```bash
-# Create mount directory
-sudo mkdir -p /mnt/backup
-
-# Add to fstab for auto-mounting at boot
-echo "/dev/sdb /mnt/backup ext4 defaults,noatime 0 2" | sudo tee -a /etc/fstab
-
-# Mount the device
-sudo mount /mnt/backup
-
-# Create backup directory with proper permissions
-sudo mkdir -p /mnt/backup/backups
-sudo chown -R deploy:deploy /mnt/backup/backups
-sudo chmod 750 /mnt/backup/backups
-```
+   ```bash
+   # Create mount directory
+   sudo mkdir -p /mnt/backup
+   
+   # Add to fstab for auto-mounting at boot
+   echo "/dev/sdb /mnt/backup ext4 defaults,noatime 0 2" | sudo tee -a /etc/fstab
+   
+   # Mount the device
+   sudo mount /mnt/backup
+   
+   # Create backup directory with proper permissions
+   sudo mkdir -p /mnt/backup/backups
+   sudo chown -R deploy:deploy /mnt/backup/backups
+   sudo chmod 750 /mnt/backup/backups
+   ```
 
 4. **Verify the mount**:
 
-```bash
-df -h | grep "/mnt/backup"
-```
+   ```bash
+   df -h | grep "/mnt/backup"
+   ```
 
 5. **Configure backups to use the mount**:
 
-```bash
-# Edit templates/defaults.env
-nano templates/defaults.env
-
-# Set the backup mount point
-BACKUP_MOUNT=/mnt/backup
-```
+   ```bash
+   # Edit templates/defaults.env
+   nano templates/defaults.env
+   
+   # Set the backup mount point
+   BACKUP_MOUNT=/mnt/backup
+   ```
 
 With both S3-compatible object storage and local block storage configured, you'll have a robust multi-layered backup strategy combining the speed of local storage with the durability and accessibility of cloud storage.
 
@@ -2301,7 +2307,7 @@ All other incoming traffic is blocked by default, while all outgoing traffic is 
 - **SSH Port**: Using non-standard port 2222 instead of 22 to reduce automated attacks
 - **SSH Authentication**: Flexible configuration supporting both key-based and password authentication
 - **No Direct Application Ports**: Application ports are not exposed directly; only accessible via Nginx proxy
-- **No Public Monitoring**: Netdata monitoring port is not publicly accessible (access via SSH tunnel only)
+- **No Public Monitoring**: Netdata monitoring port is not publicly accessible (access via an SSH tunnel only)
 - **Minimal Attack Surface**: Only essential services are exposed to the internet
 
 #### Modifying Firewall Rules
@@ -2491,7 +2497,7 @@ To set up Netdata Cloud integration after deployment:
 
 1. **Get Claim Token**:
    - Sign up/login at [https://app.netdata.cloud](https://app.netdata.cloud)
-   - Create a new space or select existing space
+   - Create a new space or select an existing space
    - Go to "Connect Nodes" and copy your claim token
 
 2. **Register Server**:
@@ -2508,14 +2514,14 @@ To set up Netdata Cloud integration after deployment:
 
 3. **Access Centralized Dashboard**:
    - Visit [https://app.netdata.cloud](https://app.netdata.cloud)
-   - Your server will appear within 1-2 minutes
+   - Your server will appear within 1–2 minutes
 
 #### Netdata Cloud Benefits
 
 - **Centralized Monitoring**: Single dashboard for all your servers
 - **Mobile Access**: Monitor your infrastructure from anywhere
 - **Alert Management**: Centralized alerting and notification management
-- **Multi-server Correlation**: Compare performance across servers
+- **Multiserver Correlation**: Compare performance across servers
 - **Team Collaboration**: Share insights and collaborate on incidents
 - **Infrastructure Overview**: High-level view of your entire infrastructure
 
@@ -2667,7 +2673,7 @@ This script will:
 
 **Security Note:**
 
-While the whitelist filters known false positives, you're right to be cautious - if you were compromised, malware could hide in whitelisted locations. Therefore:
+While the whitelist filters know false positives, you're right to be cautious – if you were compromised, malware could hide in whitelisted locations. Therefore:
 
 1. **Review raw output periodically**: `cat /var/log/chkrootkit/log.raw`
 2. **Update baseline carefully**: Only after verifying system state
@@ -2762,7 +2768,7 @@ Logwatch provides daily system reports via email, summarizing server activities 
 
 #### Configuring Logwatch
 
-Logwatch settings can be configured by editing the server-setup.sh script before installation, or by editing the configuration file afterward:
+Logwatch settings can be configured by editing the server-setup.sh script before installation or by editing the configuration file afterward:
 
 ```bash
 sudo nano /etc/logwatch/conf/logwatch.conf
@@ -2796,7 +2802,7 @@ PolyServer provides comprehensive SSH security with flexible authentication opti
 
 **Password Authentication (Initial Setup)**
 - Enabled when `SSH_PUBLIC_KEY` is empty during setup
-- Allows initial access with password
+- Allows initial access with a password
 - Can be converted to key-only authentication later
 
 #### Managing SSH Keys
@@ -2912,7 +2918,7 @@ The server includes comprehensive nginx security rules that automatically block 
 - **General Traffic**: 10 requests/second baseline
 
 #### Security Benefits
-- **Reduced Attack Surface**: Blocks 90%+ of common automated attacks
+- **Reduced Attack Surface**: Blocks 90%+ of commonly automated attacks
 - **Clean Logs**: Blocked requests don't generate log entries
 - **Performance**: Faster response for blocked requests (return 444)
 - **Early Defense**: Blocks attacks before they reach ModSecurity or applications
@@ -2988,7 +2994,7 @@ ls -l /var/log/security/trivy/
 
 AppArmor provides mandatory access control for Docker containers:
 
-- **Restricted Filesystem Access**: Containers can only access necessary files
+- **Restricted Filesystem Access**: Containers can only access the necessary files
 - **Process Isolation**: Limits system calls and capabilities
 - **Deny Dangerous Operations**: Prevents mounting, kernel module loading
 - **Application-Specific Profile**: Custom profile tailored to application needs
@@ -3080,40 +3086,40 @@ Applications can be configured with security-hardened settings. For example, bus
 
 #### Database Encryption
 
-For deployments using embedded databases, encryption can be enabled for at-rest data protection. **This encrypts your application database including user data and application content.**
+For deployments using embedded databases, encryption can be enabled for at-rest data protection. **This encrypts your application database, including user data and application content.**
 
 **To enable database encryption:**
 
 1. **Generate a strong encryption key**:
 
-```bash
-# Generate a 32-byte base64-encoded key
-openssl rand -base64 32
-```
+   ```bash
+   # Generate a 32-byte base64-encoded key
+   openssl rand -base64 32
+   ```
 
 2. **Add the key to your environment configuration**:
 
-```bash
-# Edit your environment file
-nano /opt/polyserver/config/.env
-
-# Add this line with your generated key
-MB_ENCRYPTION_SECRET_KEY=your_generated_key_here
-```
+   ```bash
+   # Edit your environment file
+   nano /opt/polyserver/config/.env
+   
+   # Add this line with your generated key
+   MB_ENCRYPTION_SECRET_KEY=your_generated_key_here
+   ```
 
 3. **Restart Application**:
 
-```bash
-# Docker mode
-docker compose restart app
-
-# Bare metal mode  
-sudo systemctl restart application
-```
+   ```bash
+   # Docker mode
+   docker compose restart app
+   
+   # Bare metal mode  
+   sudo systemctl restart application
+   ```
 
 **⚠️ IMPORTANT SECURITY NOTES:**
-- **Store the encryption key securely** - without it, your database cannot be decrypted
-- **Never lose this key** - there is no way to recover encrypted data without it
+- **Store the encryption key securely** – without it, your database cannot be decrypted
+- **Never lose this key** – there is no way to recover encrypted data without it
 - **Back up the key separately** from your database backups
 - **Use a password manager** or secure key management system to store it
 
@@ -3128,7 +3134,7 @@ Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' '
 ```
 
 This policy:
-- Restricts scripts to same origin (with exceptions needed for applications)
+- Restricts scripts to the same origin (with exceptions needed for applications)
 - Limits API connections to trusted sources
 - Prevents loading of unauthorized resources
 - Mitigates XSS and data injection attacks
@@ -3139,43 +3145,43 @@ The server comes with a comprehensive set of pre-installed tools for monitoring,
 
 ### System Monitoring Tools
 
-| Tool | Purpose | Basic Usage |
-|------|---------|-------------|
-| htop | Interactive process viewer with CPU/memory usage | `htop` |
-| iotop | I/O monitoring, showing disk read/write by process | `sudo iotop` |
-| sysstat | System performance tools (iostat, mpstat, etc.) | `iostat -x 2` |
-| atop | Advanced system & process monitor | `atop` |
-| bmon | Bandwidth monitoring and rate estimator | `bmon` |
+| Tool    | Purpose                                            | Basic Usage   |
+|---------|----------------------------------------------------|---------------|
+| htop    | Interactive process viewer with CPU/memory usage   | `htop`        |
+| iotop   | I/O monitoring, showing disk read/write by process | `sudo iotop`  |
+| sysstat | System performance tools (iostat, mpstat, etc.)    | `iostat -x 2` |
+| atop    | Advanced system & process monitor                  | `atop`        |
+| bmon    | Bandwidth monitoring and rate estimator            | `bmon`        |
 
 ### Network Monitoring Tools
 
-| Tool | Purpose | Basic Usage |
-|------|---------|-------------|
-| iftop | Display bandwidth usage on an interface | `sudo iftop -i eth0` |
-| nethogs | Group bandwidth by process | `sudo nethogs eth0` |
-| tcpdump | Network packet analyzer | `sudo tcpdump -i eth0 host 1.2.3.4` |
-| ethtool | Display or change Ethernet device settings | `sudo ethtool eth0` |
-| iperf3 | Network bandwidth measurement | `iperf3 -s` (server) or `iperf3 -c server_ip` (client) |
-| ncat | Networking utility for reading/writing across networks | `nc -l 9999` or `nc server_ip 9999` |
+| Tool    | Purpose                                                | Basic Usage                                            |
+|---------|--------------------------------------------------------|--------------------------------------------------------|
+| iftop   | Display bandwidth usage on an interface                | `sudo iftop -i eth0`                                   |
+| nethogs | Group bandwidth by process                             | `sudo nethogs eth0`                                    |
+| tcpdump | Network packet analyzer                                | `sudo tcpdump -i eth0 host 1.2.3.4`                    |
+| ethtool | Display or change Ethernet device settings             | `sudo ethtool eth0`                                    |
+| iperf3  | Network bandwidth measurement                          | `iperf3 -s` (server) or `iperf3 -c server_ip` (client) |
+| ncat    | Networking utility for reading/writing across networks | `nc -l 9999` or `nc server_ip 9999`                    |
 
 ### Network Diagnostics Tools
 
-| Tool | Purpose | Basic Usage |
-|------|---------|-------------|
-| mtr | Network diagnostic combining ping & traceroute | `mtr example.com` |
-| arp-scan | ARP scanning and fingerprinting tool | `sudo arp-scan --interface=eth0 --localnet` |
-| dnsutils | DNS utilities (dig, nslookup) | `dig example.com` or `nslookup example.com` |
-| net-tools | Legacy networking tools | `netstat -tuln` |
-| traceroute | Print the route packets trace to network host | `traceroute example.com` |
-| whois | Query whois databases | `whois example.com` |
-| unbound | Local DNS caching server | Check status with `systemctl status unbound` |
+| Tool       | Purpose                                        | Basic Usage                                  |
+|------------|------------------------------------------------|----------------------------------------------|
+| mtr        | Network diagnostic combining ping & traceroute | `mtr example.com`                            |
+| arp-scan   | ARP scanning and fingerprinting tool           | `sudo arp-scan --interface=eth0 --localnet`  |
+| dnsutils   | DNS utilities (dig, nslookup)                  | `dig example.com` or `nslookup example.com`  |
+| net-tools  | Legacy networking tools                        | `netstat -tuln`                              |
+| traceroute | Print the route packets trace to network host  | `traceroute example.com`                     |
+| whois      | Query whois databases                          | `whois example.com`                          |
+| unbound    | Local DNS caching server                       | Check status with `systemctl status unbound` |
 
 ### File Integrity Tools
 
-| Tool | Purpose | Basic Usage |
-|------|---------|-------------|
-| debsums | Verify installed package files against MD5 checksums | `sudo debsums -c` |
-| aide | Advanced Intrusion Detection Environment | `sudo aide.wrapper --check` |
+| Tool    | Purpose                                              | Basic Usage                 |
+|---------|------------------------------------------------------|-----------------------------|
+| debsums | Verify installed package files against MD5 checksums | `sudo debsums -c`           |
+| aide    | Advanced Intrusion Detection Environment             | `sudo aide.wrapper --check` |
 
 To check for modified files in Debian packages:
 
@@ -3293,49 +3299,49 @@ In case of a suspected security incident:
 #### Bare Metal Mode Monitoring  
 - Process monitoring: `pm2 monit` (for Node.js apps)
 - Service status: `systemctl status <service-name>`
-- Application-specific monitoring: Depends on application type
+- Application-specific monitoring: Depends on an application type
 
 ### Maintenance Tasks
 
-| Task | Frequency | Command/Description |
-|------|-----------|---------------------|
-| Verify backups | Weekly | `ls -la /opt/polyserver/backups` and check S3 bucket |
-| Test backup restore | Monthly | Follow backup restore procedure in disaster recovery plan |
-| Clear old logs | Monthly | `find /opt/polyserver/logs -type f -mtime +30 -delete` |
-| Check disk space | Weekly | `df -h` to ensure sufficient space |
-| Verify auto-updates | Weekly | `cat /var/log/unattended-upgrades/unattended-upgrades.log` |
-| Check virus scan logs | Weekly | `cat /var/log/clamav/daily_scan.log` |
-| Review rootkit scans | Weekly | `cat /var/log/rkhunter/daily_scan.log /var/log/chkrootkit/log.today` |
-| Review raw chkrootkit output | Monthly | `cat /var/log/chkrootkit/log.raw` (bypasses whitelist) |
-| Update chkrootkit baseline | After system changes | `sudo cp /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected` |
-| Check file integrity | Weekly | `sudo aide.wrapper --check` |
-| Update virus signatures | Monthly | `sudo freshclam` |
-| Update rootkit database | Monthly | `sudo rkhunter --update` |
-| Update AIDE database | Monthly | `sudo aide.wrapper --update` |
-| Clean unused Docker images | Monthly | `docker system prune -a` (Docker mode only) |
-| Update container images | Weekly | `docker compose pull && docker compose up -d` (Docker mode only) |
-| Check container health | Weekly | `docker compose ps` and `docker compose logs` (Docker mode only) |
-| Manual security scan | Quarterly | `sudo rkhunter --check --sk` and review output |
-| Check for failed updates | Weekly | `grep "ERROR" /var/log/unattended-upgrades/unattended-upgrades.log` |
-| Review Logcheck reports | Weekly | Check email for logcheck reports |
-| Review Logwatch reports | Weekly | Check email or `/var/log/logwatch/logwatch.log` |
-| Check DNS cache status | Weekly | `unbound-control stats_noreset \| grep cache` |
-| Update Unbound root hints | Monthly | `sudo wget -O /var/lib/unbound/root.hints https://www.internic.net/domain/named.root` |
-| Check maldet reports | Weekly | `sudo maldet --report list` |
-| Update maldet signatures | Weekly | `sudo maldet --update-sigs` |
-| Review audit reports | Daily | Check email or `/var/log/audit/reports/audit-report-*.txt` |
-| Check audit status | Weekly | `sudo auditctl -s` |
-| Run manual audit report | Monthly | `sudo /opt/polyserver/scripts/audit-report.sh` |
-| Check firewall status | Weekly | `sudo ufw status verbose` |
-| Review fail2ban status | Weekly | `sudo fail2ban-client status` |
-| Check banned IPs | Weekly | `sudo fail2ban-client status sshd` |
-| Check AppArmor status | Weekly | `sudo aa-status` |
-| Check ModSecurity logs | Weekly | `sudo cat /var/log/nginx/modsec_audit.log \| grep -i "attack"` |
-| Review Suricata alerts | Weekly | `sudo cat /var/log/suricata/fast.log` |
-| Scan container images | Monthly | `sudo /etc/cron.daily/trivy-scan` |
-| Run DSGVO compliance check | Monthly | `sudo /opt/polyserver/scripts/dsgvo-compliance-check.sh` |
-| Check SSH authentication logs | Weekly | `sudo grep "Failed password\|Accepted publickey" /var/log/auth.log` |
-| Review SSH configuration | Quarterly | `sudo sshd -T \| grep -E "(PasswordAuthentication\|PubkeyAuthentication\|Port)"` |
+| Task                          | Frequency            | Command/Description                                                                   |
+|-------------------------------|----------------------|---------------------------------------------------------------------------------------|
+| Verify backups                | Weekly               | `ls -la /opt/polyserver/backups` and check S3 bucket                                  |
+| Test backup restore           | Monthly              | Follow backup restore procedure in disaster recovery plan                             |
+| Clear old logs                | Monthly              | `find /opt/polyserver/logs -type f -mtime +30 -delete`                                |
+| Check disk space              | Weekly               | `df -h` to ensure sufficient space                                                    |
+| Verify auto-updates           | Weekly               | `cat /var/log/unattended-upgrades/unattended-upgrades.log`                            |
+| Check virus scan logs         | Weekly               | `cat /var/log/clamav/daily_scan.log`                                                  |
+| Review rootkit scans          | Weekly               | `cat /var/log/rkhunter/daily_scan.log /var/log/chkrootkit/log.today`                  |
+| Review raw chkrootkit output  | Monthly              | `cat /var/log/chkrootkit/log.raw` (bypasses whitelist)                                |
+| Update chkrootkit baseline    | After system changes | `sudo cp /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected`              |
+| Check file integrity          | Weekly               | `sudo aide.wrapper --check`                                                           |
+| Update virus signatures       | Monthly              | `sudo freshclam`                                                                      |
+| Update rootkit database       | Monthly              | `sudo rkhunter --update`                                                              |
+| Update AIDE database          | Monthly              | `sudo aide.wrapper --update`                                                          |
+| Clean unused Docker images    | Monthly              | `docker system prune -a` (Docker mode only)                                           |
+| Update container images       | Weekly               | `docker compose pull && docker compose up -d` (Docker mode only)                      |
+| Check container health        | Weekly               | `docker compose ps` and `docker compose logs` (Docker mode only)                      |
+| Manual security scan          | Quarterly            | `sudo rkhunter --check --sk` and review output                                        |
+| Check for failed updates      | Weekly               | `grep "ERROR" /var/log/unattended-upgrades/unattended-upgrades.log`                   |
+| Review Logcheck reports       | Weekly               | Check email for logcheck reports                                                      |
+| Review Logwatch reports       | Weekly               | Check email or `/var/log/logwatch/logwatch.log`                                       |
+| Check DNS cache status        | Weekly               | `unbound-control stats_noreset \| grep cache`                                         |
+| Update Unbound root hints     | Monthly              | `sudo wget -O /var/lib/unbound/root.hints https://www.internic.net/domain/named.root` |
+| Check maldet reports          | Weekly               | `sudo maldet --report list`                                                           |
+| Update maldet signatures      | Weekly               | `sudo maldet --update-sigs`                                                           |
+| Review audit reports          | Daily                | Check email or `/var/log/audit/reports/audit-report-*.txt`                            |
+| Check audit status            | Weekly               | `sudo auditctl -s`                                                                    |
+| Run manual audit report       | Monthly              | `sudo /opt/polyserver/scripts/audit-report.sh`                                        |
+| Check firewall status         | Weekly               | `sudo ufw status verbose`                                                             |
+| Review fail2ban status        | Weekly               | `sudo fail2ban-client status`                                                         |
+| Check banned IPs              | Weekly               | `sudo fail2ban-client status sshd`                                                    |
+| Check AppArmor status         | Weekly               | `sudo aa-status`                                                                      |
+| Check ModSecurity logs        | Weekly               | `sudo cat /var/log/nginx/modsec_audit.log \| grep -i "attack"`                        |
+| Review Suricata alerts        | Weekly               | `sudo cat /var/log/suricata/fast.log`                                                 |
+| Scan container images         | Monthly              | `sudo /etc/cron.daily/trivy-scan`                                                     |
+| Run DSGVO compliance check    | Monthly              | `sudo /opt/polyserver/scripts/dsgvo-compliance-check.sh`                              |
+| Check SSH authentication logs | Weekly               | `sudo grep "Failed password\|Accepted publickey" /var/log/auth.log`                   |
+| Review SSH configuration      | Quarterly            | `sudo sshd -T \| grep -E "(PasswordAuthentication\|PubkeyAuthentication\|Port)"`      |
 
 ### Disaster Recovery Testing
 Regularly test your ability to recover from failures:
@@ -3351,23 +3357,23 @@ PolyServer includes comprehensive log rotation to prevent disk space issues and 
 
 #### Configured Log Rotation
 
-| Log Category | Rotation Frequency | Retention | Location |
-|--------------|-------------------|-----------|----------|
-| **Web Server Logs** | Daily | 30 days | `/var/log/nginx/*.log` |
-| **ModSecurity WAF** | Daily | 14 days (100MB max) | `/var/log/nginx/modsec_*.log` |
-| **Security Scans** | Weekly | 12 weeks | `/var/log/{clamav,maldet,rkhunter,chkrootkit}/` |
-| **Container Security** | Weekly | 8 weeks | `/var/log/security/trivy/*.log` |
-| **Docker Containers** | Daily | 7 days (100MB max) | `/var/lib/docker/containers/*/*.log` |
-| **Application Logs** | Daily | 30 days | `/opt/polyserver/logs/*.log` |
-| **Backup Logs** | Weekly | 12 weeks | `/opt/polyserver/backups/*.log` |
-| **Audit Logs** | Weekly | 10 weeks (50MB max) | `/var/log/audit/audit.log` |
-| **Suricata IDS** | Daily | 7 days | `/var/log/suricata/*.log` |
-| **Netdata Monitoring** | Daily | 14 days | `/var/log/netdata/*.log` |
-| **Unbound DNS** | Weekly | 12 weeks | `/var/log/unbound.log` |
-| **Fail2ban** | Weekly | 12 weeks | `/var/log/fail2ban.log` |
-| **UFW Firewall** | Daily | 30 days | `/var/log/ufw.log` |
-| **DSGVO/GDPR** | Monthly | 24 months | `/var/log/dsgvo/*.log` |
-| **Security Incidents** | Monthly | 36 months | `/var/log/security/incidents/*.log` |
+| Log Category           | Rotation Frequency | Retention           | Location                                        |
+|------------------------|--------------------|---------------------|-------------------------------------------------|
+| **Web Server Logs**    | Daily              | 30 days             | `/var/log/nginx/*.log`                          |
+| **ModSecurity WAF**    | Daily              | 14 days (100MB max) | `/var/log/nginx/modsec_*.log`                   |
+| **Security Scans**     | Weekly             | 12 weeks            | `/var/log/{clamav,maldet,rkhunter,chkrootkit}/` |
+| **Container Security** | Weekly             | 8 weeks             | `/var/log/security/trivy/*.log`                 |
+| **Docker Containers**  | Daily              | 7 days (100MB max)  | `/var/lib/docker/containers/*/*.log`            |
+| **Application Logs**   | Daily              | 30 days             | `/opt/polyserver/logs/*.log`                    |
+| **Backup Logs**        | Weekly             | 12 weeks            | `/opt/polyserver/backups/*.log`                 |
+| **Audit Logs**         | Weekly             | 10 weeks (50MB max) | `/var/log/audit/audit.log`                      |
+| **Suricata IDS**       | Daily              | 7 days              | `/var/log/suricata/*.log`                       |
+| **Netdata Monitoring** | Daily              | 14 days             | `/var/log/netdata/*.log`                        |
+| **Unbound DNS**        | Weekly             | 12 weeks            | `/var/log/unbound.log`                          |
+| **Fail2ban**           | Weekly             | 12 weeks            | `/var/log/fail2ban.log`                         |
+| **UFW Firewall**       | Daily              | 30 days             | `/var/log/ufw.log`                              |
+| **DSGVO/GDPR**         | Monthly            | 24 months           | `/var/log/dsgvo/*.log`                          |
+| **Security Incidents** | Monthly            | 36 months           | `/var/log/security/incidents/*.log`             |
 
 #### Log Rotation Features
 
@@ -3522,7 +3528,7 @@ tcpdump -r capture.pcap -nn -q | awk '{print $3 " " $5}' | tr -d : | sort | uniq
 2. **Access Control**: Restrict access to packet capture files as they may contain sensitive information.
 3. **Targeted Capture**: In production, use filters to capture only relevant traffic and avoid performance impact.
 4. **Memory Usage**: Monitor system resources when running long captures as they can consume significant memory.
-5. **Data Protection**: Consider the privacy implications of packet captures and handle according to your organization's data policies.
+5. **Data Protection**: Consider the privacy implications of packet captures and handle, according to your organization's data policies.
 
 ## Customizing the Deployment
 
@@ -3535,16 +3541,16 @@ tcpdump -r capture.pcap -nn -q | awk '{print $3 " " $5}' | tr -d : | sort | uniq
 
 ## Performance Comparison
 
-| Aspect | Docker Mode | Bare Metal Mode |
-|--------|-------------|-----------------|
-| **Setup Complexity** | ⭐⭐⭐⭐⭐ Easy | ⭐⭐⭐ Moderate |
-| **Performance** | ⭐⭐⭐⭐ Good | ⭐⭐⭐⭐⭐ Excellent |
-| **Resource Usage** | ⭐⭐⭐ Higher overhead | ⭐⭐⭐⭐⭐ Minimal overhead |
-| **Security** | ⭐⭐⭐⭐⭐ Identical | ⭐⭐⭐⭐⭐ Identical |
-| **Maintenance** | ⭐⭐⭐⭐ Simple | ⭐⭐⭐ More involved |
-| **Scalability** | ⭐⭐⭐⭐⭐ Excellent | ⭐⭐⭐⭐ Good |
-| **Isolation** | ⭐⭐⭐⭐⭐ Excellent | ⭐⭐⭐ Process-level |
-| **Deployment** | ⭐⭐⭐⭐⭐ Container images | ⭐⭐⭐ Manual setup |
+| Aspect               | Docker Mode            | Bare Metal Mode        |
+|----------------------|------------------------|------------------------|
+| **Setup Complexity** | ⭐⭐⭐⭐⭐ Easy             | ⭐⭐⭐ Moderate           |
+| **Performance**      | ⭐⭐⭐⭐ Good              | ⭐⭐⭐⭐⭐ Excellent        |
+| **Resource Usage**   | ⭐⭐⭐ Higher overhead    | ⭐⭐⭐⭐⭐ Minimal overhead |
+| **Security**         | ⭐⭐⭐⭐⭐ Identical        | ⭐⭐⭐⭐⭐ Identical        |
+| **Maintenance**      | ⭐⭐⭐⭐ Simple            | ⭐⭐⭐ More involved      |
+| **Scalability**      | ⭐⭐⭐⭐⭐ Excellent        | ⭐⭐⭐⭐ Good              |
+| **Isolation**        | ⭐⭐⭐⭐⭐ Excellent        | ⭐⭐⭐ Process-level      |
+| **Deployment**       | ⭐⭐⭐⭐⭐ Container images | ⭐⭐⭐ Manual setup       |
 
 ### Docker Mode Benefits:
 - **Easy deployment**: Applications packaged as container images
@@ -3590,7 +3596,7 @@ echo "DEPLOYMENT_MODE=docker" > test-config/.env
    This script will:
    - Create a Docker-based PolyServer test environment
    - Generate configuration files from templates
-   - Set up basic web server with security headers
+   - Set up a basic web server with security headers
    - Provide health check endpoints
    - Create persistent volumes for data, logs, and configuration
 
@@ -3662,7 +3668,7 @@ Comprehensive testing of the PolyServer foundation:
 
 - **Template Validation**: Validates shell script syntax and configuration generation
 - **Matrix Testing**: Tests both Docker and Bare Metal deployment modes in parallel
-- **Server Hardening**: Runs actual server-setup.sh script in containerized environments
+- **Server Hardening**: Runs the actual server-setup.sh script in containerized environments
 - **Security Verification**: Validates log rotation, audit configuration, and DSGVO compliance
 - **Local Testing**: Tests the local Docker testing workflow
 
@@ -3693,7 +3699,7 @@ Ensures documentation quality and consistency:
 ### Testing Strategy
 
 #### Quality Gates
-All workflows must pass before PRs can be merged to main branch:
+All workflows must pass before PRs can be merged to the main branch:
 
 1. ✅ Template syntax and configuration generation
 2. ✅ Server hardening in both deployment modes  
