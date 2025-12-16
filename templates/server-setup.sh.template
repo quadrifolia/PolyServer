@@ -7098,8 +7098,9 @@ if [ -n "$INSTALL_COMPONENTS" ]; then
     "live-restore": true,
     "default-ulimits": {
         "nofile": {
-            "hard": 100000,
-            "soft": 100000
+            "Name": "nofile",
+            "Hard": 100000,
+            "Soft": 100000
         }
     },
     "icc": false,
