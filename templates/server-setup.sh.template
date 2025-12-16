@@ -4389,6 +4389,15 @@ ALLOW_SSH_PROT_V1=0
 ALLOWHIDDENFILE=/dev/shm/sem.netdata_sem_cgroup_ebpf
 ALLOWHIDDENFILE=/dev/shm/netdata_shm_cgroup_ebpf
 
+# Netdata eBPF shared memory / semaphores
+ALLOWDEVFILE=/dev/shm/sem.netdata_sem_cgroup_ebpf
+ALLOWDEVFILE=/dev/shm/sem.netdata_*
+ALLOWDEVFILE=/dev/shm/netdata_shm_cgroup_ebpf
+ALLOWDEVFILE=/dev/shm/netdata_*
+
+# PostgreSQL shared memory files (note the exact "PostgreSQL." prefix)
+ALLOWDEVFILE=/dev/shm/PostgreSQL.*
+
 # systemd-resolved backup file (legitimate)
 ALLOWHIDDENFILE=/etc/.resolv.conf.systemd-resolved.bak
 ALLOWHIDDENFILE=/etc/.updated
@@ -4454,10 +4463,29 @@ cat > /etc/chkrootkit/whitelist.conf << 'WHITELIST_EOF'
 /usr/lib/ruby/vendor_ruby/rubygems/ssl_certs/.document
 /usr/lib/ruby/vendor_ruby/rubygems/vendor/timeout/.document
 /usr/lib/ruby/vendor_ruby/rubygems/vendor/uri/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/resolv/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/optparse/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/tsort/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/molinillo/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/securerandom/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/net-protocol/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/net-http/.document
 
 # fail2ban test fixture files (from Debian package)
 /usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest/.htpasswd
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest/.htaccess
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/noentry/.htpasswd
 /usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/noentry/.htaccess
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/basic/authz_owner/.htpasswd
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/basic/authz_owner/.htaccess
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/basic/file/.htpasswd
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/basic/file/.htaccess
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest_anon/.htpasswd
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest_anon/.htaccess
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest_time/.htpasswd
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest_time/.htaccess
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest_wrongrelm/.htpasswd
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest_wrongrelm/.htaccess
 
 # Legitimate packet sniffers (IDS/monitoring tools)
 # Format: process_name:interface_pattern
