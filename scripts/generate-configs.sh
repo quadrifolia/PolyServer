@@ -257,6 +257,18 @@ if _is_truthy "${INSTALL_DOCKER:-false}"; then
     render_template "${TEMPLATE_DIR}/netdata/docker.conf.template" "${OUTPUT_DIR}/netdata/docker.conf"
     echo "Generated Docker monitoring configuration for Netdata"
   fi
+
+  # Generate health.d configurations for container monitoring
+  if [ -d "${TEMPLATE_DIR}/netdata/health.d" ]; then
+    mkdir -p "${OUTPUT_DIR}/netdata/health.d"
+    for template_file in "${TEMPLATE_DIR}/netdata/health.d"/*.template; do
+      if [ -f "$template_file" ]; then
+        filename=$(basename "$template_file" .template)
+        render_template "$template_file" "${OUTPUT_DIR}/netdata/health.d/$filename"
+        echo "Generated Netdata health configuration: $filename"
+      fi
+    done
+  fi
 else
   echo "Skipping Docker monitoring configuration (INSTALL_DOCKER=${INSTALL_DOCKER:-false})"
 fi
