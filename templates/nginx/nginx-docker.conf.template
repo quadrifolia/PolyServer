@@ -13,6 +13,9 @@ events {
 }
 
 http {
+    variables_hash_max_size 2048;
+    variables_hash_bucket_size 128;
+
     ##
     # Basic Settings
     ##
@@ -90,11 +93,15 @@ http {
     limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
     limit_req_zone $binary_remote_addr zone=static_limit:10m rate=50r/s;
 
+    # Set rate limit status code for all sites
+    limit_req_status 429;
+
     ##
     # Connection Limits
     ##
     limit_conn_zone $binary_remote_addr zone=addr:10m;
-    limit_conn addr 15;
+    # 75 concurrent connections per IP, but better set on location
+    # limit_conn addr 75;
 
     ##
     # Security Maps
