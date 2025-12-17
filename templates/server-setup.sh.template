@@ -3656,6 +3656,15 @@ if [ "$INSTALL_DOCKER" = "true" ]; then
                 usermod -aG docker netdata
                 echo "✅ Added netdata user to docker group"
 
+                # Install health.d configurations for container monitoring
+                if [ -d "/opt/polyserver/config/netdata/health.d" ]; then
+                    mkdir -p /etc/netdata/health.d
+                    cp -r /opt/polyserver/config/netdata/health.d/* /etc/netdata/health.d/
+                    chown -R netdata:netdata /etc/netdata/health.d
+                    chmod 644 /etc/netdata/health.d/*.conf
+                    echo "✅ Netdata container health monitoring configured"
+                fi
+
                 # Restart Netdata to apply changes
                 systemctl restart netdata
                 echo "✅ Netdata restarted with Docker monitoring enabled"
@@ -4716,16 +4725,22 @@ if [ "$DOCKER_MODE" = "false" ] && [ "$NETDATA_ENABLED" = "true" ] && [ "$NETDAT
     # SECURITY: Bind to localhost only (access via SSH tunnel or Nginx proxy)
     bind socket to IP = 127.0.0.1
     default port = 19999
-    
+
     # Performance optimized for server
     page cache size = 32
     dbengine multihost disk space = 128
-    
+
 [web]
     # No authentication needed since localhost-only
     web files owner = root
     web files group = netdata
-    
+
+[plugin:cgroups]
+    # Enable Docker container monitoring with auto-detection
+    enable running new cgroups = yes
+    enable by default cgroups matching = *
+    search for cgroups in subpaths matching = !*/init.scope !*-qemu !/init.scope !/system !/systemd !/user !/user.slice *
+
 EOF
 
     # Enable and start Netdata
@@ -4852,6 +4867,15 @@ EOF
 
         # Add netdata user to docker group for socket access
         usermod -aG docker netdata
+
+        # Install health.d configurations for container monitoring
+        if [ -d "/opt/polyserver/config/netdata/health.d" ]; then
+            mkdir -p /etc/netdata/health.d
+            cp -r /opt/polyserver/config/netdata/health.d/* /etc/netdata/health.d/
+            chown -R netdata:netdata /etc/netdata/health.d
+            chmod 644 /etc/netdata/health.d/*.conf
+            echo "✅ Netdata container health monitoring configured"
+        fi
 
         # Restart Netdata to apply changes
         systemctl restart netdata
