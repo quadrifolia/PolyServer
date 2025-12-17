@@ -4739,17 +4739,16 @@ if [ "$DOCKER_MODE" = "false" ] && [ "$NETDATA_ENABLED" = "true" ] && [ "$NETDAT
     # Enable Docker container monitoring with auto-detection
     enable running new cgroups = yes
 
-    # ONLY monitor Docker containers (cgroups v2 path)
-    search for cgroups in subpaths matching = /system.slice/docker-*.scope
-
-    # Enable all Docker containers
-    enable by default cgroups matching = /system.slice/docker-*.scope
-
-    # Auto-detect new containers every second
-    check for new cgroups every = 1
-
-    # Remove stopped containers after 60 seconds
+    check for new cgroups every = 5
     remove charts of exited cgroups after seconds = 60
+
+    path to /sys/fs/cgroup = /sys/fs/cgroup
+
+    # Search for all cgroups but exclude system ones
+    search for cgroups in subpaths matching = !*/init.scope !*-qemu !/init.scope !/system !/systemd !/user !/user.slice *
+
+    # Enable only docker scopes (including sub-cgroups), disable everything else
+    enable by default cgroups matching = /system.slice/docker-*.scope /system.slice/docker-*.scope/* !*
 
 EOF
 
