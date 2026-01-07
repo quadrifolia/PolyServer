@@ -5483,12 +5483,13 @@ fi
 echo "===== 11. Additional security hardening ====="
 
 echo "===== 11.1 Setting up system resource limits (ulimits) ====="
-# Prevent resource exhaustion attacks with sensible limits
+# Production-grade resource limits for high-traffic servers
 cat > /etc/security/limits.d/server.conf << EOF
 # Server Resource Limits
-# Prevent resource exhaustion attacks and improve system stability
+# Production-grade limits for high-traffic web servers and applications
+# These limits are essential for nginx, databases, and modern web applications
 
-# Limits for all users
+# Limits for all users (reasonable defaults)
 * soft nofile 4096
 * hard nofile 8192
 * soft nproc 1024
@@ -5498,28 +5499,28 @@ cat > /etc/security/limits.d/server.conf << EOF
 * soft memlock 64
 * hard memlock 64
 
-# Deploy user limits
-{{USERNAME}} soft nofile 2048
-{{USERNAME}} hard nofile 4096
-{{USERNAME}} soft nproc 512
-{{USERNAME}} hard nproc 1024
+# Deploy user limits (production-grade for application deployment)
+{{USERNAME}} soft nofile 65535
+{{USERNAME}} hard nofile 65535
+{{USERNAME}} soft nproc 65535
+{{USERNAME}} hard nproc 65535
 {{USERNAME}} soft maxlogins 10
 {{USERNAME}} hard maxlogins 20
 
-# Root user (for system processes)
-root soft nofile 8192
-root hard nofile 16384
-root soft nproc 4096
-root hard nproc 8192
+# Root user (high limits for system processes)
+root soft nofile 65535
+root hard nofile 65535
+root soft nproc 65535
+root hard nproc 65535
 
-# Service accounts
-www-data soft nofile 2048
-www-data hard nofile 4096
-www-data soft nproc 512
-www-data hard nproc 1024
+# Service accounts (www-data for nginx/apache)
+www-data soft nofile 65535
+www-data hard nofile 65535
+www-data soft nproc 4096
+www-data hard nproc 8192
 EOF
 
-echo "✅ System resource limits configured to prevent resource exhaustion attacks"
+echo "✅ Production-grade resource limits configured for high-traffic servers"
 
 echo "===== 11.2 Adding systemd journal rate limiting ====="
 # Prevent log flooding that could fill disk space
@@ -5556,6 +5557,12 @@ echo "===== 11.3 Adding kernel security parameters ====="
 # Set secure kernel parameters including auto-reboot on panic
 cat > /etc/sysctl.d/99-server-security.conf << EOF
 # Server Security Kernel Parameters
+
+# System-wide resource limits for high-traffic production servers
+# Essential for nginx, databases, and modern web applications
+kernel.pid_max = 4194304
+fs.file-max = 2097152
+vm.max_map_count = 262144
 
 # Network security
 net.ipv4.ip_forward = 0
