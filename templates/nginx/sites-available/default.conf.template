@@ -53,6 +53,41 @@ server {
     }
 }
 
+# Optimized HTTP default_server (optional replacement for the block above)
+# Strips static file serving, error pages, and most headers for a leaner
+# catch-all that only provides health/status endpoints and returns 404
+# for everything else. Useful in production where the default site should
+# not serve any content.
+#
+# server {
+#     listen 80 default_server;
+#     listen [::]:80 default_server;
+#     server_name _;
+#
+#     access_log off;
+#     log_not_found off;
+#
+#     add_header X-Robots-Tag "noindex, noarchive, nofollow" always;
+#
+#     include /etc/nginx/snippets/security-locations.conf;
+#
+#     location = /health {
+#         default_type text/plain;
+#         return 200 "OK\n";
+#     }
+#
+#     location = /nginx-status {
+#         stub_status;
+#         access_log off;
+#         allow 127.0.0.1;
+#         deny all;
+#     }
+#
+#     location / {
+#         return 404;
+#     }
+# }
+
 # HTTPS catch-all: reject TLS handshake for unknown/unmatched domains
 # Prevents unknown HTTPS traffic from falling through to the first
 # alphabetical ssl server block (e.g. api.polypublisher.com)
