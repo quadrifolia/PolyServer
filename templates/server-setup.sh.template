@@ -4655,6 +4655,10 @@ if [ "$INSTALL_DOCKER" = "true" ] && [ "$DOCKER_MODE" = "false" ]; then
 }
 EOF
 
+    # Use disk-backed temp dir instead of RAM-backed /tmp (which is only 512MB)
+    mkdir -p /var/lib/docker/tmp
+    echo 'export DOCKER_TMPDIR="/var/lib/docker/tmp"' >> /etc/default/docker
+
     docker_systemctl restart docker
     
     if [ "$DEPLOYMENT_MODE" = "docker" ]; then
@@ -7178,6 +7182,9 @@ if [ -n "$INSTALL_COMPONENTS" ]; then
 }
 DOCKER_EOF
 
+                    # Create Docker temp directory on disk (avoids filling the 512MB RAM-backed /tmp)
+                    mkdir -p /var/lib/docker/tmp
+
                     # Create secure Docker service drop-in (with Docker-compatible hardening)
                     mkdir -p /etc/systemd/system/docker.service.d
                     cat > /etc/systemd/system/docker.service.d/security.conf << 'DOCKER_EOF'
@@ -7185,6 +7192,9 @@ DOCKER_EOF
 # Security hardening (Docker-compatible settings only)
 # Note: ProtectKernelTunables cannot be used - Docker needs write access to /proc/sys/net/ipv4/ip_forward
 RestrictRealtime=true
+
+# Use disk-backed temp dir instead of RAM-backed /tmp (which is only 512MB)
+Environment="DOCKER_TMPDIR=/var/lib/docker/tmp"
 
 # Resource limits
 LimitNOFILE=1048576
