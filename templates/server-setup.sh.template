@@ -2244,17 +2244,6 @@ ReadWritePaths=/var/lib/clamav /var/log/clamav /run/clamav
 
 # Prevent memory fragmentation issues
 TasksMax=50
-
-# OOM handling - controlled termination
-OOMPolicy=kill
-OOMScoreAdjust=300
-
-# Security and resource isolation
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-NoNewPrivileges=true
-ReadWritePaths=/var/lib/clamav /var/log/clamav /run/clamav
 EOF
 
     # Freshclam resource limits for production servers
@@ -2296,21 +2285,10 @@ EOF
     chown clamav:clamav /var/log/clamav
     chmod 755 /var/log/clamav
 
-    # Set up logrotate for ClamAV logs
-    cat > /etc/logrotate.d/clamav << 'EOF'
-/var/log/clamav/*.log {
-    weekly
-    rotate 12
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 644 clamav clamav
-    postrotate
-        systemctl reload clamav-daemon > /dev/null 2>&1 || true
-    endscript
-}
-EOF
+    # Remove any wildcard logrotate for ClamAV - the Debian packages
+    # (clamav-daemon, clamav-freshclam) already ship their own logrotate
+    # configs. A wildcard *.log here causes "duplicate log entry" errors.
+    rm -f /etc/logrotate.d/clamav
 
     # Reload systemd and start services with new configurations
     systemctl daemon-reload
@@ -2804,6 +2782,12 @@ EOF
 !/var/log/syslog$
 !/var/log/kern.log$
 !/var/log/daemon.log$
+
+# Exclude ephemeral NFS RPC pipe filesystem (files appear/disappear constantly)
+!/run/rpc_pipefs
+
+# Exclude Docker network namespaces (not seekable, causes hash errors)
+!/run/docker
 EOF
 
     # Update AIDE configuration
@@ -5642,7 +5626,7 @@ After=swap.target
 What=tmpfs
 Where=/tmp
 Type=tmpfs
-Options=mode=1777,strictatime,noexec,nosuid,nodev,size=512M
+Options=mode=1777,strictatime,noexec,nosuid,nodev,size=2G
 
 [Install]
 WantedBy=multi-user.target
@@ -5711,6 +5695,8 @@ After=network.target
 Type=oneshot
 ExecStart=/etc/cron.daily/maldet-scan
 User=root
+# Use disk-backed /var/tmp instead of RAM-backed /tmp for scan temp files
+Environment=TMPDIR=/var/tmp
 StandardOutput=journal
 StandardError=journal
 TimeoutSec=7200
@@ -5742,6 +5728,8 @@ After=network.target
 Type=oneshot
 ExecStart=/etc/cron.daily/clamscan
 User=root
+# Use disk-backed /var/tmp instead of RAM-backed /tmp for scan temp files
+Environment=TMPDIR=/var/tmp
 StandardOutput=journal
 StandardError=journal
 TimeoutSec=7200
@@ -5775,6 +5763,8 @@ Requires=docker.service
 Type=oneshot
 ExecStart=/etc/cron.daily/trivy-scan
 User=root
+# Use disk-backed /var/tmp instead of RAM-backed /tmp (Trivy DB downloads can exceed 512MB)
+Environment=TMPDIR=/var/tmp
 StandardOutput=journal
 StandardError=journal
 TimeoutSec=3600
@@ -6186,8 +6176,14 @@ if [ -f "$BASELINE_DIR/suid_sgid.baseline" ]; then
     if ! diff -q "$BASELINE_DIR/suid_sgid.baseline" "/tmp/suid_sgid.current" >/dev/null 2>&1; then
         log_message "ALERT: SUID/SGID binary changes detected"
         diff "$BASELINE_DIR/suid_sgid.baseline" "/tmp/suid_sgid.current" | head -20 >> "$LOG_FILE"
-        echo "SUID/SGID ALERT: Binary permission changes detected on $(hostname)" | \
-            mail -s "SECURITY ALERT: SUID/SGID Changes" "$MAIL_RECIPIENT" 2>/dev/null || true
+        {
+            echo "SUID/SGID ALERT: Binary permission changes detected on $(hostname)"
+            echo ""
+            echo "Changes:"
+            diff "$BASELINE_DIR/suid_sgid.baseline" "/tmp/suid_sgid.current"
+        } | mail -s "SECURITY ALERT: SUID/SGID Changes" "$MAIL_RECIPIENT" 2>/dev/null || true
+        # Update baseline after alerting to avoid repeated alerts for the same change
+        cp "/tmp/suid_sgid.current" "$BASELINE_DIR/suid_sgid.baseline"
     fi
 else
     cp "/tmp/suid_sgid.current" "$BASELINE_DIR/suid_sgid.baseline"
