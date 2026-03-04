@@ -88,15 +88,36 @@ server {
 #     }
 # }
 
-# HTTPS catch-all: reject TLS handshake for unknown/unmatched domains
+# HTTPS catch-all: drop connections for unknown/unmatched domains
 # Prevents unknown HTTPS traffic from falling through to the first
 # alphabetical ssl server block (e.g. api.polypublisher.com)
-# Requires Nginx 1.19.4+ (ssl_reject_handshake directive)
+
+# Option A (Cloudflare-compatible): Complete the TLS handshake with a real
+# certificate, then return 444 (close connection without response).
+# Required when traffic passes through Cloudflare or any TLS-terminating proxy
+# that must finish the handshake before it can see the upstream response.
 server {
     listen 443 ssl default_server;
     listen [::]:443 ssl default_server;
-    ssl_reject_handshake on;
+    server_name _;
+
+    ssl_certificate     {{CF_ORIGIN_CERT_PATH}};
+    ssl_certificate_key {{CF_ORIGIN_KEY_PATH}};
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ecdh_curve X25519:prime256v1:secp384r1;
+
+    return 444;
 }
+
+# Option B (direct-access servers): Reject the TLS handshake outright.
+# More secure for servers not behind a TLS-terminating proxy — no certificate
+# is exposed and no connection is established. Requires Nginx 1.19.4+.
+# server {
+#     listen 443 ssl default_server;
+#     listen [::]:443 ssl default_server;
+#     ssl_reject_handshake on;
+# }
 
 # HTTPS configuration (uncomment when SSL certificate is available)
 # server {

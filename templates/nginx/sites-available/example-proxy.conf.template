@@ -63,7 +63,7 @@ server {
 
     # API endpoints with specific rate limiting
     location /api/ {
-        limit_req zone=api_limit burst=30 nodelay;
+        limit_req zone=api_limit burst=60 nodelay;
 
         proxy_pass http://backend;
         include /etc/nginx/conf.d/proxy_params;
@@ -143,7 +143,7 @@ server {
 #
 #     # API endpoints
 #     location /api/ {
-#         limit_req zone=api_limit burst=30 nodelay;
+#         limit_req zone=api_limit burst=60 nodelay;
 #         proxy_pass http://backend;
 #         include /etc/nginx/conf.d/proxy_params;
 #     }
