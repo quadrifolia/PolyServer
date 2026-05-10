@@ -2751,8 +2751,9 @@ EOF
 
 # Configure unattended-upgrades for security patches only
 cat > /etc/apt/apt.conf.d/50unattended-upgrades << EOF
-Unattended-Upgrade::Allowed-Origins {
-    "\${distro_id}:\${distro_codename}-security";
+Unattended-Upgrade::Origins-Pattern {
+    "origin=Debian,codename=\${distro_codename}-security";
+    "origin=Debian,codename=\${distro_codename},label=Debian-Security";
 };
 
 // Automatically reboot if required (at 3 AM for bastions)
