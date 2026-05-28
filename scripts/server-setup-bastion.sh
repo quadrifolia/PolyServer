@@ -3853,7 +3853,7 @@ if [ "$INSTALL_RKHUNTER" = true ]; then
 
 # Legitimate packet sniffers (IDS/monitoring tools)
 # Format: process_name:interface_pattern
-WHITELIST_SNIFFERS="suricata:.*|systemd-networkd:.*|dhclient:.*|dhcpd:.*|dhcpcd:.*|wpa_supplicant:.*|NetworkManager:.*"
+WHITELIST_SNIFFERS="suricata|systemd-networkd|dhclient|dhcpd|dhcpcd|wpa_supplicant|NetworkManager"
 WHITELIST_EOF
 
     # Create chkrootkit scan script with proper log handling and whitelist filtering
@@ -3879,8 +3879,9 @@ chkrootkit -q > \$RAW_LOG 2>&1
 
 # Filter out whitelisted entries
 if [ -f "\$WHITELIST_CONF" ]; then
-    # Load whitelist configuration
-    source "\$WHITELIST_CONF"
+    # Extract WHITELIST_SNIFFERS variable from the conf file without sourcing it
+    # (sourcing would try to execute the file paths as shell commands → Permission denied)
+    WHITELIST_SNIFFERS=\$(grep '^WHITELIST_SNIFFERS=' "\$WHITELIST_CONF" | cut -d'"' -f2)
 
     # Start with raw output
     cp "\$RAW_LOG" "\$TODAY_LOG"
@@ -3925,7 +3926,11 @@ if [ ! -f "\$EXPECTED_LOG" ]; then
 fi
 
 # Check for differences from expected output
-if ! diff -q "\$EXPECTED_LOG" "\$TODAY_LOG" >/dev/null 2>&1; then
+# Normalize PIDs before comparing so that a process restart (new PID) doesn't
+# trigger a false alert — only actual new processes or interfaces will differ.
+sed 's/\[[0-9]*\]//g' "\$EXPECTED_LOG" > /tmp/chkrootkit-expected-norm.txt
+sed 's/\[[0-9]*\]//g' "\$TODAY_LOG"    > /tmp/chkrootkit-today-norm.txt
+if ! diff -q /tmp/chkrootkit-expected-norm.txt /tmp/chkrootkit-today-norm.txt >/dev/null 2>&1; then
     # There are differences - send email alert
     ADMIN_EMAIL="${LOGWATCH_EMAIL:-root}"
     
@@ -3939,8 +3944,8 @@ if ! diff -q "\$EXPECTED_LOG" "\$TODAY_LOG" >/dev/null 2>&1; then
     echo "=== EXPECTED OUTPUT ===" >> /tmp/chkrootkit-alert.txt
     cat "\$EXPECTED_LOG" >> /tmp/chkrootkit-alert.txt
     echo "" >> /tmp/chkrootkit-alert.txt
-    echo "=== DIFFERENCES ===" >> /tmp/chkrootkit-alert.txt
-    diff "\$EXPECTED_LOG" "\$TODAY_LOG" >> /tmp/chkrootkit-alert.txt
+    echo "=== DIFFERENCES (PIDs normalized) ===" >> /tmp/chkrootkit-alert.txt
+    diff /tmp/chkrootkit-expected-norm.txt /tmp/chkrootkit-today-norm.txt >> /tmp/chkrootkit-alert.txt
     
     # Send email alert
     cat /tmp/chkrootkit-alert.txt | mail -s "⚠️ CHKROOTKIT ALERT: Output changed on \$(hostname)" "\$ADMIN_EMAIL"
@@ -3987,6 +3992,41 @@ EOF
     echo ""
     echo "Note: The whitelist already filters Suricata and other legitimate security tools."
     echo ""
+
+    # Configure rkhunter
+    echo "===== 10.1.1 Configuring rkhunter ====="
+
+    # Set PKGMGR=DPKG so rkhunter cross-checks file hashes against the dpkg database
+    # instead of its own stored baseline. This suppresses "file properties have changed"
+    # false positives that fire after every legitimate apt/unattended-upgrades run
+    # (e.g. sshd, bash, ldd changing hash/inode after a package update).
+    if [ -f /etc/rkhunter.conf ]; then
+        if grep -q "^PKGMGR=" /etc/rkhunter.conf; then
+            sed -i 's/^PKGMGR=.*/PKGMGR=DPKG/' /etc/rkhunter.conf
+        else
+            echo -e "\n# Suppress alerts after dpkg package updates\nPKGMGR=DPKG" >> /etc/rkhunter.conf
+        fi
+    fi
+
+    # Also write to rkhunter.conf.local — this survives rkhunter package upgrades
+    # which may reset /etc/rkhunter.conf to its shipped defaults
+    cat > /etc/rkhunter.conf.local << 'RKHUNTER_EOF'
+# PolyServer rkhunter local configuration
+# This file is loaded after /etc/rkhunter.conf and survives package upgrades.
+
+# Suppress "file properties have changed" false positives after legitimate apt upgrades.
+# rkhunter cross-checks against the dpkg database instead of its own stored hashes,
+# so only files NOT owned by any Debian package trigger a warning.
+PKGMGR=DPKG
+RKHUNTER_EOF
+
+    # Initialise the properties database with the current (clean) state
+    rkhunter --propupd
+
+    echo "✅ rkhunter configured:"
+    echo "   • PKGMGR=DPKG set in /etc/rkhunter.conf and /etc/rkhunter.conf.local"
+    echo "   • File properties database initialised (rkhunter --propupd)"
+    echo "   • Package-update false positives will no longer trigger email alerts"
 else
     echo "⏭️ Rootkit detection tools not selected - skipping chkrootkit configuration"
 fi
