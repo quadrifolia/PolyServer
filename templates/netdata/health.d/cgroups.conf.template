@@ -49,11 +49,13 @@ families: !_.slice
      to: sysadmin
 
 template: docker_container_cpu_usage
-     on: cgroup.cpu
-families: !_.slice
-  every: 1m
-   warn: $user > 80
-   crit: $user > 95
-  units: %
-   info: CPU usage of a Docker container
-     to: sysadmin
+      on: cgroup.cpu
+ families: !_.slice
+  lookup: average -5m unaligned of user
+   every: 1m
+    warn: $this > 80
+    crit: $this > 95
+   units: %
+   delay: up 2m down 5m multiplier 1.5 max 1h
+    info: Average CPU usage of a Docker container over the last 5 minutes
+      to: sysadmin
