@@ -16,10 +16,26 @@ VIOLATIONS_FILE="/etc/logcheck/violations.ignore.d/veeam-agent"
 SYSTEM_FILE="/etc/logcheck/ignore.d.server/veeam-agent"
 OLD_FILE="/etc/logcheck/ignore.d.server/veeam-agent"
 
+# Backups MUST live outside the logcheck rule directories: logcheck reads every file
+# in violations.ignore.d/ and ignore.d.server/ as a rule, so a stray ".bak" left there
+# is parsed as a rule and (being unreadable to the logcheck user) aborts the whole run.
+BACKUP_DIR="/var/backups/logcheck"
+
 if ! command -v logcheck >/dev/null 2>&1; then
     echo "❌ logcheck is not installed. This fix is not needed."
     exit 1
 fi
+
+# Clean up backups that earlier versions of this script wrote INTO the rule directories.
+# These break logcheck ("Could not read .../veeam-agent.bak-...") — move them to BACKUP_DIR.
+mkdir -p "$BACKUP_DIR"
+for stray in /etc/logcheck/violations.ignore.d/veeam-agent.bak-* \
+             /etc/logcheck/ignore.d.server/veeam-agent.bak-*; do
+    [ -e "$stray" ] || continue
+    mv -f "$stray" "$BACKUP_DIR/$(basename "$stray")" 2>/dev/null \
+        && echo "🧹 Moved stray backup out of logcheck rule dir: $stray" \
+        || rm -f "$stray"
+done
 
 # Ignore-rule content. Two patterns cover traditional syslog and ISO 8601 timestamps.
 # Matches: sudo[PID]: veeam-* : ... COMMAND=/var/lib/veeam*
@@ -45,8 +61,9 @@ install_rule() {
     mkdir -p "$dir"
 
     if [ -f "$target" ]; then
-        cp "$target" "${target}.bak-$(date +%Y%m%d-%H%M%S)"
-        echo "✅ Backed up existing $target"
+        mkdir -p "$BACKUP_DIR"
+        cp "$target" "$BACKUP_DIR/$(basename "$target").bak-$(date +%Y%m%d-%H%M%S)"
+        echo "✅ Backed up existing $target to $BACKUP_DIR"
     fi
 
     printf '%s\n' "$RULES" > "$target"

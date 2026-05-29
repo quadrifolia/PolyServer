@@ -3954,6 +3954,13 @@ if [ "$INSTALL_DOCKER" = "true" ] && command -v docker >/dev/null 2>&1; then
     mkdir -p /var/log/security/trivy
 
     # Create cron job for daily container scanning
+    #
+    # SECURITY: Trivy's secret scanner detects credentials baked into images. We
+    # must NEVER email or log the secret VALUES — that would expose them in
+    # cleartext over unencrypted SMTP and in /var/log. Vulnerability findings are
+    # reported in full (they contain no secret material); secret findings are
+    # reported as metadata only (type, file, line) so an admin knows what to
+    # rotate and where to look, without the credential ever leaving the image.
     cat > /etc/cron.daily/trivy-scan << 'EOF'
 #!/bin/bash
 # Daily container vulnerability scanning
@@ -3963,9 +3970,33 @@ DATE=$(date +%Y-%m-%d)
 MAIL_RECIPIENT="${LOGWATCH_EMAIL:-root}"
 HOSTNAME=$(hostname)
 TRIVYLOG="${REPORT_DIR}/trivy-${DATE}.log"
+REPORT_TMPL="${REPORT_DIR}/.report.tmpl"
 
-# Create report directory if it doesn't exist
+# Create report directory if it doesn't exist (restrict — reports may name sensitive paths)
 mkdir -p $REPORT_DIR
+chmod 750 $REPORT_DIR
+
+# Compact, mobile-friendly report template (one line per finding, no wide tables).
+# Trivy's default table output uses box-drawing chars and wide columns that mail clients
+# render in a proportional font, producing unreadable wrapped garbage. Secrets are emitted
+# as metadata only (type/file/line) — the credential value is never written out.
+cat > "$REPORT_TMPL" << 'TMPL'
+{{- range . }}{{ if or .Vulnerabilities .Secrets }}
+========================================
+ {{ .Target }}
+========================================
+{{- range .Vulnerabilities }}
+[{{ .Severity }}] {{ .VulnerabilityID }} — {{ .PkgName }} {{ .InstalledVersion }}{{ if .FixedVersion }} (fix: {{ .FixedVersion }}){{ else }} (no fix){{ end }}
+{{- end }}
+{{- if .Secrets }}
+
+*** SECRETS DETECTED (values redacted — rotate the credential & rebuild the image): ***
+{{- range .Secrets }}
+[{{ .Severity }}] {{ .Title }} ({{ .RuleID }}) at line {{ .StartLine }}
+{{- end }}
+{{- end }}
+{{ end }}{{- end }}
+TMPL
 
 # Update Trivy vulnerability database
 /usr/local/bin/trivy image --download-db-only > /dev/null 2>&1
@@ -3973,16 +4004,19 @@ mkdir -p $REPORT_DIR
 # Start log file
 echo "===== Container Vulnerability Scan Report: $DATE =====" > $TRIVYLOG
 
-# Scan running containers
+# Scan running containers (single scan per image, compact template output)
 CONTAINERS=$(docker ps --format "{{.Image}}")
 for IMAGE in $CONTAINERS; do
-    echo "Scanning image: $IMAGE" >> $TRIVYLOG
-    /usr/local/bin/trivy image --no-progress --severity HIGH,CRITICAL $IMAGE >> $TRIVYLOG
-    echo "-----------------------------------------" >> $TRIVYLOG
+    echo "" >> $TRIVYLOG
+    /usr/local/bin/trivy image --no-progress --scanners vuln,secret --severity HIGH,CRITICAL --format template --template "@$REPORT_TMPL" "$IMAGE" >> $TRIVYLOG 2>/dev/null
 done
 
-# Email report if vulnerabilities found
-if grep -q "CRITICAL\|HIGH" $TRIVYLOG; then
+# Remove the template and restrict the report (defense in depth)
+rm -f "$REPORT_TMPL"
+chmod 640 $TRIVYLOG
+
+# Email report if findings present
+if grep -q -E "\[(HIGH|CRITICAL)\]" $TRIVYLOG; then
     cat $TRIVYLOG | mail -s "⚠️ CONTAINER VULNERABILITIES: Found on $HOSTNAME" $MAIL_RECIPIENT
 fi
 
