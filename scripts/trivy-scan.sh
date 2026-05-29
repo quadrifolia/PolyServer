@@ -15,8 +15,36 @@ TRIVYLOG="${REPORT_DIR}/trivy-${DATE}.log"
 LOAD_THRESHOLD=2.0
 MAX_SCAN_TIME=1800  # 30 minutes max total scan time
 
-# Create report directory if it doesn't exist
+# Create report directory if it doesn't exist (restrict — reports may name sensitive paths)
 mkdir -p $REPORT_DIR
+chmod 750 $REPORT_DIR
+
+# Compact, mobile-friendly report template (one line per finding, no wide tables).
+# Trivy's default table output uses box-drawing chars and wide fixed-width columns that
+# mail clients render in a proportional font, producing unreadable wrapped garbage.
+#
+# SECURITY: Trivy's secret scanner detects credentials baked into images. We must NEVER
+# email or log the secret VALUES (cleartext over unencrypted SMTP / in /var/log).
+# Vulnerabilities are listed in full; secrets are listed as METADATA ONLY (type/file/line)
+# so an admin knows what to rotate and where to look, without the credential leaving the image.
+REPORT_TMPL="${REPORT_DIR}/.report.tmpl"
+cat > "$REPORT_TMPL" << 'TMPL'
+{{- range . }}{{ if or .Vulnerabilities .Secrets }}
+========================================
+ {{ .Target }}
+========================================
+{{- range .Vulnerabilities }}
+[{{ .Severity }}] {{ .VulnerabilityID }} — {{ .PkgName }} {{ .InstalledVersion }}{{ if .FixedVersion }} (fix: {{ .FixedVersion }}){{ else }} (no fix){{ end }}
+{{- end }}
+{{- if .Secrets }}
+
+*** SECRETS DETECTED (values redacted — rotate the credential & rebuild the image): ***
+{{- range .Secrets }}
+[{{ .Severity }}] {{ .Title }} ({{ .RuleID }}) at line {{ .StartLine }}
+{{- end }}
+{{- end }}
+{{ end }}{{- end }}
+TMPL
 
 # Check system load before starting scan
 CURRENT_LOAD=$(uptime | awk -F'load average:' '{ print $2 }' | awk '{ print $1 }' | sed 's/,//')
@@ -94,10 +122,11 @@ for CONTAINER in "${CONTAINERS[@]}"; do
     
     echo "Scanning container: $CONTAINER (Image: $IMAGE_ID)" >> $TRIVYLOG
     
-    # Scan the container image for vulnerabilities with resource controls
-    SCAN_RESULT=$(timeout 600 nice -n 19 ionice -c 3 trivy image --no-progress --severity $SEVERITY --timeout 8m $IMAGE_ID 2>/dev/null)
+    # Single scan (vuln + secret) rendered through the compact template. Secrets are
+    # emitted as metadata only — the credential value is never written out.
+    SCAN_RESULT=$(timeout 600 nice -n 19 ionice -c 3 trivy image --no-progress --scanners vuln,secret --severity $SEVERITY --format template --template "@$REPORT_TMPL" --timeout 8m $IMAGE_ID 2>/dev/null)
     SCAN_EXIT_CODE=$?
-    
+
     if [ $SCAN_EXIT_CODE -eq 124 ]; then
         echo "Scan for $CONTAINER timed out after 10 minutes" >> $TRIVYLOG
         continue
@@ -105,27 +134,21 @@ for CONTAINER in "${CONTAINERS[@]}"; do
         echo "Scan for $CONTAINER failed with exit code $SCAN_EXIT_CODE" >> $TRIVYLOG
         continue
     fi
-    
-    # If vulnerabilities found
-    if echo "$SCAN_RESULT" | grep -q -E "CRITICAL|HIGH"; then
+
+    # If anything found (vulnerabilities or secrets)
+    if echo "$SCAN_RESULT" | grep -q -E "\[(HIGH|CRITICAL)\]"; then
         echo "$SCAN_RESULT" >> $TRIVYLOG
         FOUND_VULNERABILITIES=1
-        
-        # Count vulnerabilities by severity
-        HIGH_COUNT=$(echo "$SCAN_RESULT" | grep -c "HIGH")
-        CRITICAL_COUNT=$(echo "$SCAN_RESULT" | grep -c "CRITICAL")
-        
+
+        # Count findings by severity (compact format: one finding per "[SEVERITY]" line)
+        HIGH_COUNT=$(echo "$SCAN_RESULT" | grep -c "^\[HIGH\]")
+        CRITICAL_COUNT=$(echo "$SCAN_RESULT" | grep -c "^\[CRITICAL\]")
+
         TOTAL_HIGH=$((TOTAL_HIGH + HIGH_COUNT))
         TOTAL_CRITICAL=$((TOTAL_CRITICAL + CRITICAL_COUNT))
-        
-        echo "Found $HIGH_COUNT HIGH and $CRITICAL_COUNT CRITICAL vulnerabilities." >> $TRIVYLOG
     else
-        echo "No vulnerabilities found with severity $SEVERITY." >> $TRIVYLOG
+        echo "No HIGH/CRITICAL findings for $CONTAINER." >> $TRIVYLOG
     fi
-    
-    echo "" >> $TRIVYLOG
-    echo "--------------------------------------------------------" >> $TRIVYLOG
-    echo "" >> $TRIVYLOG
 done
 
 # Add summary
@@ -143,12 +166,16 @@ if [ $FOUND_VULNERABILITIES -eq 1 ]; then
     echo "1. Update container images to newer versions if available" >> $TRIVYLOG
     echo "2. Check if there are security patches for the affected components" >> $TRIVYLOG
     echo "3. Consider implementing additional security controls for affected containers" >> $TRIVYLOG
-    echo "4. For detailed vulnerability information, visit the CVE links provided above" >> $TRIVYLOG
+    echo "4. Look up the listed CVE IDs (e.g. https://nvd.nist.gov/vuln/detail/<CVE-ID>) for details" >> $TRIVYLOG
     echo "" >> $TRIVYLOG
-    
+
     # Send email notification if vulnerabilities found
     cat $TRIVYLOG | mail -s "⚠️ SECURITY: Container Vulnerabilities Found on $HOSTNAME" $MAIL_RECIPIENT
 fi
+
+# Remove the template and restrict the report (defense in depth)
+rm -f "$REPORT_TMPL"
+chmod 640 $TRIVYLOG 2>/dev/null
 
 # Keep only the last 30 days of logs
 find $REPORT_DIR -name "trivy-*.log" -mtime +30 -delete
