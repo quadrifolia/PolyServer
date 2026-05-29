@@ -14,7 +14,6 @@ set -e
 
 VIOLATIONS_FILE="/etc/logcheck/violations.ignore.d/veeam-agent"
 SYSTEM_FILE="/etc/logcheck/ignore.d.server/veeam-agent"
-OLD_FILE="/etc/logcheck/ignore.d.server/veeam-agent"
 
 # Backups MUST live outside the logcheck rule directories: logcheck reads every file
 # in violations.ignore.d/ and ignore.d.server/ as a rule, so a stray ".bak" left there
@@ -32,9 +31,11 @@ mkdir -p "$BACKUP_DIR"
 for stray in /etc/logcheck/violations.ignore.d/veeam-agent.bak-* \
              /etc/logcheck/ignore.d.server/veeam-agent.bak-*; do
     [ -e "$stray" ] || continue
-    mv -f "$stray" "$BACKUP_DIR/$(basename "$stray")" 2>/dev/null \
-        && echo "🧹 Moved stray backup out of logcheck rule dir: $stray" \
-        || rm -f "$stray"
+    if mv -f "$stray" "$BACKUP_DIR/$(basename "$stray")" 2>/dev/null; then
+        echo "🧹 Moved stray backup out of logcheck rule dir: $stray"
+    else
+        rm -f "$stray"
+    fi
 done
 
 # Ignore-rule content. Two patterns cover traditional syslog and ISO 8601 timestamps.
