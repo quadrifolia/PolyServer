@@ -2673,6 +2673,20 @@ EOF
 
 log_message "✅ Logcheck configured with application server ignore patterns"
 
+# Suppress Veeam VSPC backup agent sudo events in logcheck's "Security Events for sudo" report.
+# The agent runs /var/lib/veeamma/.../veeaminstaller via sudo every minute for health/version
+# checks. The stock violations.ignore.d/logcheck-sudo rule only whitelists sudo COMMANDs under
+# /usr,/etc,/bin,/sbin, so /var/lib/veeam* commands are flagged as security violations. Extend
+# that ruleset (idempotently) rather than adding a standalone file, which is not honored for the
+# sudo violations report. Only applies if Veeam ever runs here; harmless otherwise.
+SUDO_IGNORE="/etc/logcheck/violations.ignore.d/logcheck-sudo"
+VEEAM_SUDO_RULE='^(\w{3} [ :0-9]{11}|[0-9T:.+-]{32}) [._[:alnum:]-]+ sudo(\[[0-9]+\])?:[[:space:]]+veeam-[._[:alnum:]-]+ : ((HOST|TTY|CHROOT|PWD|USER|GROUP|ENV|TSID|EXIT|SIGNAL)=[^ ;]+ ; )*COMMAND=/var/lib/veeam[^ ]*( .*)?$'
+if [ -f "$SUDO_IGNORE" ] && ! grep -qF "$VEEAM_SUDO_RULE" "$SUDO_IGNORE" 2>/dev/null; then
+    cp -a "$SUDO_IGNORE" "/var/backups/logcheck-sudo.bak-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+    printf '\n%s\n%s\n' "# PolyServer: Veeam VSPC backup agent (veeaminstaller from /var/lib/veeamma) - legitimate, not a security event" "$VEEAM_SUDO_RULE" >> "$SUDO_IGNORE"
+    log_message "✅ Added Veeam sudo ignore rule to logcheck-sudo"
+fi
+
 # Configure and initialize AIDE (Advanced Intrusion Detection Environment)
 if [ "$DOCKER_MODE" = "false" ]; then
     echo "Configuring AIDE for file integrity monitoring..."
