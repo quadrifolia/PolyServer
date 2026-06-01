@@ -116,12 +116,12 @@ logging:
         level: info
 
 # Set default rule path
-default-rule-path: /etc/suricata/rules
+default-rule-path: /var/lib/suricata/rules
 
 # Load custom rules
 rule-files:
   - suricata.rules
-  - application-custom.rules
+  - /etc/suricata/rules/application-custom.rules
 
 # Application-specific rules are in application-custom.rules
 # Rules have been updated to reduce false positives:

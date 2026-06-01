@@ -4283,6 +4283,14 @@ cat >> /etc/logcheck/ignore.d.server/bastion-ignore << EOF
 ^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sh\[[0-9]+\]: mdadm: NewArray event detected on md device /dev/md
 ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sh\[[0-9]+\]: mdadm: DeviceDisappeared event detected on md device /dev/md
 ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sh\[[0-9]+\]: mdadm: NewArray event detected on md device /dev/md
+
+# auditd log rotation (routine maintenance, not a security event)
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ auditd\[[0-9]+\]: Audit daemon rotating log files$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ auditd\[[0-9]+\]: Audit daemon rotating log files$
+
+# systemd-logind scheduled reboot announcements (informational, not a security event)
+^\w{3} [ :0-9]{11} [._[:alnum:]-]+ systemd-logind\[[0-9]+\]: The system will reboot at .*!$
+^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ systemd-logind\[[0-9]+\]: The system will reboot at .*!$
 EOF
 
 echo "✅ Logcheck configured for daily server-level reports (less technical than default)"
@@ -6081,7 +6089,7 @@ if [ -f /var/run/reboot-required ]; then
     
     # Send email notification
     echo "Bastion host \$(hostname) is scheduled for automatic reboot at 04:00 AM due to security updates requiring reboot." | \
-        mail -s "BASTION NOTICE: Scheduled Reboot Tonight" root
+        mail -s "\$(hostname) NOTICE: Scheduled Reboot Tonight" root
 fi
 EOF
     
