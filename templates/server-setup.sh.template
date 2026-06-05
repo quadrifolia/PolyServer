@@ -4513,6 +4513,9 @@ cat > /etc/chkrootkit/whitelist.conf << 'WHITELIST_EOF'
 /usr/lib/ruby/vendor_ruby/rubygems/vendor/net-protocol/.document
 /usr/lib/ruby/vendor_ruby/rubygems/vendor/net-http/.document
 
+# PostgreSQL shared memory segments (/dev/shm/PostgreSQL.TIMESTAMP — timestamp changes on restart)
+/dev/shm/PostgreSQL.
+
 # fail2ban test fixture files (from Debian package)
 /usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest/.htpasswd
 /usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest/.htaccess
@@ -4529,99 +4532,125 @@ cat > /etc/chkrootkit/whitelist.conf << 'WHITELIST_EOF'
 /usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest_wrongrelm/.htpasswd
 /usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest_wrongrelm/.htaccess
 
-# Legitimate packet sniffers (IDS/monitoring tools)
-# Format: process_name:interface_pattern
-WHITELIST_SNIFFERS="suricata:.*|systemd-networkd:.*|dhclient:.*|dhcpd:.*|dhcpcd:.*|wpa_supplicant:.*|NetworkManager:.*"
+# Legitimate packet sniffers (IDS/monitoring tools) — pipe-separated basenames
+WHITELIST_SNIFFERS="suricata|systemd-networkd|dhclient|dhcpd|dhcpcd|wpa_supplicant|NetworkManager"
 WHITELIST_EOF
 
 cat > /etc/cron.daily/chkrootkit-scan << 'EOF'
 #!/bin/bash
 # Run a daily chkrootkit scan with intelligent whitelist filtering
 
-# Log file
 LOGFILE="/var/log/chkrootkit/daily_scan.log"
 EXPECTED_LOG="/var/log/chkrootkit/log.expected"
 TODAY_LOG="/var/log/chkrootkit/log.today"
 RAW_LOG="/var/log/chkrootkit/log.raw"
 WHITELIST_CONF="/etc/chkrootkit/whitelist.conf"
 
-# Create log directory if it doesn't exist
 mkdir -p /var/log/chkrootkit
+echo "chkrootkit daily scan started at $(date)" > "$LOGFILE"
 
-# Clear previous log
-echo "chkrootkit daily scan started at $(date)" > $LOGFILE
+# Run the scan (quiet mode — only warnings)
+chkrootkit -q > "$RAW_LOG" 2>&1
 
-# Run the scan (raw output)
-chkrootkit -q > $RAW_LOG 2>&1
-
-# Filter out whitelisted entries
 if [ -f "$WHITELIST_CONF" ]; then
-    # Start with raw output
+    WHITELIST_SNIFFERS=$(grep '^WHITELIST_SNIFFERS=' "$WHITELIST_CONF" | sed 's/^WHITELIST_SNIFFERS="//;s/"$//')
     cp "$RAW_LOG" "$TODAY_LOG"
 
-    # Filter out whitelisted file paths (suspicious files warnings)
-    while IFS= read -r line; do
-        # Skip comments and empty lines
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "$line" ]] && continue
+    # Strip process PIDs before filtering and comparison; a suricata restart
+    # (new PID) must not trigger a false diff alert.
+    sed -i 's/\[[0-9]\{1,7\}\]//g' "$TODAY_LOG"
 
-        # Check if line is a whitelist entry (starts with /)
-        if [[ "$line" =~ ^/ ]]; then
-            # Escape special regex characters in the path
-            escaped_path=$(echo "$line" | sed 's/[]\/$*.^[]/\\&/g')
-            # Remove lines containing this path from the output
-            sed -i "/${escaped_path}/d" "$TODAY_LOG"
+    # Filter whitelisted file paths — use | delimiter so / in paths needs no escaping
+    while IFS= read -r wline; do
+        [[ "$wline" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "$wline" ]] && continue
+        [[ "$wline" =~ ^WHITELIST_SNIFFERS= ]] && continue
+        if [[ "$wline" =~ ^/ ]]; then
+            escaped=$(printf '%s\n' "$wline" | sed 's/[]\$*.^[]/\\&/g')
+            sed -i "\\|${escaped}|d" "$TODAY_LOG"
         fi
     done < "$WHITELIST_CONF"
 
-    echo "Whitelist filtering applied" >> $LOGFILE
+    # Filter ifpromisc section:
+    #   - PACKET SNIFFER lines where every process is a known-good tool are removed.
+    #   - "not promisc" lines are always safe and removed (they change with container
+    #     network churn and have no security value).
+    #   - The WARNING header is dropped if no suspicious lines remain.
+    if [ -n "$WHITELIST_SNIFFERS" ]; then
+        awk -v known="$WHITELIST_SNIFFERS" '
+        /^WARNING: Output from ifpromisc:/ {
+            in_promisc=1; promisc_hdr=$0; promisc_body=""; next
+        }
+        in_promisc && /^WARNING:/ {
+            in_promisc=0
+            if (promisc_body != "") { print promisc_hdr; printf "%s", promisc_body }
+            print; next
+        }
+        in_promisc && /PACKET SNIFFER/ {
+            line=$0
+            gsub(/[^ ,(]*\//, "", line)
+            n=split(known, kp, "|")
+            for (i=1; i<=n; i++) gsub(kp[i] "[, ]*", "", line)
+            if (line !~ /PACKET SNIFFER\([[:space:]]*\)/) promisc_body=promisc_body $0 "\n"
+            next
+        }
+        in_promisc { next }
+        { print }
+        END { if (in_promisc && promisc_body != "") { print promisc_hdr; printf "%s", promisc_body } }
+        ' "$TODAY_LOG" > "${TODAY_LOG}.tmp" && mv "${TODAY_LOG}.tmp" "$TODAY_LOG"
+    fi
+
+    # Drop WARNING headers whose entire section was filtered away
+    awk '
+    /^WARNING:/ {
+        if (warnhdr != "" && section ~ /[^[:space:]]/) { print warnhdr; printf "%s", section }
+        warnhdr=$0; section=""; next
+    }
+    warnhdr != "" { section=section $0 "\n"; next }
+    { print }
+    END { if (warnhdr != "" && section ~ /[^[:space:]]/) { print warnhdr; printf "%s", section } }
+    ' "$TODAY_LOG" > "${TODAY_LOG}.tmp" && mv "${TODAY_LOG}.tmp" "$TODAY_LOG"
+
+    echo "Whitelist filtering applied" >> "$LOGFILE"
 else
-    # No whitelist - use raw output
     cp "$RAW_LOG" "$TODAY_LOG"
-    echo "No whitelist configuration found - using raw output" >> $LOGFILE
+    echo "No whitelist configuration found - using raw output" >> "$LOGFILE"
 fi
 
-# Add completion time
-echo "chkrootkit daily scan completed at $(date)" >> $LOGFILE
+echo "chkrootkit daily scan completed at $(date)" >> "$LOGFILE"
 
-# Create expected log file if it doesn't exist (first run)
+# First run: establish filtered output as the clean baseline
 if [ ! -f "$EXPECTED_LOG" ]; then
     cp "$TODAY_LOG" "$EXPECTED_LOG"
-    echo "Initial chkrootkit expected output created" >> $LOGFILE
+    echo "Initial chkrootkit expected output created" >> "$LOGFILE"
+    exit 0
 fi
 
-# Check for differences from expected output
+# Alert on any deviation from baseline (PIDs already stripped — only real changes trigger this)
 if ! diff -q "$EXPECTED_LOG" "$TODAY_LOG" >/dev/null 2>&1; then
-    # Get admin email
     ADMIN_EMAIL=$(grep "^MAIL-ON-WARNING=" /etc/rkhunter.conf.local 2>/dev/null | cut -d= -f2)
     [ -z "$ADMIN_EMAIL" ] && ADMIN_EMAIL="root"
-
-    # Create diff report
     {
         echo "chkrootkit output differs from expected baseline"
         echo "Scan date: $(date)"
         echo ""
-        echo "=== TODAY'S OUTPUT ==="
-        cat "$TODAY_LOG"
-        echo ""
-        echo "=== EXPECTED OUTPUT ==="
-        cat "$EXPECTED_LOG"
-        echo ""
         echo "=== DIFFERENCES ==="
         diff "$EXPECTED_LOG" "$TODAY_LOG" || true
-    } | mail -s "⚠️ CHKROOTKIT ALERT: Output changed on $(hostname)" "$ADMIN_EMAIL"
-
-    echo "chkrootkit output changed - alert sent" >> $LOGFILE
+        echo ""
+        echo "=== TODAY'S FILTERED OUTPUT ==="
+        cat "$TODAY_LOG"
+    } | mail -s "CHKROOTKIT ALERT: Output changed on $(hostname)" "$ADMIN_EMAIL"
+    echo "chkrootkit output changed - alert sent" >> "$LOGFILE"
 else
-    echo "chkrootkit output matches expected baseline" >> $LOGFILE
+    echo "chkrootkit output matches expected baseline" >> "$LOGFILE"
 fi
 
-# Check for INFECTED results specifically
+# Separate immediate alert for any INFECTED result
 if grep -q "INFECTED" "$TODAY_LOG"; then
     ADMIN_EMAIL=$(grep "^MAIL-ON-WARNING=" /etc/rkhunter.conf.local 2>/dev/null | cut -d= -f2)
     [ -z "$ADMIN_EMAIL" ] && ADMIN_EMAIL="root"
-    cat "$TODAY_LOG" | mail -s "🚨 ROOTKIT WARNING: Possible rootkit found on $(hostname)" "$ADMIN_EMAIL"
-    echo "INFECTED results found - alert sent" >> $LOGFILE
+    mail -s "ROOTKIT WARNING: Possible rootkit found on $(hostname)" "$ADMIN_EMAIL" < "$TODAY_LOG"
+    echo "INFECTED results found - alert sent" >> "$LOGFILE"
 fi
 EOF
 chmod 755 /etc/cron.daily/chkrootkit-scan
