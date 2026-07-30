@@ -36,6 +36,9 @@ server:
     
     # Aggressive NSEC for better performance with DNSSEC
     aggressive-nsec: yes
+
+    # CA bundle for DNS-over-TLS upstream verification
+    tls-cert-bundle: "/etc/ssl/certs/ca-certificates.crt"
     
     # Logging settings (can be disabled in production)
     log-queries: {{UNBOUND_LOG_QUERIES}}
@@ -43,10 +46,12 @@ server:
     log-servfail: {{UNBOUND_LOG_SERVFAIL}}
     logfile: "{{UNBOUND_LOGFILE}}"
 
-# Use recursive resolution with fallback forwarding for reliability
-# Fallback forwarding enabled by default for production stability
+# Forward all queries over DNS-over-TLS (TCP/853) instead of recursing/forwarding
+# over UDP/53 — hosting providers (e.g. OVH anti-DDoS) may filter outbound UDP/53,
+# which silently breaks recursion and plain forwarding. DoT also encrypts queries.
 
 forward-zone:
     name: "."
-    forward-addr: {{UNBOUND_DNS_PRIMARY}}     # Primary DNS (default: Google)
-    forward-addr: {{UNBOUND_DNS_SECONDARY}}   # Secondary DNS (default: Cloudflare)
+    forward-tls-upstream: yes
+    forward-addr: {{UNBOUND_DNS_PRIMARY}}@853#{{UNBOUND_DNS_PRIMARY_TLS_NAME}}     # Primary DNS (default: Google)
+    forward-addr: {{UNBOUND_DNS_SECONDARY}}@853#{{UNBOUND_DNS_SECONDARY_TLS_NAME}}   # Secondary DNS (default: Cloudflare)

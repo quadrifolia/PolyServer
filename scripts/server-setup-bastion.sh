@@ -878,6 +878,9 @@ if [[ ! "$ALLOWED_INTERNAL_PORTS" =~ "53" ]]; then
     ufw allow out 53/udp comment "DNS resolution UDP"
 fi
 
+# Allow DNS-over-TLS — unbound forwards all queries via TCP/853 (see forward-zone)
+ufw allow out 853/tcp comment "DNS-over-TLS to upstream resolvers"
+
 # Allow outgoing HTTP/HTTPS for updates and monitoring
 ufw allow out 80/tcp comment "HTTP updates"
 ufw allow out 443/tcp comment "HTTPS updates"
@@ -1494,6 +1497,9 @@ server:
     # (DNSSEC validation adds complexity and potential failure points)
     # If needed in future, uncomment: auto-trust-anchor-file: "/var/lib/unbound/root.key"
 
+    # CA bundle for DNS-over-TLS upstream verification
+    tls-cert-bundle: "/etc/ssl/certs/ca-certificates.crt"
+
     # Private address handling
     private-address: 192.168.0.0/16
     private-address: 172.16.0.0/12
@@ -1504,6 +1510,15 @@ server:
     
 remote-control:
     control-enable: no
+
+# Forward all queries over DNS-over-TLS (TCP/853) instead of recursing over
+# UDP/53 — hosting providers (e.g. OVH anti-DDoS) may filter outbound UDP/53,
+# which silently breaks recursion. DoT also encrypts queries.
+forward-zone:
+    name: "."
+    forward-tls-upstream: yes
+    forward-addr: 8.8.8.8@853#dns.google
+    forward-addr: 1.1.1.1@853#cloudflare-dns.com
 EOF
 
 # Create simple main unbound.conf that includes our bastion config
