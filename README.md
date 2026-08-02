@@ -101,7 +101,7 @@ PolyServer provides a **foundational layer** for secure Debian server deployment
 - **Defense in depth**: ModSecurity WAF, Suricata IDS, fail2ban with UFW/nftables backend
 - **Comprehensive audit framework**: auditd with file integrity monitoring and persistence detection
 - **Enhanced access control**: AppArmor mandatory access control with restrictive sudoers configuration
-- **DNS security**: Unbound with DNSSEC validation, dual-stack support, and fallback DNS
+- **DNS security**: Unbound with DNSSEC validation, dual-stack support, and encrypted DNS-over-TLS upstream forwarding
 - **Malware protection**: ClamAV, Linux Malware Detect, and rootkit detection (RKHunter, chkrootkit)
 - **Container security**: Trivy vulnerability scanning with severity-based filtering
 - **Automated security updates**: Unattended upgrades with intelligent service restart management (needrestart automation)
@@ -2861,6 +2861,7 @@ The server is configured with Unbound DNS cache to improve performance and secur
 - **Performance improvements**: Faster application response times
 - **Security benefits**: Protection against DNS-based attacks
 - **DNSSEC validation**: Verifies DNS responses haven't been tampered with
+- **DNS-over-TLS forwarding**: All queries leave the server encrypted via TCP/853 (see below)
 - **Large cache size**: Optimized for minimal DNS lookup times
 
 #### Configuring Unbound DNS Cache
@@ -2881,7 +2882,67 @@ UNBOUND_LOG_REPLIES=no
 UNBOUND_LOG_SERVFAIL=yes
 UNBOUND_LOGFILE=/var/log/unbound.log
 UNBOUND_DNS_PRIMARY=8.8.8.8
+UNBOUND_DNS_PRIMARY_TLS_NAME=dns.google
 UNBOUND_DNS_SECONDARY=1.1.1.1
+UNBOUND_DNS_SECONDARY_TLS_NAME=cloudflare-dns.com
+```
+
+#### DNS-over-TLS Upstream Forwarding (by design, not a fallback)
+
+Unbound is deliberately configured to **forward all queries to upstream resolvers
+over DNS-over-TLS (TCP port 853)** instead of performing classic full recursion
+over UDP port 53. This is a permanent design decision, not a temporary
+workaround, for the following reasons:
+
+- **Hosting providers filter UDP/53.** Anti-DDoS systems (e.g. OVH's VAC)
+  can silently drop IPv4 UDP/53 traffic to/from non-provider hosts — typically
+  as DNS-amplification mitigation that discards inbound UDP packets with source
+  port 53. When this happens, full recursion and plain-UDP forwarding die while
+  everything else (TCP, ICMP, IPv6) keeps working, producing a confusing
+  failure mode: DNS breaks *gradually* over days as cached entries expire, and
+  domains whose nameservers speak IPv6 keep resolving while IPv4-only chains
+  time out. This exact incident occurred in production in July 2026 across all
+  servers of an OVH account (three different subnets) and broke every external
+  API integration (MailJet, DataForSEO, Cloudflare AI Gateway, etc.).
+  DNS-over-TLS runs on TCP/853 and is immune to UDP/53 filtering.
+- **Privacy and integrity.** Classic recursion sends every query in cleartext
+  where any on-path network can read or tamper with it. DoT encrypts the
+  channel and authenticates the upstream via its TLS certificate (the
+  `#dns.google` / `#cloudflare-dns.com` suffix in `forward-addr`). Unbound
+  still performs DNSSEC validation locally, so upstream answers are not
+  trusted blindly.
+- **Performance.** Unbound maintains persistent TLS connections and its local
+  cache works unchanged; anycast resolvers (1–2 ms from most datacenters)
+  usually answer faster than walking the delegation chain.
+
+The trade-off: upstream operators (Google/Cloudflare) see the query stream of
+uncached lookups. Encrypted queries to two known operators with published
+privacy policies is a better DSGVO posture than cleartext queries visible to
+every network on path. For more redundancy, Quad9 can be added as a third
+upstream (`9.9.9.9@853#dns.quad9.net`).
+
+**Do not enable `forward-first: yes`** — it would silently fall back to
+cleartext UDP recursion when the DoT upstreams are unreachable, which both
+undermines the encryption guarantee and reintroduces the UDP/53 fragility.
+
+**Firewall note:** hosts with a default-deny outbound policy (e.g. bastion
+hosts) must allow TCP/853 egress, or DNS resolution will hang with timeouts:
+
+```bash
+ufw allow out 853/tcp comment "DNS-over-TLS to upstream resolvers"
+```
+
+To verify DoT is active and the upstreams are reachable:
+
+```bash
+# Config must show forward-tls-upstream: yes
+grep -r "forward-tls" /etc/unbound/
+
+# TCP/853 must be reachable (times out if egress is blocked)
+timeout 4 bash -c "</dev/tcp/8.8.8.8/853" && echo "853 reachable"
+
+# Resolution through the local resolver
+dig @127.0.0.1 example.com +short
 ```
 
 #### Checking Unbound Status
