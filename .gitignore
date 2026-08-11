@@ -28,3 +28,5 @@ Thumbs.db
 
 # Claude Code files
 .claude/
+# Local todo/planning notes (not for the repo)
+/todo/
