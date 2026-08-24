@@ -121,8 +121,9 @@ server {
 
 # HTTPS configuration (uncomment when SSL certificate is available)
 # server {
-#     listen 443 ssl http2 default_server;
-#     listen [::]:443 ssl http2 default_server;
+#     listen 443 ssl default_server;
+#     listen [::]:443 ssl default_server;
+#     http2 on;
 #     server_name {{BASE_DOMAIN}};
 #
 #     root /var/www/html;
