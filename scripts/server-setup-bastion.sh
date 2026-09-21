@@ -1017,7 +1017,10 @@ echo ""
 
 echo "===== 5.1 Installing core bastion packages ====="
 # Core packages (always installed for bastion functionality)
+# The linux-image metapackage ensures unattended-upgrades also pulls kernels across
+# ABI bumps (some provider images ship a pinned kernel without it)
 wait_for_dpkg_lock; apt-get install -y fail2ban unattended-upgrades apt-listchanges \
+    "linux-image-$(dpkg --print-architecture)" \
     logwatch lm-sensors unbound apparmor apparmor-utils \
     tcpdump netcat-openbsd mailutils postfix \
     $( [ "$INSTALL_CLAMAV" = true ] && echo "clamav clamav-daemon" ) \
@@ -2771,9 +2774,9 @@ Unattended-Upgrade::Origins-Pattern {
     "origin=Debian,codename=\${distro_codename},label=Debian-Security";
 };
 
-// Automatically reboot if required (at 3 AM for bastions)
+// Automatically reboot if required (at 4 AM, see also 51unattended-upgrades-bastion)
 Unattended-Upgrade::Automatic-Reboot "true";
-Unattended-Upgrade::Automatic-Reboot-Time "03:00";
+Unattended-Upgrade::Automatic-Reboot-Time "04:00";
 
 // Send email to admin if there are problems
 Unattended-Upgrade::Mail "$LOGWATCH_EMAIL";
@@ -6076,7 +6079,9 @@ else
     cat > /etc/apt/apt.conf.d/51unattended-upgrades-bastion << EOF
 // Enhanced bastion host configuration for unattended upgrades
 Unattended-Upgrade::Automatic-Reboot "true";
-Unattended-Upgrade::Automatic-Reboot-WithUsers "false";
+// Reboot even with users logged in: on a bastion an idle SSH session would otherwise
+// postpone a kernel reboot indefinitely (users are warned at 20:00)
+Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
 Unattended-Upgrade::Automatic-Reboot-Time "04:00";
 
 // Warning system before reboot

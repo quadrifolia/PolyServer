@@ -981,7 +981,10 @@ if [ "$DOCKER_MODE" = "true" ]; then
 else
     # Full package list for production servers
     # Note: hddtemp removed from Debian 13, using lm-sensors only for hardware monitoring
-    apt-get install -y $CORE_PACKAGES $COMPONENT_PACKAGES $SECURITY_PACKAGES lm-sensors unbound
+    # The linux-image metapackage ensures unattended-upgrades also pulls kernels across
+    # ABI bumps (some provider images ship a pinned kernel without it)
+    apt-get install -y $CORE_PACKAGES $COMPONENT_PACKAGES $SECURITY_PACKAGES lm-sensors unbound \
+        "linux-image-$(dpkg --print-architecture)"
 fi
 
 # Display installed optional security components
@@ -1947,9 +1950,9 @@ Unattended-Upgrade::Origins-Pattern {
     "origin=Debian,codename=\${distro_codename},label=Debian-Security";
 };
 
-// Automatically reboot if required (at 2 AM)
+// Automatically reboot if required (at 4 AM, see also 51unattended-upgrades-server)
 Unattended-Upgrade::Automatic-Reboot "true";
-Unattended-Upgrade::Automatic-Reboot-Time "02:00";
+Unattended-Upgrade::Automatic-Reboot-Time "04:00";
 
 // Send email to admin if there are problems
 Unattended-Upgrade::Mail "${LOGWATCH_EMAIL:-root}";
@@ -6870,7 +6873,9 @@ echo "Configuring unattended reboot warning system..."
 cat > /etc/apt/apt.conf.d/51unattended-upgrades-server << 'EOF'
 // Enhanced server configuration for unattended upgrades
 Unattended-Upgrade::Automatic-Reboot "true";
-Unattended-Upgrade::Automatic-Reboot-WithUsers "false";
+// Reboot even with users logged in: on a headless server a stray SSH/tmux session
+// would otherwise postpone a kernel reboot indefinitely (users are warned at 20:00)
+Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
 Unattended-Upgrade::Automatic-Reboot-Time "04:00";
 
 // Warning system before reboot
