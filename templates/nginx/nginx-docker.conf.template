@@ -4,6 +4,9 @@
 user www-data;
 worker_processes {{NGINX_WORKERS}};
 pid /run/nginx.pid;
+# Old workers exit at the latest 5 min after a reload (long-lived connections
+# such as WebSockets would otherwise keep them, and their open files, forever)
+worker_shutdown_timeout 300s;
 include /etc/nginx/modules-enabled/*.conf;
 
 events {
@@ -82,7 +85,7 @@ http {
     # Proxy timeout settings
     proxy_connect_timeout 30s;
     proxy_send_timeout 30s;
-    proxy_read_timeout 30s;
+    proxy_read_timeout 300s;
 
     ##
     # Rate Limiting
