@@ -3242,6 +3242,9 @@ EOF
     git clone https://github.com/coreruleset/coreruleset.git /etc/nginx/modsec/owasp-crs
     cp /etc/nginx/modsec/owasp-crs/crs-setup.conf.example /etc/nginx/modsec/owasp-crs/crs-setup.conf
 
+    # ModSecurity log directory (rotated via /etc/logrotate.d/modsecurity)
+    install -d -o www-data -g adm -m 0750 /var/log/modsecurity
+
     # Create application-agnostic ModSecurity configuration
     cat > /etc/nginx/modsec/modsecurity.conf << EOF
 # ModSecurity configuration for PolyServer applications
@@ -3256,9 +3259,14 @@ SecRequestBodyNoFilesLimit 131072
 # SecRequestBodyInMemoryLimit deprecated in ModSecurity 3.0 - handled by web server
 
 # Buffer response bodies
+# application/json is not inspected: large API/GraphQL responses would cost
+# memory and CPU for little gain (CRS 95x leakage rules target HTML/text).
+# ProcessPartial: responses over the limit are inspected up to the limit and
+# then passed through in full instead of being cut off.
 SecResponseBodyAccess On
-SecResponseBodyMimeType text/plain text/html text/xml application/json
-SecResponseBodyLimit 1048576
+SecResponseBodyMimeType text/plain text/html text/xml
+SecResponseBodyLimit 16777216
+SecResponseBodyLimitAction ProcessPartial
 
 # -- Filesystem configuration ------------------------------------------------
 SecTmpDir /tmp/
@@ -3267,12 +3275,15 @@ SecDataDir /tmp/
 # -- Audit log configuration -------------------------------------------------
 SecAuditEngine RelevantOnly
 SecAuditLogRelevantStatus "^(?:5|4(?!04))"
-SecAuditLogParts ABIJDEFHZ
+# Part E (response body) omitted: keeps the audit log small and free of response data
+SecAuditLogParts ABIJDFHZ
 SecAuditLogType Serial
-SecAuditLog /var/log/nginx/modsec_audit.log
+# Own directory: libmodsecurity keeps its log files open across nginx reloads,
+# so these logs are rotated separately with copytruncate (/etc/logrotate.d/modsecurity)
+SecAuditLog /var/log/modsecurity/modsec_audit.log
 
 # -- Debug log configuration -------------------------------------------------
-SecDebugLog /var/log/nginx/modsec_debug.log
+SecDebugLog /var/log/modsecurity/modsec_debug.log
 SecDebugLogLevel 1
 
 # -- Application specific exceptions ----------------------------------------
@@ -4893,13 +4904,22 @@ EOF
     if [ "${INSTALL_NGINX,,}" = "true" ]; then
         echo "Configuring Netdata Nginx monitoring..."
 
+        # Internal localhost-only polling: keep it out of ModSecurity, otherwise
+        # CRS 920350 (Host header is an IP) logs every poll to the audit log.
+        # Only emitted when the ModSecurity module is configured.
+        MODSEC_OFF_LINE=""
+        if [ -f /etc/nginx/conf.d/modsecurity.conf ]; then
+            MODSEC_OFF_LINE="    modsecurity off;"
+        fi
+
         # Create Nginx stub_status endpoint for Netdata
-        cat > /etc/nginx/conf.d/netdata-stub-status.conf << 'EOF'
+        cat > /etc/nginx/conf.d/netdata-stub-status.conf << EOF
 # Netdata monitoring endpoint
 # This provides metrics for Netdata without exposing them publicly
 server {
     listen 127.0.0.1:8888;
     server_name localhost;
+${MODSEC_OFF_LINE}
 
     location /stub_status {
         stub_status on;
@@ -5204,37 +5224,38 @@ fi
 # ========= Configure comprehensive log rotation =========
 echo "===== 10.5 Setting up comprehensive log rotation ====="
 
-# Nginx log rotation (includes ModSecurity logs)
+# Nginx log rotation
+# Each log file may appear in only one block: a duplicate entry makes logrotate
+# skip the whole file. ModSecurity logs live in /var/log/modsecurity (see below).
 cat > /etc/logrotate.d/nginx << 'EOF'
 /var/log/nginx/*.log {
     daily
-    rotate 30
-    compress
-    delaycompress
+    rotate 14
     missingok
     notifempty
+    compress
+    delaycompress
+    su root adm
     create 0640 www-data adm
     sharedscripts
-    prerotate
-        if [ -d /etc/logrotate.d/httpd-prerotate ]; then \
-            run-parts /etc/logrotate.d/httpd-prerotate; \
-        fi \
-    endprerotate
     postrotate
+        [ -s /run/nginx.pid ] && kill -USR1 $(cat /run/nginx.pid)
         systemctl reload nginx > /dev/null 2>&1 || true
     endscript
 }
+EOF
 
-# ModSecurity audit logs (separate rotation for large files)
-/var/log/nginx/modsec_audit.log /var/log/nginx/modsec_debug.log {
+# ModSecurity log rotation
+# libmodsecurity does not reopen its logs on USR1 or reload, so copytruncate is used.
+cat > /etc/logrotate.d/modsecurity << 'EOF'
+/var/log/modsecurity/*.log {
     daily
     rotate 14
-    size 100M
-    compress
-    delaycompress
     missingok
     notifempty
-    create 0640 www-data adm
+    compress
+    delaycompress
+    su root adm
     copytruncate
 }
 EOF
