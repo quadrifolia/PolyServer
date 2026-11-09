@@ -4,9 +4,11 @@
 user www-data;
 worker_processes {{NGINX_WORKERS}};
 pid /run/nginx.pid;
-# No worker_shutdown_timeout: force-closing long-lived connections in old
-# workers after a reload crashes nchan (segfault, then every new worker aborts
-# on its locked memstore until a full restart).
+# Old workers exit at the latest 5 min after a reload (long-lived connections
+# such as WebSockets would otherwise keep them, and their open files, forever).
+# Don't combine with nchan (nginx-extras): force-closing its connections
+# segfaults and locks its memstore until a full restart.
+worker_shutdown_timeout 300s;
 include /etc/nginx/modules-enabled/*.conf;
 
 events {
