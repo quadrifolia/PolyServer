@@ -950,7 +950,10 @@ COMPONENT_PACKAGES=""
 [ "$INSTALL_GIT" = "true" ] && COMPONENT_PACKAGES="$COMPONENT_PACKAGES git"
 
 # Add web servers
-[ "$INSTALL_NGINX" = "true" ] && COMPONENT_PACKAGES="$COMPONENT_PACKAGES nginx-extras"
+# Plain nginx, not nginx-extras: extras loads ~20 dynamic modules (nchan, lua,
+# perl, ...) that nothing here uses. ModSecurity's module is installed in 10.2;
+# add other libnginx-mod-* packages explicitly if a site needs them.
+[ "$INSTALL_NGINX" = "true" ] && COMPONENT_PACKAGES="$COMPONENT_PACKAGES nginx"
 
 # Add PHP if requested (not needed for Docker-only setups)
 if [ "$INSTALL_PHP" = "true" ]; then
