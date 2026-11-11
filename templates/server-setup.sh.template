@@ -4703,10 +4703,6 @@ cat > /etc/chkrootkit/whitelist.conf << 'WHITELIST_EOF'
 # PostgreSQL shared memory segments (/dev/shm/PostgreSQL.TIMESTAMP — timestamp changes on restart)
 /dev/shm/PostgreSQL.
 
-# netdata's updater leaves its script in /tmp/netdata-updater-XXXX/, which
-# chkrootkit's Linux.Xor.DDoS heuristic flags (any executable script in /tmp)
-/tmp/netdata-updater-
-
 # fail2ban test fixture files (from Debian package)
 /usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest/.htpasswd
 /usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest/.htaccess
