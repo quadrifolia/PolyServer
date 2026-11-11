@@ -2899,6 +2899,7 @@ EOF
 !/var/log/journal
 !/var/log/atop
 !/var/log/nginx
+!/var/log/mysql
 !/var/log/aide
 !/var/log/auth.log
 !/var/log/syslog
