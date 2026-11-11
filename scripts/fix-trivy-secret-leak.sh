@@ -6,7 +6,8 @@
 # unencrypted SMTP, and (b) emailed Trivy's wide ASCII table, which is unreadable in
 # mail clients (especially mobile).
 #
-# This script replaces /etc/cron.daily/trivy-scan with a version that:
+# This script replaces /usr/local/sbin/trivy-scan (run by trivy-scan.timer; older
+# setups had it in /etc/cron.daily) with a version that:
 #   - emits a compact, mobile-friendly report (one line per finding, no wide tables),
 #   - reports vulnerabilities in full (no secret material), and
 #   - reports secret findings as METADATA ONLY (type/file/line) — the credential
@@ -20,11 +21,28 @@
 
 set -euo pipefail
 
-CRON_FILE="/etc/cron.daily/trivy-scan"
+CRON_FILE="/usr/local/sbin/trivy-scan"
+OLD_CRON_FILE="/etc/cron.daily/trivy-scan"
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "ERROR: must be run as root (try: sudo bash $0)" >&2
     exit 1
+fi
+
+# Older setups kept the script in /etc/cron.daily, where run-parts ran it in addition
+# to trivy-scan.timer (two scans and two mails a day). Move it out of cron.daily.
+if [ -f "$OLD_CRON_FILE" ]; then
+    if [ ! -f "$CRON_FILE" ]; then
+        cp -a "$OLD_CRON_FILE" "$CRON_FILE"
+    fi
+    mv -f "$OLD_CRON_FILE" "/root/trivy-scan.cron-daily.bak-$(date +%Y%m%d-%H%M%S)"
+    echo "Moved $OLD_CRON_FILE out of cron.daily (backup in /root)"
+fi
+# Point an existing timer service at the new location
+if [ -f /etc/systemd/system/trivy-scan.service ] && grep -q "^ExecStart=$OLD_CRON_FILE$" /etc/systemd/system/trivy-scan.service; then
+    sed -i "s|^ExecStart=$OLD_CRON_FILE$|ExecStart=$CRON_FILE|" /etc/systemd/system/trivy-scan.service
+    systemctl daemon-reload
+    echo "Updated trivy-scan.service ExecStart to $CRON_FILE"
 fi
 
 if [ ! -f "$CRON_FILE" ]; then

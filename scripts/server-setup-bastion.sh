@@ -2638,15 +2638,17 @@ systemctl is-active --quiet unbound && echo "✅ Unbound DNS: Active" || echo "�
 systemctl is-active --quiet lm-sensors && echo "✅ Hardware Sensors: Active" || echo "❌ Hardware Sensors: Inactive"
 
 # File Integrity Monitoring
-if systemctl list-unit-files | grep -q aide.timer; then
-    systemctl is-active --quiet aide.timer && echo "✅ AIDE Integrity: Active" || echo "❌ AIDE Integrity: Inactive"
+if systemctl list-unit-files | grep -q dailyaidecheck.timer; then
+    systemctl is-active --quiet dailyaidecheck.timer && echo "✅ AIDE Integrity: Active" || echo "❌ AIDE Integrity: Inactive"
 else
     echo "⚠️ AIDE Integrity: Not configured"
 fi
 
 # Log Monitoring
 if command -v logcheck >/dev/null 2>&1; then
-    if [ -f /etc/cron.daily/logcheck ]; then
+    if systemctl is-active --quiet logcheck.timer; then
+        echo "✅ Logcheck: Configured (logcheck.timer, daily)"
+    elif [ -f /etc/cron.daily/logcheck ]; then
         echo "✅ Logcheck: Configured (daily)"
     elif [ -f /etc/cron.d/logcheck ]; then
         echo "✅ Logcheck: Configured (cron.d)"
@@ -2952,49 +2954,84 @@ EOF
 # Create custom AIDE check script that handles mail properly
 cat > /usr/local/bin/aide-check << 'EOF'
 #!/bin/bash
-# Custom AIDE check script with proper mail handling for bastion host
+# Daily AIDE integrity check (PolyServer bastion, same logic as the server template)
+#
+# - Runs "aide --update": compares against the baseline AND writes a new database.
+# - Mails a short summary only when something changed; the full report stays in
+#   $AIDE_LOG and is not sent by mail.
+# - Then promotes the new database, so each change is reported exactly once
+#   instead of piling up in every following report. If the alert mail cannot be
+#   handed to the mail system, the baseline is NOT promoted and the changes are
+#   reported again on the next run.
+# - The previous 30 databases are kept in /var/lib/aide/aide.db.YYYYMMDD, and the
+#   first baseline is kept for good as /var/lib/aide/aide.db.known-good.
+# - AIDE exit codes: 0 = no changes, 1-7 = differences (bitmask), >= 8 = error.
 
-# Log file for AIDE output
+SUBJECT_PREFIX="BASTION AIDE"
+AIDE_CONF="/etc/aide/aide.conf"
 AIDE_LOG="/var/log/aide/aide-check.log"
+DB_DIR="/var/lib/aide"
+MAX_LINES=200
+HOST=$(hostname)
+
 mkdir -p /var/log/aide
+[ -f "$AIDE_LOG" ] && mv -f "$AIDE_LOG" "${AIDE_LOG}.1"
 
-# Run AIDE check and capture output
-echo "AIDE integrity check started at $(date)" > $AIDE_LOG
-echo "=====================================" >> $AIDE_LOG
+echo "AIDE integrity check started at $(date)" > "$AIDE_LOG"
+aide --config="$AIDE_CONF" --update >> "$AIDE_LOG" 2>&1
+RC=$?
+echo "AIDE check finished at $(date) (exit code $RC)" >> "$AIDE_LOG"
 
-# Run AIDE check with explicit config file
-# Debian stores AIDE config at /etc/aide/aide.conf
-if aide --config=/etc/aide/aide.conf --check 2>&1 | tee -a $AIDE_LOG; then
-    # AIDE completed successfully
-    echo "AIDE check completed at $(date)" >> $AIDE_LOG
-
-    # Check if there were any changes detected
-    if grep -q "found differences" $AIDE_LOG || grep -q "File.*changed" $AIDE_LOG; then
-        # Changes detected - send alert email
-        echo "" >> $AIDE_LOG
-        echo "NOTE: Database will be updated after you review these changes." >> $AIDE_LOG
-        echo "To update the database and suppress these warnings:" >> $AIDE_LOG
-        echo "  sudo /usr/local/bin/aide-update" >> $AIDE_LOG
-        echo "" >> $AIDE_LOG
-
-        cat $AIDE_LOG | mail -s "🚨 BASTION AIDE ALERT: File integrity changes detected on $(hostname)" root
-    else
-        # No changes - log success
-        echo "No integrity violations detected" >> $AIDE_LOG
-    fi
-else
-    # AIDE failed
-    echo "AIDE check failed at $(date)" >> $AIDE_LOG
-    echo "AIDE integrity check failed on bastion host $(hostname)" | mail -s "🚨 BASTION AIDE ERROR: Check failed on $(hostname)" root
+if [ "$RC" -ge 8 ]; then
+    {
+        echo "AIDE did not complete on $HOST (exit code $RC)."
+        echo "The baseline was not changed. Last lines of $AIDE_LOG:"
+        echo ""
+        tail -n 30 "$AIDE_LOG"
+    } | mail -s "🚨 ${SUBJECT_PREFIX} ERROR: Check failed on $HOST" root
     exit 1
 fi
 
-# Rotate old logs
-find /var/log/aide -name "aide-check.log.*" -mtime +30 -delete
-if [ -f $AIDE_LOG ] && [ $(stat -c%s $AIDE_LOG) -gt 10485760 ]; then
-    # Rotate if log is larger than 10MB
-    mv $AIDE_LOG ${AIDE_LOG}.$(date +%Y%m%d)
-    gzip ${AIDE_LOG}.$(date +%Y%m%d)
+if [ "$RC" -ge 1 ]; then
+    # Entry lines from the Added/Removed/Changed sections (not the detailed hash dump)
+    ENTRIES=$(awk '/^Detailed information about changes:/ {exit}
+                   /^(Added|Removed|Changed) entries:$/ {sec=1; next}
+                   sec && /: \// {print}' "$AIDE_LOG")
+    KERNEL_RE=': /usr/(lib/modules/|src/linux-headers-)'
+    MODULES=$(printf '%s\n' "$ENTRIES" | grep -cE "$KERNEL_RE")
+    OTHER=$(printf '%s\n' "$ENTRIES" | grep -vE "$KERNEL_RE" | grep -v '^$')
+    OTHER_COUNT=$(printf '%s\n' "$OTHER" | grep -c .)
+    {
+        echo "AIDE detected file changes on $HOST since the last check."
+        echo "The new state has been accepted as baseline, so these changes are reported only once."
+        echo "Full report: $AIDE_LOG"
+        echo ""
+        sed -n '/^Summary:/,/Changed entries:[[:space:]]*[0-9]/p' "$AIDE_LOG"
+        echo ""
+        echo "Kernel module and header entries (/usr/lib/modules, /usr/src/linux-headers-*): $MODULES"
+        echo ""
+        echo "Changed paths (first $MAX_LINES of $OTHER_COUNT):"
+        head -n "$MAX_LINES" <<< "$OTHER"
+        if [ "$OTHER_COUNT" -gt "$MAX_LINES" ]; then
+            echo "... $((OTHER_COUNT - MAX_LINES)) more, see $AIDE_LOG"
+        fi
+    } | mail -s "🚨 ${SUBJECT_PREFIX} ALERT: File integrity changes detected on $HOST" root
+    if [ "${PIPESTATUS[1]}" -ne 0 ]; then
+        echo "Alert mail could not be sent; baseline NOT updated, changes will be reported again" >> "$AIDE_LOG"
+        exit 1
+    fi
+else
+    echo "No integrity violations detected" >> "$AIDE_LOG"
+fi
+
+# Accept the new state as baseline (keep the previous 30 databases and the first one for good)
+if [ -f "$DB_DIR/aide.db.new" ]; then
+    if [ -f "$DB_DIR/aide.db" ]; then
+        [ -f "$DB_DIR/aide.db.known-good" ] || cp -a "$DB_DIR/aide.db" "$DB_DIR/aide.db.known-good"
+        cp -a "$DB_DIR/aide.db" "$DB_DIR/aide.db.$(date +%Y%m%d)"
+    fi
+    mv -f "$DB_DIR/aide.db.new" "$DB_DIR/aide.db"
+    ls -1t "$DB_DIR"/aide.db.2[0-9]* 2>/dev/null | tail -n +31 | xargs -r rm -f
 fi
 EOF
 
@@ -3084,68 +3121,65 @@ User=root
 Group=root
 
 # Resource limits to prevent AIDE from overwhelming bastion system
+# (256M risks an OOM kill, which leaves no result at all)
 CPUQuota=20%
-MemoryMax=256M
+MemoryMax=2G
 Nice=19
 IOSchedulingClass=3
 
-# Proper logging
+# Proper logging (aide-check writes the report to /var/log/aide, not the journal)
 StandardOutput=journal
 StandardError=journal
 EOF
 
-systemctl daemon-reload
-
-# Create AIDE systemd timer for daily checks
-cat > /etc/systemd/system/aide.timer << EOF
-[Unit]
-Description=Run AIDE integrity check daily
-Requires=aide.service
-
+# Run at 01:00 so the check finishes before the 04:00 unattended-upgrade reboot.
+# The empty OnCalendar= clears the stock schedule instead of adding a second one.
+mkdir -p /etc/systemd/system/dailyaidecheck.timer.d
+cat > /etc/systemd/system/dailyaidecheck.timer.d/schedule.conf << 'EOF'
 [Timer]
-OnCalendar=daily
-RandomizedDelaySec=1h
-Persistent=true
-
-[Install]
-WantedBy=timers.target
+OnCalendar=
+OnCalendar=*-*-* 01:00:00
+RandomizedDelaySec=0
 EOF
 
-# Create AIDE service unit that uses our custom script
-cat > /etc/systemd/system/aide.service << EOF
-[Unit]
-Description=AIDE integrity check
-After=local-fs.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/aide-check
-User=root
-Group=root
-
-# Resource limits to prevent AIDE from overwhelming bastion system
-CPUQuota=20%
-MemoryMax=256M
-Nice=19
-IOSchedulingClass=3
-
-# Proper logging
-StandardOutput=journal
-StandardError=journal
-
-# Security isolation
-NoNewPrivileges=true
-EOF
+# Earlier versions also created aide.timer/aide.service, which ran the same check a
+# second time each day (and at boot via Requires=). dailyaidecheck.timer is enough.
+systemctl disable --now aide.timer 2>/dev/null || true
+rm -f /etc/systemd/system/aide.timer /etc/systemd/system/aide.service
 
 systemctl daemon-reload
 
-# Configure AIDE to exclude/handle growing log files
-echo "Configuring AIDE exclusions for growing logs..."
+# AIDE exclusions: logs, volatile, cache and per-user shell data.
+# None of this is integrity-relevant, and it buried the real changes in the report.
+# /etc, /usr, binaries and authorized_keys stay monitored.
+echo "Configuring AIDE exclusions..."
 cat > /etc/aide/aide.conf.d/99-bastion-exclusions << 'EOF'
-# Bastion-specific AIDE exclusions
-# Exclude entire /var/log directory - logs change constantly by design
-# Monitoring log files with AIDE creates excessive noise without security value
+# Bastion-specific AIDE exclusions (PolyServer)
+
+# Logs change constantly by design (log tampering is covered by auditd)
 !/var/log
+
+# Runtime state, temp and caches
+!/run
+!/tmp
+!/var/tmp
+!/var/cache
+!/var/lib/apt/lists
+!/var/lib/aide
+!/var/lib/netdata
+!/var/backups
+!/var/spool/postfix/(private|public|dev)
+
+# Network and removable mounts
+!/mnt
+!/media
+
+# Shell history and per-user shell caches (oh-my-zsh code itself stays monitored)
+!/root/\.oh-my-zsh/(cache|log)
+!/root/\.zcompdump.*
+!/root/\.(bash|zsh)_history
+!/home/[^/]+/\.(bash|zsh)_history
+!/root/\.ssh/environment-.*
 EOF
 
 # Update AIDE configuration
@@ -3160,15 +3194,16 @@ echo "Initializing AIDE database for bastion host - this will take some time..."
 # Run aideinit in a subshell to prevent environment pollution
 (nice -n 19 aideinit)
 
-# Enable and start AIDE timer
-systemctl enable aide.timer
-systemctl start aide.timer
+# Enable and start the AIDE timer (Debian's dailyaidecheck.timer, 01:00)
+systemctl enable dailyaidecheck.timer 2>/dev/null || true
+systemctl restart dailyaidecheck.timer 2>/dev/null || true
 
 # Clear any environment variables that might interfere with heredocs
 unset EOF >/dev/null 2>&1 || true
 
 echo "✅ AIDE configured with systemd timer and proper mail functionality for bastion host"
-echo "   • Daily integrity checks enabled via aide.timer"
+echo "   • Daily integrity checks at 01:00 via dailyaidecheck.timer"
+echo "   • Each change is mailed once (short summary), then accepted as the new baseline"
 echo "   • Custom mail alerts for detected changes"
 echo "   • Resource limits to prevent system impact"
 
@@ -3864,124 +3899,168 @@ if [ "$INSTALL_RKHUNTER" = true ]; then
 /usr/lib/ruby/vendor_ruby/rubygems/ssl_certs/.document
 /usr/lib/ruby/vendor_ruby/rubygems/vendor/timeout/.document
 /usr/lib/ruby/vendor_ruby/rubygems/vendor/uri/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/resolv/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/optparse/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/tsort/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/molinillo/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/securerandom/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/net-protocol/.document
+/usr/lib/ruby/vendor_ruby/rubygems/vendor/net-http/.document
 
 # fail2ban test fixture files (from Debian package)
-/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/digest/.htpasswd
-/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/noentry/.htaccess
+/usr/lib/python3/dist-packages/fail2ban/tests/files/config/apache-auth/
 
-# Legitimate packet sniffers (IDS/monitoring tools)
-# Format: process_name:interface_pattern
+# Legitimate packet sniffers (IDS/monitoring tools) — pipe-separated basenames
 WHITELIST_SNIFFERS="suricata|systemd-networkd|dhclient|dhcpd|dhcpcd|wpa_supplicant|NetworkManager"
 WHITELIST_EOF
 
-    # Create chkrootkit scan script with proper log handling and whitelist filtering
+    # Disable Debian's own daily chkrootkit run. It mails its unfiltered output, and it
+    # used the same /var/log/chkrootkit/log.{expected,today} files as chkrootkit-scan,
+    # so the two jobs overwrote each other's baseline and one of them alerted every day.
+    for CHKRK_CONF in /etc/chkrootkit/chkrootkit.conf /etc/chkrootkit.conf; do
+        if [ -f "$CHKRK_CONF" ]; then
+            if grep -q '^RUN_DAILY=' "$CHKRK_CONF"; then
+                sed -i 's/^RUN_DAILY=.*/RUN_DAILY="false"/' "$CHKRK_CONF"
+            else
+                echo 'RUN_DAILY="false"' >> "$CHKRK_CONF"
+            fi
+        fi
+    done
+    for CHKRK_TIMER in chkrootkit.timer chkrootkit-daily.timer; do
+        systemctl disable --now "$CHKRK_TIMER" 2>/dev/null || true
+    done
+
+    # Create chkrootkit scan script (same logic as templates/server-setup.sh.template).
+    # The ifpromisc filter keeps a PACKET SNIFFER line whenever ANY process on it is
+    # not whitelisted, so an unknown sniffer next to suricata is still reported.
     cat > /etc/cron.daily/chkrootkit-scan << 'EOF'
 #!/bin/bash
 # Run a daily chkrootkit scan with intelligent whitelist filtering
 
-# Log file
 LOGFILE="/var/log/chkrootkit/daily_scan.log"
-EXPECTED_LOG="/var/log/chkrootkit/log.expected"
-TODAY_LOG="/var/log/chkrootkit/log.today"
-RAW_LOG="/var/log/chkrootkit/log.raw"
+# Own state files, separate from Debian's /var/log/chkrootkit/log.{expected,today}
+STATE_DIR="/var/lib/polyserver/chkrootkit"
+EXPECTED_LOG="$STATE_DIR/expected.log"
+TODAY_LOG="$STATE_DIR/today.log"
+RAW_LOG="$STATE_DIR/raw.log"
 WHITELIST_CONF="/etc/chkrootkit/whitelist.conf"
 
-# Create log directory if it doesn't exist
-mkdir -p /var/log/chkrootkit
+mkdir -p /var/log/chkrootkit "$STATE_DIR"
+chmod 700 "$STATE_DIR"
+echo "chkrootkit daily scan started at $(date)" > "$LOGFILE"
 
-# Clear previous log
-echo "chkrootkit daily scan started at \$(date)" > \$LOGFILE
+# Run the scan (quiet mode — only warnings)
+chkrootkit -q > "$RAW_LOG" 2>&1
 
-# Run the scan (raw output)
-chkrootkit -q > \$RAW_LOG 2>&1
+if [ -f "$WHITELIST_CONF" ]; then
+    WHITELIST_SNIFFERS=$(grep '^WHITELIST_SNIFFERS=' "$WHITELIST_CONF" | sed 's/^WHITELIST_SNIFFERS="//;s/"$//')
+    cp "$RAW_LOG" "$TODAY_LOG"
 
-# Filter out whitelisted entries
-if [ -f "\$WHITELIST_CONF" ]; then
-    # Extract WHITELIST_SNIFFERS variable from the conf file without sourcing it
-    # (sourcing would try to execute the file paths as shell commands → Permission denied)
-    WHITELIST_SNIFFERS=\$(grep '^WHITELIST_SNIFFERS=' "\$WHITELIST_CONF" | cut -d'"' -f2)
+    # Strip process PIDs before filtering and comparison; a suricata restart
+    # (new PID) must not trigger a false diff alert.
+    sed -i 's/\[[0-9]\{1,7\}\]//g' "$TODAY_LOG"
 
-    # Start with raw output
-    cp "\$RAW_LOG" "\$TODAY_LOG"
-
-    # Filter out whitelisted file paths (suspicious files warnings)
-    while IFS= read -r line; do
-        # Skip comments and empty lines
-        [[ "\$line" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "\$line" ]] && continue
-
-        # Check if line is a whitelist entry (starts with /)
-        if [[ "\$line" =~ ^/ ]]; then
-            # Escape special regex characters in the path
-            escaped_path=\$(echo "\$line" | sed 's/[]\/$*.^[]/\\\\&/g')
-            # Remove lines containing this path from the output
-            sed -i "/\${escaped_path}/d" "\$TODAY_LOG"
+    # Filter whitelisted file paths — use | delimiter so / in paths needs no escaping
+    while IFS= read -r wline; do
+        [[ "$wline" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "$wline" ]] && continue
+        [[ "$wline" =~ ^WHITELIST_SNIFFERS= ]] && continue
+        if [[ "$wline" =~ ^/ ]]; then
+            escaped=$(printf '%s\n' "$wline" | sed 's/[]\$*.^[]/\\&/g')
+            sed -i "\\|${escaped}|d" "$TODAY_LOG"
         fi
-    done < "\$WHITELIST_CONF"
+    done < "$WHITELIST_CONF"
 
-    # Filter out whitelisted packet sniffers
-    if [ -n "\$WHITELIST_SNIFFERS" ]; then
-        # Remove packet sniffer warnings for whitelisted processes
-        # This filters lines like: "eno1np0: PACKET SNIFFER(/usr/bin/suricata[208664], ...)"
-        sed -i -E "/PACKET SNIFFER.*(\${WHITELIST_SNIFFERS})/d" "\$TODAY_LOG"
+    # Drop "suspicious file" hits that chkrootkit itself attributes to a Debian
+    # package (rubygems .document, fail2ban test fixtures, ...). Package files are
+    # covered by dpkg --verify / rkhunter; INFECTED results are not affected.
+    sed -i '/\[From Debian package: /d' "$TODAY_LOG"
+
+    # Filter ifpromisc section:
+    #   - PACKET SNIFFER lines where every process is a known-good tool are removed.
+    #   - "not promisc" lines are always safe and removed.
+    #   - The WARNING header is dropped if no suspicious lines remain.
+    if [ -n "$WHITELIST_SNIFFERS" ]; then
+        awk -v known="$WHITELIST_SNIFFERS" '
+        /^WARNING: Output from ifpromisc:/ {
+            in_promisc=1; promisc_hdr=$0; promisc_body=""; next
+        }
+        in_promisc && /^WARNING:/ {
+            in_promisc=0
+            if (promisc_body != "") { print promisc_hdr; printf "%s", promisc_body }
+            print; next
+        }
+        in_promisc && /PACKET SNIFFER/ {
+            line=$0
+            gsub(/[^ ,(]*\//, "", line)
+            n=split(known, kp, "|")
+            for (i=1; i<=n; i++) gsub(kp[i] "[, ]*", "", line)
+            if (line !~ /PACKET SNIFFER\([[:space:]]*\)/) promisc_body=promisc_body $0 "\n"
+            next
+        }
+        in_promisc { next }
+        { print }
+        END { if (in_promisc && promisc_body != "") { print promisc_hdr; printf "%s", promisc_body } }
+        ' "$TODAY_LOG" > "${TODAY_LOG}.tmp" && mv "${TODAY_LOG}.tmp" "$TODAY_LOG"
     fi
 
-    echo "Whitelist filtering applied" >> \$LOGFILE
+    # Drop WARNING headers whose entire section was filtered away
+    awk '
+    /^WARNING:/ {
+        if (warnhdr != "" && section ~ /[^[:space:]]/) { print warnhdr; printf "%s", section }
+        warnhdr=$0; section=""; next
+    }
+    warnhdr != "" { section=section $0 "\n"; next }
+    { print }
+    END { if (warnhdr != "" && section ~ /[^[:space:]]/) { print warnhdr; printf "%s", section } }
+    ' "$TODAY_LOG" > "${TODAY_LOG}.tmp" && mv "${TODAY_LOG}.tmp" "$TODAY_LOG"
+
+    echo "Whitelist filtering applied" >> "$LOGFILE"
 else
-    # No whitelist - use raw output
-    cp "\$RAW_LOG" "\$TODAY_LOG"
-    echo "No whitelist configuration found - using raw output" >> \$LOGFILE
+    cp "$RAW_LOG" "$TODAY_LOG"
+    echo "No whitelist configuration found - using raw output" >> "$LOGFILE"
 fi
 
-# Add completion time
-echo "chkrootkit daily scan completed at \$(date)" >> \$LOGFILE
+echo "chkrootkit daily scan completed at $(date)" >> "$LOGFILE"
 
-# Create expected log file if it doesn't exist (first run)
-if [ ! -f "\$EXPECTED_LOG" ]; then
-    echo "Creating initial expected output file for chkrootkit..."
-    cp "\$TODAY_LOG" "\$EXPECTED_LOG"
-    echo "Initial chkrootkit expected output created at \$(date)" >> \$LOGFILE
+# First run: establish filtered output as the clean baseline
+if [ ! -f "$EXPECTED_LOG" ]; then
+    cp "$TODAY_LOG" "$EXPECTED_LOG"
+    echo "Initial chkrootkit expected output created" >> "$LOGFILE"
+    exit 0
 fi
 
-# Check for differences from expected output
-# Normalize PIDs before comparing so that a process restart (new PID) doesn't
-# trigger a false alert — only actual new processes or interfaces will differ.
-sed 's/\[[0-9]*\]//g' "\$EXPECTED_LOG" > /tmp/chkrootkit-expected-norm.txt
-sed 's/\[[0-9]*\]//g' "\$TODAY_LOG"    > /tmp/chkrootkit-today-norm.txt
-if ! diff -q /tmp/chkrootkit-expected-norm.txt /tmp/chkrootkit-today-norm.txt >/dev/null 2>&1; then
-    # There are differences - send email alert
-    ADMIN_EMAIL="${LOGWATCH_EMAIL:-root}"
-    
-    # Create diff report
-    echo "chkrootkit output differs from expected baseline" > /tmp/chkrootkit-alert.txt
-    echo "Scan date: \$(date)" >> /tmp/chkrootkit-alert.txt
-    echo "" >> /tmp/chkrootkit-alert.txt
-    echo "=== TODAY'S OUTPUT ===" >> /tmp/chkrootkit-alert.txt
-    cat "\$TODAY_LOG" >> /tmp/chkrootkit-alert.txt
-    echo "" >> /tmp/chkrootkit-alert.txt
-    echo "=== EXPECTED OUTPUT ===" >> /tmp/chkrootkit-alert.txt
-    cat "\$EXPECTED_LOG" >> /tmp/chkrootkit-alert.txt
-    echo "" >> /tmp/chkrootkit-alert.txt
-    echo "=== DIFFERENCES (PIDs normalized) ===" >> /tmp/chkrootkit-alert.txt
-    diff /tmp/chkrootkit-expected-norm.txt /tmp/chkrootkit-today-norm.txt >> /tmp/chkrootkit-alert.txt
-    
-    # Send email alert
-    cat /tmp/chkrootkit-alert.txt | mail -s "⚠️ CHKROOTKIT ALERT: Output changed on \$(hostname)" "\$ADMIN_EMAIL"
-    
-    # Log the alert
-    echo "chkrootkit output changed - alert sent to \$ADMIN_EMAIL" >> \$LOGFILE
-    
-    # Clean up
-    rm -f /tmp/chkrootkit-alert.txt
+# Alert on any deviation from baseline (PIDs already stripped — only real changes trigger this)
+if ! diff -q "$EXPECTED_LOG" "$TODAY_LOG" >/dev/null 2>&1; then
+    ADMIN_EMAIL=$(cat /etc/polyserver/alert-email 2>/dev/null)
+    [ -z "$ADMIN_EMAIL" ] && ADMIN_EMAIL="root"
+    {
+        echo "chkrootkit output differs from expected baseline"
+        echo "Scan date: $(date)"
+        echo "Today's output becomes the new baseline, so this change is reported once."
+        echo "Previous baseline: ${EXPECTED_LOG}.prev"
+        echo ""
+        echo "=== DIFFERENCES ==="
+        diff "$EXPECTED_LOG" "$TODAY_LOG" || true
+        echo ""
+        echo "=== TODAY'S FILTERED OUTPUT ==="
+        cat "$TODAY_LOG"
+    } | mail -s "⚠️ CHKROOTKIT ALERT: Output changed on $(hostname)" "$ADMIN_EMAIL" && {
+        # Accept the new state only after the mail went out
+        cp -f "$EXPECTED_LOG" "${EXPECTED_LOG}.prev"
+        cp -f "$TODAY_LOG" "$EXPECTED_LOG"
+    }
+    echo "chkrootkit output changed - alert sent" >> "$LOGFILE"
 else
-    echo "chkrootkit output matches expected baseline" >> \$LOGFILE
+    echo "chkrootkit output matches expected baseline" >> "$LOGFILE"
 fi
 
-# Check for INFECTED results specifically
-if grep -q "INFECTED" "\$TODAY_LOG"; then
-    ADMIN_EMAIL="${LOGWATCH_EMAIL:-root}"
-    cat "\$TODAY_LOG" | mail -s "⚠️ ROOTKIT WARNING: Possible rootkit found on \$(hostname)" "\$ADMIN_EMAIL"
-    echo "INFECTED results found - alert sent to \$ADMIN_EMAIL" >> \$LOGFILE
+# Separate immediate alert for any INFECTED result
+if grep -q "INFECTED" "$TODAY_LOG"; then
+    ADMIN_EMAIL=$(cat /etc/polyserver/alert-email 2>/dev/null)
+    [ -z "$ADMIN_EMAIL" ] && ADMIN_EMAIL="root"
+    mail -s "⚠️ ROOTKIT WARNING: Possible rootkit found on $(hostname)" "$ADMIN_EMAIL" < "$TODAY_LOG"
+    echo "INFECTED results found - alert sent" >> "$LOGFILE"
 fi
 EOF
 
@@ -3998,15 +4077,14 @@ EOF
     echo "✅ Whitelist created: /etc/chkrootkit/whitelist.conf"
     echo "   - Filters known false positives (Ruby gems, fail2ban test files)"
     echo "   - Whitelists legitimate packet sniffers (Suricata, systemd-networkd)"
-    echo "   - Raw scan output saved to: /var/log/chkrootkit/log.raw"
-    echo "   - Filtered output saved to: /var/log/chkrootkit/log.today"
+    echo "   - Raw scan output saved to: /var/lib/polyserver/chkrootkit/raw.log"
+    echo "   - Filtered output saved to: /var/lib/polyserver/chkrootkit/today.log"
     echo ""
     echo "To add custom whitelist entries, edit: /etc/chkrootkit/whitelist.conf"
     echo "  - File paths: Add full path on a new line (e.g., /path/to/file)"
     echo "  - Packet sniffers: Add to WHITELIST_SNIFFERS variable (regex pattern)"
     echo ""
-    echo "After 24-48 hours of operation, update the baseline to your system's normal state:"
-    echo "  sudo cp -a -f /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected"
+    echo "Each change is mailed once and then accepted as the new baseline automatically."
     echo ""
     echo "Note: The whitelist already filters Suricata and other legitimate security tools."
     echo ""
@@ -4094,8 +4172,26 @@ echo "===== 10.2.1 Setting logcheck to run daily only (reducing email frequency)
 rm -f /etc/cron.hourly/logcheck 2>/dev/null || true
 rm -f /etc/cron.d/logcheck 2>/dev/null || true
 
-# Create a proper daily logcheck cron job that runs as logcheck user
-cat > /etc/cron.daily/logcheck << 'EOF'
+# Debian 13 starts logcheck from logcheck.timer (hourly). Change the schedule on the
+# timer itself; a separate /etc/cron.daily/logcheck would only add a second run.
+# The drop-in clears every stock trigger first, then sets a single daily run.
+if systemctl cat logcheck.timer >/dev/null 2>&1; then
+    mkdir -p /etc/systemd/system/logcheck.timer.d
+    cat > /etc/systemd/system/logcheck.timer.d/daily.conf << 'EOF'
+[Timer]
+OnCalendar=
+OnBootSec=
+OnStartupSec=
+OnUnitActiveSec=
+OnCalendar=*-*-* 06:15:00
+Persistent=true
+EOF
+    systemctl daemon-reload
+    systemctl enable --now logcheck.timer 2>/dev/null || true
+    rm -f /etc/cron.daily/logcheck 2>/dev/null || true
+else
+    # No systemd timer shipped: fall back to one daily cron run as the logcheck user
+    cat > /etc/cron.daily/logcheck << 'EOF'
 #!/bin/bash
 # Daily logcheck cron job - runs as logcheck user to avoid security warnings
 if command -v sudo >/dev/null 2>&1; then
@@ -4104,13 +4200,11 @@ else
     su -s /bin/bash -c "/usr/sbin/logcheck" logcheck
 fi
 EOF
-chmod 755 /etc/cron.daily/logcheck
+    chmod 755 /etc/cron.daily/logcheck
+fi
 
-echo "✅ Logcheck configured to run daily only (instead of hourly)"
-echo "   • To change frequency: edit /etc/logcheck/logcheck.conf"
-echo "   • CRON_HOURLY_RUN=\"false\" = hourly disabled"
-echo "   • CRON_DAILY_RUN=\"true\" = daily enabled"
-echo "   • To re-enable hourly: set CRON_HOURLY_RUN=\"true\" and copy script to /etc/cron.hourly/"
+echo "✅ Logcheck configured to run once a day (06:15) instead of hourly"
+echo "   • Schedule: /etc/systemd/system/logcheck.timer.d/daily.conf"
 
 # Ensure logcheck directories exist with proper permissions
 mkdir -p /var/lock/logcheck
@@ -4126,29 +4220,22 @@ echo "Configuring logcheck logfiles..."
 # Remove any existing logfiles configuration that might conflict
 rm -f /etc/logcheck/logcheck.logfiles.d/* 2>/dev/null || true
 
-# Create clean logfiles configuration
+# Create clean logfiles configuration.
+# Only syslog + auth.log: Debian's rsyslog writes everything except auth to
+# /var/log/syslog, so kern.log, mail.log, daemon.log, user.log and messages would
+# only repeat lines logcheck has already seen.
 cat > /etc/logcheck/logcheck.logfiles << EOF
-/var/log/auth.log
 /var/log/syslog
-/var/log/kern.log
-/var/log/mail.log
-/var/log/daemon.log
-/var/log/user.log
-/var/log/messages
+/var/log/auth.log
 EOF
 
 # Ensure all configured log files exist
 touch /var/log/auth.log
 touch /var/log/syslog
-touch /var/log/kern.log
-touch /var/log/mail.log
-touch /var/log/daemon.log
-touch /var/log/user.log
-touch /var/log/messages
 
 # Set proper permissions for log files
-chmod 640 /var/log/auth.log /var/log/syslog /var/log/kern.log /var/log/mail.log /var/log/daemon.log /var/log/user.log /var/log/messages
-chown root:adm /var/log/auth.log /var/log/syslog /var/log/kern.log /var/log/mail.log /var/log/daemon.log /var/log/user.log /var/log/messages
+chmod 640 /var/log/auth.log /var/log/syslog
+chown root:adm /var/log/auth.log /var/log/syslog
 
 # Test logcheck configuration
 echo "Testing logcheck configuration..."
@@ -4168,7 +4255,7 @@ usermod -aG adm logcheck 2>/dev/null || true
 
 # Verify all log files exist and are readable by logcheck user
 echo "Verifying log file permissions for logcheck user:"
-for logfile in /var/log/auth.log /var/log/syslog /var/log/kern.log /var/log/mail.log /var/log/daemon.log /var/log/user.log /var/log/messages; do
+for logfile in /var/log/auth.log /var/log/syslog; do
     if [ -f "$logfile" ]; then
         if sudo -u logcheck test -r "$logfile"; then
             echo "✅ $logfile is readable by logcheck user"
@@ -5051,7 +5138,7 @@ cat > /etc/logrotate.d/rsyslog << 'EOF'
     delaycompress
     compress
     postrotate
-        invoke-rc.d rsyslog rotate > /dev/null 2>&1 || true
+        /usr/lib/rsyslog/rsyslog-rotate
     endscript
 }
 EOF
@@ -6924,15 +7011,15 @@ if [ "$SSH_PORT" != "22" ]; then
     echo "   4. Set up centralized logging if required"
     echo "   5. Review and customize monitoring alerts"
     echo "   6. Document connection procedures for authorized users"
-    echo "   7. ⚠️  IMPORTANT: After 24-48 hours, update chkrootkit baseline:"
+    echo "   7. chkrootkit: each change is mailed once, then accepted as the new baseline"
 else
     echo "   2. Configure any internal network access rules as needed"
     echo "   3. Set up centralized logging if required"
     echo "   4. Review and customize monitoring alerts"
     echo "   5. Document connection procedures for authorized users"
-    echo "   6. ⚠️  IMPORTANT: After 24-48 hours, update chkrootkit baseline:"
+    echo "   6. chkrootkit: each change is mailed once, then accepted as the new baseline"
 fi
-echo "      sudo cp -a -f /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected"
+echo "      (baseline: /var/lib/polyserver/chkrootkit/expected.log)"
 if [[ "$SMTP_CONFIGURE" =~ ^[Yy]$ ]]; then
     if [ "$SSH_PORT" != "22" ]; then
         echo "   8. Check your email inbox for the setup completion report"

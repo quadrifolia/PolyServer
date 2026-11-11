@@ -27,6 +27,7 @@ command_exists() {
 }
 
 # Function to check if a file exists and is not older than days
+# shellcheck disable=SC2329  # called indirectly via check_requirement's eval
 check_file_recent() {
     local file="$1"
     local days="$2"
