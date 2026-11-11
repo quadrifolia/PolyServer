@@ -132,8 +132,11 @@ cron_weekly_hour="3" # Hour in 24h format
 cron_daily_hour="3"  # Hour in 24h format
 EOF
 
-# Create maldet daily scan script with resource-aware execution
-cat > /etc/cron.daily/maldet-scan << 'EOF'
+# Create maldet daily scan script with resource-aware execution.
+# Lives in /usr/local/sbin and is run ONLY by maldet-scan.timer; a copy in
+# /etc/cron.daily would make the scan (and its alert mail) run twice a day.
+rm -f /etc/cron.daily/maldet-scan
+cat > /usr/local/sbin/maldet-scan << 'EOF'
 #!/bin/bash
 # Daily maldet scan script with resource management
 
@@ -181,7 +184,11 @@ fi
 EOF
 
 # Make scan script executable
-chmod 755 /etc/cron.daily/maldet-scan
+chmod 755 /usr/local/sbin/maldet-scan
+if [ ! -f /etc/systemd/system/maldet-scan.timer ]; then
+    echo "WARNING: maldet-scan.timer not found; the daily scan is not scheduled." >&2
+    echo "         Run the server setup (section 11.5) to create it." >&2
+fi
 
 # Apply systemd resource limits and reload daemon
 systemctl daemon-reload

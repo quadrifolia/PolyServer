@@ -3112,9 +3112,11 @@ The setup automatically filters out common false positives:
 - Legitimate packet sniffers (Suricata IDS, systemd-networkd, etc.)
 
 **Log Files:**
-- `/var/log/chkrootkit/log.raw` - Unfiltered scan output
-- `/var/log/chkrootkit/log.today` - Filtered output (whitelist applied)
-- `/var/log/chkrootkit/log.expected` - Baseline for comparison
+- `/var/lib/polyserver/chkrootkit/raw.log` - Unfiltered scan output
+- `/var/lib/polyserver/chkrootkit/today.log` - Filtered output (whitelist applied)
+- `/var/lib/polyserver/chkrootkit/expected.log` - Baseline for comparison. After a change is mailed, today's output becomes the new baseline automatically, so each change is reported once (previous baseline: `expected.log.prev`).
+
+Debian's own daily chkrootkit job is disabled (`RUN_DAILY="false"`), because it duplicated these alerts.
 
 **Manual Commands:**
 
@@ -3126,13 +3128,13 @@ sudo rkhunter --check --sk
 sudo chkrootkit
 
 # View filtered output
-cat /var/log/chkrootkit/log.today
+sudo cat /var/lib/polyserver/chkrootkit/today.log
 
 # View raw output (before filtering)
-cat /var/log/chkrootkit/log.raw
+sudo cat /var/lib/polyserver/chkrootkit/raw.log
 
-# Update chkrootkit baseline after verifying system state
-sudo cp /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected
+# Accept the current state as baseline by hand (normally automatic after an alert)
+sudo cp /var/lib/polyserver/chkrootkit/today.log /var/lib/polyserver/chkrootkit/expected.log
 
 # Edit whitelist for custom exclusions
 sudo nano /etc/chkrootkit/whitelist.conf
@@ -3662,7 +3664,7 @@ Docker containers are secured with multiple layers of protection:
 
 ```bash
 # Run a manual container scan
-sudo /etc/cron.daily/trivy-scan
+sudo /usr/local/sbin/trivy-scan
 
 # View recent scan reports
 ls -l /var/log/security/trivy/
@@ -3989,13 +3991,11 @@ In case of a suspected security incident:
 | Check disk space              | Weekly               | `df -h` to ensure sufficient space                                                    |
 | Verify auto-updates           | Weekly               | `cat /var/log/unattended-upgrades/unattended-upgrades.log`                            |
 | Check virus scan logs         | Weekly               | `cat /var/log/clamav/daily_scan.log`                                                  |
-| Review rootkit scans          | Weekly               | `cat /var/log/rkhunter/daily_scan.log /var/log/chkrootkit/log.today`                  |
-| Review raw chkrootkit output  | Monthly              | `cat /var/log/chkrootkit/log.raw` (bypasses whitelist)                                |
-| Update chkrootkit baseline    | After system changes | `sudo cp /var/log/chkrootkit/log.today /var/log/chkrootkit/log.expected`              |
-| Check file integrity          | Weekly               | `sudo aide.wrapper --check`                                                           |
+| Review rootkit scans          | Weekly               | `sudo cat /var/log/rkhunter/daily_scan.log /var/lib/polyserver/chkrootkit/today.log`  |
+| Review raw chkrootkit output  | Monthly              | `sudo cat /var/lib/polyserver/chkrootkit/raw.log` (bypasses whitelist)                |
+| Check file integrity          | Weekly               | `sudo cat /var/log/aide/aide-check.log` (daily run; baseline updates automatically)   |
 | Update virus signatures       | Monthly              | `sudo freshclam`                                                                      |
 | Update rootkit database       | Monthly              | `sudo rkhunter --update`                                                              |
-| Update AIDE database          | Monthly              | `sudo aide.wrapper --update`                                                          |
 | Clean unused Docker images    | Monthly              | `docker system prune -a` (Docker mode only)                                           |
 | Update container images       | Weekly               | `docker compose pull && docker compose up -d` (Docker mode only)                      |
 | Check container health        | Weekly               | `docker compose ps` and `docker compose logs` (Docker mode only)                      |
@@ -4016,7 +4016,7 @@ In case of a suspected security incident:
 | Check AppArmor status         | Weekly               | `sudo aa-status`                                                                      |
 | Check ModSecurity logs        | Weekly               | `sudo cat /var/log/nginx/modsec_audit.log \| grep -i "attack"`                        |
 | Review Suricata alerts        | Weekly               | `sudo cat /var/log/suricata/fast.log`                                                 |
-| Scan container images         | Monthly              | `sudo /etc/cron.daily/trivy-scan`                                                     |
+| Scan container images         | Monthly              | `sudo /usr/local/sbin/trivy-scan`                                                     |
 | Run DSGVO compliance check    | Monthly              | `sudo /opt/polyserver/scripts/dsgvo-compliance-check.sh`                              |
 | Check SSH authentication logs | Weekly               | `sudo grep "Failed password\|Accepted publickey" /var/log/auth.log`                   |
 | Review SSH configuration      | Quarterly            | `sudo sshd -T \| grep -E "(PasswordAuthentication\|PubkeyAuthentication\|Port)"`      |
