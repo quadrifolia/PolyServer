@@ -2994,8 +2994,9 @@ if [ "$RC" -ge 1 ]; then
     ENTRIES=$(awk '/^Detailed information about changes:/ {exit}
                    /^(Added|Removed|Changed) entries:$/ {sec=1; next}
                    sec && /: \// {print}' "$AIDE_LOG")
-    MODULES=$(printf '%s\n' "$ENTRIES" | grep -c ': /usr/lib/modules/')
-    OTHER=$(printf '%s\n' "$ENTRIES" | grep -v ': /usr/lib/modules/' | grep -v '^$')
+    KERNEL_RE=': /usr/(lib/modules/|src/linux-headers-)'
+    MODULES=$(printf '%s\n' "$ENTRIES" | grep -cE "$KERNEL_RE")
+    OTHER=$(printf '%s\n' "$ENTRIES" | grep -vE "$KERNEL_RE" | grep -v '^$')
     OTHER_COUNT=$(printf '%s\n' "$OTHER" | grep -c .)
     {
         echo "AIDE detected file changes on $HOST since the last check."
@@ -3004,10 +3005,10 @@ if [ "$RC" -ge 1 ]; then
         echo ""
         sed -n '/^Summary:/,/Changed entries:[[:space:]]*[0-9]/p' "$AIDE_LOG"
         echo ""
-        echo "Kernel module entries (/usr/lib/modules): $MODULES"
+        echo "Kernel module and header entries (/usr/lib/modules, /usr/src/linux-headers-*): $MODULES"
         echo ""
         echo "Changed paths (first $MAX_LINES of $OTHER_COUNT):"
-        printf '%s\n' "$OTHER" | head -n "$MAX_LINES"
+        head -n "$MAX_LINES" <<< "$OTHER"
         if [ "$OTHER_COUNT" -gt "$MAX_LINES" ]; then
             echo "... $((OTHER_COUNT - MAX_LINES)) more, see $AIDE_LOG"
         fi
@@ -5127,7 +5128,7 @@ cat > /etc/logrotate.d/rsyslog << 'EOF'
     delaycompress
     compress
     postrotate
-        invoke-rc.d rsyslog rotate > /dev/null 2>&1 || true
+        /usr/lib/rsyslog/rsyslog-rotate
     endscript
 }
 EOF

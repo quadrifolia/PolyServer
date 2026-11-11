@@ -2626,6 +2626,7 @@ ${LC_P}systemd${LC_PID}: Started .*\.$
 ${LC_P}systemd${LC_PID}: [^ ]+\.(service|scope|slice|mount|socket): Consumed .*$
 ${LC_P}systemd${LC_PID}: (Reloading|Reloaded) nginx\.service( - .*)?$
 ${LC_P}systemd${LC_PID}: (Reload requested from client PID [0-9]+ .*|Reloading\.\.\.|Reloading finished in [0-9]+ ms\.)$
+${LC_P}systemd${LC_PID}: rsyslog\.service: Sent signal SIGHUP to main process [0-9]+ \(rsyslogd\) on client request\.$
 ${LC_P}systemd-sysv-generator${LC_PID}: .*$
 ${LC_P}systemd${LC_PID}: /usr/lib/systemd/system/veeamservice\.service:[0-9]+: PIDFile= references a path below legacy directory .*$
 ${LC_P}systemd${LC_PID}: mdcheck_(start|continue)\.service - .* was skipped because of an unmet condition check .*$
@@ -2805,8 +2806,9 @@ if [ "$RC" -ge 1 ]; then
     ENTRIES=$(awk '/^Detailed information about changes:/ {exit}
                    /^(Added|Removed|Changed) entries:$/ {sec=1; next}
                    sec && /: \// {print}' "$AIDE_LOG")
-    MODULES=$(printf '%s\n' "$ENTRIES" | grep -c ': /usr/lib/modules/')
-    OTHER=$(printf '%s\n' "$ENTRIES" | grep -v ': /usr/lib/modules/' | grep -v '^$')
+    KERNEL_RE=': /usr/(lib/modules/|src/linux-headers-)'
+    MODULES=$(printf '%s\n' "$ENTRIES" | grep -cE "$KERNEL_RE")
+    OTHER=$(printf '%s\n' "$ENTRIES" | grep -vE "$KERNEL_RE" | grep -v '^$')
     OTHER_COUNT=$(printf '%s\n' "$OTHER" | grep -c .)
     {
         echo "AIDE detected file changes on $HOST since the last check."
@@ -2815,10 +2817,10 @@ if [ "$RC" -ge 1 ]; then
         echo ""
         sed -n '/^Summary:/,/Changed entries:[[:space:]]*[0-9]/p' "$AIDE_LOG"
         echo ""
-        echo "Kernel module entries (/usr/lib/modules): $MODULES"
+        echo "Kernel module and header entries (/usr/lib/modules, /usr/src/linux-headers-*): $MODULES"
         echo ""
         echo "Changed paths (first $MAX_LINES of $OTHER_COUNT):"
-        printf '%s\n' "$OTHER" | head -n "$MAX_LINES"
+        head -n "$MAX_LINES" <<< "$OTHER"
         if [ "$OTHER_COUNT" -gt "$MAX_LINES" ]; then
             echo "... $((OTHER_COUNT - MAX_LINES)) more, see $AIDE_LOG"
         fi
@@ -2916,6 +2918,20 @@ EOF
 # Network and removable mounts (e.g. NFS backup shares under /mnt)
 !/mnt
 !/media
+
+# Data that changes on every signature update, scan or build
+# (maldet's program files and the trivy binary stay monitored)
+!/root/\.cache
+!/usr/local/maldetect/(sigs|sigs\.old|sess|tmp|logs|quarantine|pub)
+!/usr/local/maldetect\.bk[0-9]+
+!/home/[^/]+/\.docker/buildx
+
+# App build output, replaced on every deploy (app configs in /opt/*/config stay monitored)
+!/opt/[^/]+/build
+
+# Per-user shell frameworks and caches that update themselves
+!/home/[^/]+/\.oh-my-zsh
+!/home/[^/]+/\.zcompdump.*
 
 # Shell history and per-user shell caches
 !/root/\.oh-my-zsh
@@ -5659,7 +5675,7 @@ cat > /etc/logrotate.d/rsyslog << 'EOF'
     delaycompress
     compress
     postrotate
-        invoke-rc.d rsyslog rotate > /dev/null 2>&1 || true
+        /usr/lib/rsyslog/rsyslog-rotate
     endscript
 }
 EOF
@@ -8594,6 +8610,16 @@ if [ -f /tmp/audit.rules.full ]; then
     if [ ! -d "/mnt/backup/backups" ]; then
         sed -i '\|/mnt/backup/backups|d' /etc/audit/rules.d/audit.rules 2>/dev/null || true
     fi
+
+    # Remove watches whose parent directory does not exist on this host (e.g. no
+    # nginx, Docker or ClamAV on a database server). auditctl rejects such a watch,
+    # one bad line makes audit-rules.service fail at boot, and then auditd does not
+    # start at all. Watches on missing files in existing directories are kept.
+    while read -r _ path _; do
+        if [ -n "$path" ] && [ ! -d "$(dirname "$path")" ]; then
+            sed -i "\\|^-w ${path} |d" /etc/audit/rules.d/audit.rules
+        fi
+    done < <(grep '^-w ' /etc/audit/rules.d/audit.rules)
 
     # Reload audit rules
     augenrules --load || log_message "⚠️  Some audit rules may have failed to load (non-critical)"
