@@ -2914,6 +2914,7 @@ EOF
 !/var/lib/veeam
 !/var/lib/veeamma
 !/var/backups
+!/opt/polyserver/backups
 
 # Network and removable mounts (e.g. NFS backup shares under /mnt)
 !/mnt
