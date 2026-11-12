@@ -4886,26 +4886,53 @@ else
 fi
 echo "" >> \$REPORT_FILE
 
-echo "FIREWALL STATUS & STATISTICS" >> \$REPORT_FILE
-echo "============================" >> \$REPORT_FILE
-ufw status numbered >> \$REPORT_FILE 2>/dev/null || echo "UFW status unavailable" >> \$REPORT_FILE
+echo "FIREWALL RULES" >> \$REPORT_FILE
+echo "==============" >> \$REPORT_FILE
+# Full rule dump only when the rules changed since the last mailed report.
+# Compared without rule numbers and without fail2ban's temporary bans,
+# which change daily and would otherwise trigger the dump every day.
+UFW_STATE_DIR=/var/lib/bastion-report
+UFW_LAST="\$UFW_STATE_DIR/ufw-status.last"
+mkdir -p "\$UFW_STATE_DIR"
+UFW_NUMBERED=\$(ufw status numbered 2>/dev/null)
+ufw status 2>/dev/null | grep -v 'by Fail2Ban' > "\$UFW_LAST.new"
+F2B_RULES=\$(echo "\$UFW_NUMBERED" | grep -c 'by Fail2Ban')
+if [ -z "\$UFW_NUMBERED" ]; then
+    echo "UFW status unavailable" >> \$REPORT_FILE
+    rm -f "\$UFW_LAST.new"
+elif [ -f "\$UFW_LAST" ] && cmp -s "\$UFW_LAST" "\$UFW_LAST.new"; then
+    echo "\$(head -1 "\$UFW_LAST.new"), rules unchanged since last report (\$(echo "\$UFW_NUMBERED" | grep -c '^\[') rules, \$F2B_RULES of them fail2ban bans)" >> \$REPORT_FILE
+    rm -f "\$UFW_LAST.new"
+else
+    if [ -f "\$UFW_LAST" ]; then
+        echo "⚠️  Rules CHANGED since last report ('<' removed, '>' added):" >> \$REPORT_FILE
+        diff "\$UFW_LAST" "\$UFW_LAST.new" | grep '^[<>]' >> \$REPORT_FILE
+        echo "" >> \$REPORT_FILE
+    fi
+    echo "\$UFW_NUMBERED" >> \$REPORT_FILE
+    # \$UFW_LAST.new is promoted after the mail was sent (see end of script)
+fi
 echo "" >> \$REPORT_FILE
 
 echo "UFW BLOCKED CONNECTIONS (Yesterday)" >> \$REPORT_FILE
 echo "====================================" >> \$REPORT_FILE
 # Generate UFW block statistics from rotated kern.log
 # Yesterday's kern.log is in .log.1 after midnight rotation
-UFW_BLOCKS=\$(grep "UFW BLOCK" /var/log/kern.log.1 2>/dev/null | wc -l)
-echo "Total blocked connections: \$UFW_BLOCKS" >> \$REPORT_FILE
+# Inbound only: outbound blocks (IN= empty) are this host's own traffic
+inbound_blocks() { grep "UFW BLOCK" /var/log/kern.log.1 2>/dev/null | grep -v " IN= "; }
+UFW_BLOCKS=\$(inbound_blocks | wc -l)
+UFW_OUT_BLOCKS=\$(grep "UFW BLOCK" /var/log/kern.log.1 2>/dev/null | grep -c " IN= ")
+echo "Total blocked inbound connections: \$UFW_BLOCKS" >> \$REPORT_FILE
+echo "Blocked outbound connections from this host: \$UFW_OUT_BLOCKS" >> \$REPORT_FILE
 if [ \$UFW_BLOCKS -gt 0 ]; then
     echo "" >> \$REPORT_FILE
     echo "Top 10 blocked source IPs:" >> \$REPORT_FILE
-    grep "UFW BLOCK" /var/log/kern.log.1 2>/dev/null | \
-        grep -o "SRC=[0-9.]*" | cut -d= -f2 | sort | uniq -c | sort -nr | head -10 | \
+    inbound_blocks | \
+        grep -o "SRC=[^ ]*" | cut -d= -f2 | sort | uniq -c | sort -nr | head -10 | \
         awk '{printf "  %s attempts from %s\\n", \$1, \$2}' >> \$REPORT_FILE 2>/dev/null || true
     echo "" >> \$REPORT_FILE
     echo "Top 10 blocked destination ports (with service identification):" >> \$REPORT_FILE
-    grep "UFW BLOCK" /var/log/kern.log.1 2>/dev/null | \
+    inbound_blocks | \
         grep -o "DPT=[0-9]*" | cut -d= -f2 | sort | uniq -c | sort -nr | head -10 | \
         while read count port; do
             case "\$port" in
@@ -4919,6 +4946,9 @@ if [ \$UFW_BLOCKS -gt 0 ]; then
                 5060) service="SIP";;
                 5432) service="PostgreSQL";;
                 5555) service="Android Debug";;
+                5355) service="LLMNR";;
+                5353) service="mDNS";;
+                67|68) service="DHCP";;
                 8000|8080|8081|8088|8443|8728|8888) service="HTTP-alt/Web";;
                 9100) service="Printer/JetDirect";;
                 *) service="Unknown";;
@@ -4955,48 +4985,47 @@ echo "" >> \$REPORT_FILE
 echo "AUDIT SUMMARY" >> \$REPORT_FILE
 echo "=============" >> \$REPORT_FILE
 echo "" >> \$REPORT_FILE
-# Use proper date format for ausearch: MM/DD/YYYY HH:MM:SS (time required!)
-# Get yesterday's date range (00:00:00 to 23:59:59)
-YESTERDAY_START=\$(date -d "yesterday" "+%m/%d/%Y 00:00:00")
-YESTERDAY_END=\$(date -d "yesterday" "+%m/%d/%Y 23:59:59")
-
-# Check if auditd is running
+# Range yesterday 00:00:00 up to today 00:00:00. Date and time must be two
+# separate arguments, the date in the locale's %x format (the old code passed
+# "MM/DD/YYYY HH:MM:SS" as ONE argument, which ausearch rejects, so this
+# section was always empty). "-te today" alone would mean "now".
+AUDIT_RANGE=(-ts "\$(date -d yesterday +%x)" 00:00:00 -te "\$(date +%x)" 00:00:00)
+AUDIT_OK=false
 if ! systemctl is-active --quiet auditd; then
     echo "⚠️  auditd service is not running - no audit data available" >> \$REPORT_FILE
 elif ! command -v ausearch >/dev/null 2>&1 || ! command -v aureport >/dev/null 2>&1; then
     echo "⚠️  Audit tools not installed" >> \$REPORT_FILE
 else
-    # Try to get audit summary with better error handling
-    AUDIT_TEMP=\$(mktemp)
-    if ausearch --start "\$YESTERDAY_START" --end "\$YESTERDAY_END" > "\$AUDIT_TEMP" 2>/dev/null && [ -s "\$AUDIT_TEMP" ]; then
-        aureport --summary -i < "\$AUDIT_TEMP" >> \$REPORT_FILE 2>/dev/null || {
-            echo "Audit events found but report generation failed" >> \$REPORT_FILE
-            echo "Event count: \$(wc -l < "\$AUDIT_TEMP")" >> \$REPORT_FILE
-        }
+    AUDIT_OK=true
+    AUDIT_SUMMARY=\$(aureport --summary -i "\${AUDIT_RANGE[@]}" 2>&1)
+    if [ -n "\$AUDIT_SUMMARY" ]; then
+        echo "\$AUDIT_SUMMARY" >> \$REPORT_FILE
     else
-        echo "No audit events found for yesterday (\$YESTERDAY_START to \$YESTERDAY_END)" >> \$REPORT_FILE
-        echo "Note: Auditd may have been recently installed or logs rotated" >> \$REPORT_FILE
+        echo "No audit events found for yesterday" >> \$REPORT_FILE
     fi
-    rm -f "\$AUDIT_TEMP"
 fi
 echo "" >> \$REPORT_FILE
 
 echo "CRITICAL SECURITY EVENTS" >> \$REPORT_FILE
 echo "========================" >> \$REPORT_FILE
-if systemctl is-active --quiet auditd && command -v ausearch >/dev/null 2>&1; then
-    EVENTS_FOUND=0
+if [ "\$AUDIT_OK" = true ]; then
+    # Test the captured output, not the exit code of a pipe (tail always succeeds)
+    PRIV_EXES=\$(ausearch -k privilege_escalation "\${AUDIT_RANGE[@]}" --raw 2>/dev/null | aureport -x --summary -i 2>/dev/null | grep -E '^[[:space:]]*[0-9]+ ')
+    USER_CMDS=\$(ausearch -k user_commands "\${AUDIT_RANGE[@]}" --raw 2>/dev/null | aureport -x -i 2>/dev/null | grep -E '^[0-9]+\. ' | tail -20)
 
-    # Check for privilege escalation events
-    if ausearch -k privilege_escalation --start "\$YESTERDAY_START" --end "\$YESTERDAY_END" >> \$REPORT_FILE 2>/dev/null; then
-        EVENTS_FOUND=1
+    if [ -n "\$PRIV_EXES" ]; then
+        echo "setuid/setgid calls (key privilege_escalation) by executable:" >> \$REPORT_FILE
+        echo "  count  executable" >> \$REPORT_FILE
+        echo "\$PRIV_EXES" | head -15 >> \$REPORT_FILE
+        echo "" >> \$REPORT_FILE
     fi
-
-    # Check for user command events (last 20)
-    if ausearch -k user_commands --start "\$YESTERDAY_START" --end "\$YESTERDAY_END" 2>/dev/null | tail -20 >> \$REPORT_FILE; then
-        EVENTS_FOUND=1
+    if [ -n "\$USER_CMDS" ]; then
+        echo "Last 20 commands by logged-in users (key user_commands):" >> \$REPORT_FILE
+        echo "  #. date time exe term host auid event" >> \$REPORT_FILE
+        echo "\$USER_CMDS" >> \$REPORT_FILE
+        echo "" >> \$REPORT_FILE
     fi
-
-    if [ \$EVENTS_FOUND -eq 0 ]; then
+    if [ -z "\$PRIV_EXES" ] && [ -z "\$USER_CMDS" ]; then
         echo "No critical security events found for yesterday" >> \$REPORT_FILE
     fi
 else
@@ -5004,8 +5033,12 @@ else
 fi
 echo "" >> \$REPORT_FILE
 
-# Email the report
-cat \$REPORT_FILE | mail -s "📊 BASTION [\$HOSTNAME]: Daily Security Report" root
+# Email the report; remember the firewall rules only if the mail went out,
+# so a rule change is reported again when the mail fails
+if mail -s "📊 BASTION [\$HOSTNAME]: Daily Security Report" root < \$REPORT_FILE; then
+    [ -f "\$UFW_LAST.new" ] && mv -f "\$UFW_LAST.new" "\$UFW_LAST"
+fi
+rm -f "\$UFW_LAST.new"
 
 # Cleanup
 rm -f \$REPORT_FILE
