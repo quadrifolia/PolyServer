@@ -2805,10 +2805,13 @@ if [ "$RC" -ge 8 ]; then
 fi
 
 if [ "$RC" -ge 1 ]; then
-    # Entry lines from the Added/Removed/Changed sections (not the detailed hash dump)
+    # Entry lines from the Added/Removed/Changed sections (not the detailed hash dump),
+    # ordered changed -> removed -> added so the important ones are never cut off
     ENTRIES=$(awk '/^Detailed information about changes:/ {exit}
-                   /^(Added|Removed|Changed) entries:$/ {sec=1; next}
-                   sec && /: \// {print}' "$AIDE_LOG")
+                   /^Changed entries:$/ {sec=1; next}
+                   /^Removed entries:$/ {sec=2; next}
+                   /^Added entries:$/   {sec=3; next}
+                   sec && /: \// {print sec " " $0}' "$AIDE_LOG" | sort -s -n -k1,1 | cut -d' ' -f2-)
     KERNEL_RE=': /usr/(lib/modules/|src/linux-headers-)'
     MODULES=$(printf '%s\n' "$ENTRIES" | grep -cE "$KERNEL_RE")
     OTHER=$(printf '%s\n' "$ENTRIES" | grep -vE "$KERNEL_RE" | grep -v '^$')
@@ -2822,7 +2825,7 @@ if [ "$RC" -ge 1 ]; then
         echo ""
         echo "Kernel module and header entries (/usr/lib/modules, /usr/src/linux-headers-*): $MODULES"
         echo ""
-        echo "Changed paths (first $MAX_LINES of $OTHER_COUNT):"
+        echo "Changed, then removed, then added paths (first $MAX_LINES of $OTHER_COUNT):"
         head -n "$MAX_LINES" <<< "$OTHER"
         if [ "$OTHER_COUNT" -gt "$MAX_LINES" ]; then
             echo "... $((OTHER_COUNT - MAX_LINES)) more, see $AIDE_LOG"
@@ -4140,6 +4143,12 @@ if [ "$INSTALL_DOCKER" = "true" ] && command -v docker >/dev/null 2>&1; then
     cat > /usr/local/sbin/trivy-scan << 'EOF'
 #!/bin/bash
 # Daily container vulnerability scanning
+#
+# SECURITY: Trivy's secret scanner detects credentials baked into images. We must
+# NEVER email or log the secret VALUES (cleartext over unencrypted SMTP / in
+# /var/log). Vulnerability findings are reported in full (no secret material);
+# secret findings are reported as metadata only (type/file/line) so an admin
+# knows what to rotate and where to look, without the credential leaving the image.
 
 REPORT_DIR="/var/log/security/trivy"
 DATE=$(date +%Y-%m-%d)
@@ -4177,14 +4186,29 @@ TMPL
 # Update Trivy vulnerability database
 /usr/local/bin/trivy image --download-db-only > /dev/null 2>&1
 
+# Optional per-server list of files to skip, one path inside the image per line
+# (e.g. a credential file the application needs and that is already known).
+SKIP_FILES_CONF="/etc/polyserver/trivy-skip-files"
+SKIP_ARGS=()
+SKIPPED=""
+if [ -f "$SKIP_FILES_CONF" ]; then
+    while IFS= read -r f; do
+        case "$f" in ''|\#*) continue ;; esac
+        SKIP_ARGS+=(--skip-files "$f")
+        SKIPPED="$SKIPPED $f"
+    done < "$SKIP_FILES_CONF"
+fi
+
 # Start log file
 echo "===== Container Vulnerability Scan Report: $DATE =====" > $TRIVYLOG
+echo "Only findings with an available fix are listed (--ignore-unfixed)." >> $TRIVYLOG
+[ -n "$SKIPPED" ] && echo "Skipped files ($SKIP_FILES_CONF):$SKIPPED" >> $TRIVYLOG
 
 # Scan running containers (single scan per image, compact template output)
 CONTAINERS=$(docker ps --format "{{.Image}}")
 for IMAGE in $CONTAINERS; do
     echo "" >> $TRIVYLOG
-    /usr/local/bin/trivy image --no-progress --scanners vuln,secret --severity HIGH,CRITICAL --format template --template "@$REPORT_TMPL" "$IMAGE" >> $TRIVYLOG 2>/dev/null
+    /usr/local/bin/trivy image --no-progress --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed "${SKIP_ARGS[@]}" --format template --template "@$REPORT_TMPL" "$IMAGE" >> $TRIVYLOG 2>/dev/null
 done
 
 # Remove the template and restrict the report (defense in depth)
