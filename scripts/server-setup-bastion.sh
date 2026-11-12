@@ -2993,10 +2993,13 @@ if [ "$RC" -ge 8 ]; then
 fi
 
 if [ "$RC" -ge 1 ]; then
-    # Entry lines from the Added/Removed/Changed sections (not the detailed hash dump)
+    # Entry lines from the Added/Removed/Changed sections (not the detailed hash dump),
+    # ordered changed -> removed -> added so the important ones are never cut off
     ENTRIES=$(awk '/^Detailed information about changes:/ {exit}
-                   /^(Added|Removed|Changed) entries:$/ {sec=1; next}
-                   sec && /: \// {print}' "$AIDE_LOG")
+                   /^Changed entries:$/ {sec=1; next}
+                   /^Removed entries:$/ {sec=2; next}
+                   /^Added entries:$/   {sec=3; next}
+                   sec && /: \// {print sec " " $0}' "$AIDE_LOG" | sort -s -n -k1,1 | cut -d' ' -f2-)
     KERNEL_RE=': /usr/(lib/modules/|src/linux-headers-)'
     MODULES=$(printf '%s\n' "$ENTRIES" | grep -cE "$KERNEL_RE")
     OTHER=$(printf '%s\n' "$ENTRIES" | grep -vE "$KERNEL_RE" | grep -v '^$')
@@ -3010,7 +3013,7 @@ if [ "$RC" -ge 1 ]; then
         echo ""
         echo "Kernel module and header entries (/usr/lib/modules, /usr/src/linux-headers-*): $MODULES"
         echo ""
-        echo "Changed paths (first $MAX_LINES of $OTHER_COUNT):"
+        echo "Changed, then removed, then added paths (first $MAX_LINES of $OTHER_COUNT):"
         head -n "$MAX_LINES" <<< "$OTHER"
         if [ "$OTHER_COUNT" -gt "$MAX_LINES" ]; then
             echo "... $((OTHER_COUNT - MAX_LINES)) more, see $AIDE_LOG"
@@ -3325,7 +3328,9 @@ cat > /etc/audit/rules.d/bastion-audit.rules << EOF
 -w /usr/bin/sudo -p x -k privilege_escalation
 
 ## === User Command Execution (64-bit only for compatibility) ===
--a always,exit -F arch=b64 -S execve -F uid>=1000 -F uid!=4294967295 -k user_commands
+## auid = the user who logged in (survives sudo); "unset" excludes daemons.
+## (uid!=4294967295 is rejected by the kernel and aborted loading all later rules)
+-a always,exit -F arch=b64 -S execve -F auid>=1000 -F auid!=unset -k user_commands
 
 ## === Privilege Escalation Syscalls (64-bit only, no b32 for compatibility) ===
 -a always,exit -F arch=b64 -S setuid -S setgid -S setresuid -S setresgid -k privilege_escalation
@@ -5658,7 +5663,9 @@ check_persistence_location() {
                         echo "Change type: $name"
                         echo ""
                         echo "=== CHANGES DETECTED ==="
-                        diff "$baseline_file" "$current_file" 2>/dev/null || echo "Unable to show differences"
+                        # diff exits 1 when files differ, so don't treat that as an error
+                        diff "$baseline_file" "$current_file" 2>/dev/null
+                        [ $? -le 1 ] || echo "Unable to show differences"
                         echo ""
                         echo "Log file: $LOGFILE"
                     } | mail -s "🚨 BASTION [$(hostname)]: Persistence Alert - $name" root
@@ -5702,8 +5709,17 @@ SUID_BASELINE="$BASELINE_DIR/suid-sgid.baseline"
 if [ -f "$SUID_BASELINE" ]; then
     if ! diff -q "$SUID_BASELINE" /tmp/suid-sgid.current >/dev/null 2>&1; then
         log_message "ALERT: SUID/SGID binary changes detected"
-        echo "SECURITY ALERT: SUID/SGID binary changes on bastion host $(hostname)" | mail -s "BASTION ALERT: SUID/SGID Changes" root
-        diff "$SUID_BASELINE" /tmp/suid-sgid.current >> "$LOGFILE" 2>/dev/null || true
+        diff "$SUID_BASELINE" /tmp/suid-sgid.current >> "$LOGFILE" 2>/dev/null
+        {
+            echo "SECURITY ALERT: SUID/SGID binary changes on bastion host $(hostname)"
+            echo ""
+            echo "Lines starting with '<' were removed, '>' were added:"
+            diff "$SUID_BASELINE" /tmp/suid-sgid.current 2>/dev/null
+            echo ""
+            echo "Log file: $LOGFILE"
+        } | mail -s "BASTION ALERT: SUID/SGID Changes" root
+        # Report each change once (same as the persistence locations above)
+        cp /tmp/suid-sgid.current "$SUID_BASELINE"
     else
         log_message "INFO: No changes in SUID/SGID binaries"
     fi
@@ -5794,7 +5810,9 @@ chmod +x /etc/cron.hourly/disk-space-protection
 cat > /etc/logrotate.d/emergency-space-management << EOF
 # Emergency space management for bastion hosts
 # Force rotation of unconfigured logs larger than 100M
-# Note: Only matches top-level /var/log/*.log to avoid conflicts with service-specific configs
+# Note: Only matches top-level /var/log/*.log; logs that already have their own
+# config (alternatives.log, dpkg.log, ...) are skipped via the global
+# ignoreduplicates in /etc/logrotate.conf (set below)
 /var/log/*.log {
     size 100M
     rotate 1
@@ -5804,6 +5822,13 @@ cat > /etc/logrotate.d/emergency-space-management << EOF
     copytruncate
 }
 EOF
+
+# logrotate only honours ignoreduplicates on the config that claimed a log first,
+# so it has to be global: without it the glob above fails every night with
+# "duplicate log entry for /var/log/alternatives.log" and logrotate.service fails.
+if ! grep -q '^ignoreduplicates' /etc/logrotate.conf; then
+    sed -i '1i ignoreduplicates' /etc/logrotate.conf
+fi
 
 echo "✅ Emergency disk space protection configured"
 
