@@ -4425,14 +4425,15 @@ Output = mail
 MailTo = $LOGWATCH_EMAIL
 Format = html
 Range = yesterday
-Detail = High
-Show_Empty_Sections = yes
+Detail = Med
+Show_Empty_Sections = no
 
 # Disable the default Service = All to avoid conflicts
-Service = 
+Service =
 
-# Use specific services for bastion monitoring
-Service = zz-sys         # System Configuration
+# Use specific services for bastion monitoring.
+# Not listed on purpose (static output or duplicates): zz-sys (hardware
+# summary), zz-network (ip addr dump), zz-lm_sensors, sendmail (postfix covers it)
 Service = sshd           # SSH login attempts and success/fail
 Service = secure         # PAM messages, login denials
 Service = sudo           # Use of sudo, privilege escalations
@@ -4444,10 +4445,7 @@ Service = dpkg           # Package installs/removals (Debian/Ubuntu)
 Service = systemd        # System boot/service issues
 Service = kernel         # Kernel messages (OOM, panics, etc.)
 Service = postfix        # Mail logs (if you use local mail for cron/system)
-Service = sendmail       # Might be triggered by postfix wrapper
 Service = iptables       # Firewall logs (if you log dropped packets)
-Service = zz-lm_sensors  # Hardware Sensors
-Service = zz-network     # Network Interface
 Service = zz-disk_space  # Disk usage overview
 Service = clamav         # Virus scan results
 Service = clam-update    # Virus scan updates
@@ -4465,7 +4463,27 @@ Logfile =
 Logfile = none
 *JournalCtl = "--unit='postfix' --unit='postfix@-'"
 *RemoveHeaders = Yes
-Detail = High
+EOF
+
+# Filter routine noise. Pre-auth timeouts are scanners on the public port and
+# already handled by fail2ban; internal-sftp is file transfers.
+# CAUTION: a local service file that contains any "*" command REPLACES all
+# "*" commands of /usr/share/logwatch/default.conf/services/<name>.conf, so
+# the default ones (*OnlyService, *RemoveHeaders) must be repeated here.
+cat > /etc/logwatch/conf/services/sshd.conf << 'EOF'
+*OnlyService = (sshd|sshd-session)
+*RemoveHeaders
+*Remove = Timeout before authentication
+EOF
+# (the packaged secure.conf has no "*" commands, nothing to repeat)
+cat > /etc/logwatch/conf/services/secure.conf << 'EOF'
+*Remove = internal-sftp
+EOF
+# Kernel: "other kernel messages" are listed from detail 5 on, which dumps
+# the whole boot log after every reboot. Warnings, errors and OOM kills are
+# always shown.
+cat > /etc/logwatch/conf/services/kernel.conf << 'EOF'
+Detail = 4
 EOF
 
 # Create custom sendmail/postfix logwatch script for bastion-specific analysis
@@ -4661,7 +4679,7 @@ rm -f /etc/cron.daily/00logwatch
 cat > /etc/cron.d/logwatch << EOF
 # Daily logwatch execution for bastion host
 # Run at 6:00 AM daily to analyze previous day's logs
-0 6 * * * root /usr/sbin/logwatch --output mail --format html --range yesterday --detail high
+0 6 * * * root /usr/sbin/logwatch --output mail --format html --range yesterday --detail med
 EOF
 
 # Create logwatch test script for troubleshooting
@@ -4743,10 +4761,10 @@ fi
 echo ""
 
 echo "6. Testing full logwatch email (for yesterday):"
-echo "Running: logwatch --output mail --format html --range yesterday --detail high"
+echo "Running: logwatch --output mail --format html --range yesterday --detail med"
 echo "This will send an actual email if mail is configured..."
 read -p "Press Enter to continue or Ctrl+C to cancel: "
-logwatch --output mail --format html --range yesterday --detail high
+logwatch --output mail --format html --range yesterday --detail med
 echo "✅ Logwatch email command executed"
 echo ""
 

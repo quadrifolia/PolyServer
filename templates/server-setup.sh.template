@@ -4307,14 +4307,15 @@ Output = mail
 MailTo = ${LOGWATCH_EMAIL:-root}
 Format = html
 Range = yesterday
-Detail = High
-Show_Empty_Sections = yes
+Detail = Med
+Show_Empty_Sections = no
 
 # Disable the default Service = All to avoid conflicts
 Service =
 
-# Use specific services instead of All to avoid configuration conflicts
-Service = zz-sys         # System Configuration
+# Use specific services instead of All to avoid configuration conflicts.
+# Not listed on purpose (static output or duplicates, ~15 KB/day each):
+# zz-sys (hardware summary), zz-network (ip addr dump), sendmail (postfix covers it)
 Service = sshd           # SSH login attempts and success/fail
 Service = secure         # PAM messages, login denials
 Service = sudo           # Use of sudo, privilege escalations
@@ -4326,10 +4327,8 @@ Service = dpkg           # Package installs/removals (Debian/Ubuntu)
 Service = systemd        # System boot/service issues
 Service = kernel         # Kernel messages (OOM, panics, etc.)
 Service = postfix        # Mail logs (if you use local mail for cron/system)
-Service = sendmail       # Might be triggered by postfix wrapper
 Service = iptables       # Firewall logs (if you log dropped packets)
 Service = zz-lm_sensors  # Hardware Sensors
-Service = zz-network     # Network Interface
 Service = zz-disk_space  # Disk usage overview
 Service = clamav         # Virus scan results
 Service = clam-update    # Virus scan updates
@@ -4347,7 +4346,29 @@ Logfile =
 Logfile = none
 *JournalCtl = "--unit='postfix' --unit='postfix@-'"
 *RemoveHeaders = Yes
-Detail = High
+EOF
+
+# Filter routine automation out of the sudo and secure-log sections.
+# CAUTION: a local service file that contains any "*" command REPLACES all
+# "*" commands of /usr/share/logwatch/default.conf/services/<name>.conf, so
+# the default ones (*OnlyService, *RemoveHeaders) must be repeated here.
+# - veeam-usr-vspc-agent: Veeam backup agent, ~1,500 sudo lines/day (~175 KB of each report)
+# - internal-sftp: file transfers by the deploy user (also filtered in logcheck)
+cat > /etc/logwatch/conf/services/sudo.conf << 'EOF'
+*OnlyService = sudo
+*RemoveHeaders
+*Remove = veeam-usr-vspc-agent
+EOF
+# (the packaged secure.conf has no "*" commands, nothing to repeat)
+cat > /etc/logwatch/conf/services/secure.conf << 'EOF'
+*Remove = veeam-usr-vspc-agent
+*Remove = internal-sftp
+EOF
+# Kernel: "other kernel messages" are listed from detail 5 on, which dumps
+# the whole boot log after every reboot. Warnings, errors and OOM kills are
+# always shown.
+cat > /etc/logwatch/conf/services/kernel.conf << 'EOF'
+Detail = 4
 EOF
 
 # Create custom sendmail/postfix logwatch script for server-specific analysis
@@ -4513,7 +4534,7 @@ if (@critical_events) {
 }
 
 # Recommendations for servers
-if ($security_events{"Unauthorized Relay Attempts"} > 0) {
+if (($security_events{"Unauthorized Relay Attempts"} // 0) > 0) {
     print "⚠️  SECURITY RECOMMENDATIONS:\n";
     print "-" x 32 . "\n";
     print "• Review relay restrictions in postfix configuration\n";
@@ -4543,7 +4564,7 @@ rm -f /etc/cron.daily/00logwatch
 cat > /etc/cron.d/logwatch << EOF
 # Daily logwatch execution for server
 # Run at 6:00 AM daily to analyze previous day's logs
-0 6 * * * root /usr/sbin/logwatch --output mail --format html --range yesterday --detail high
+0 6 * * * root /usr/sbin/logwatch --output mail --format html --range yesterday --detail med
 EOF
 
 # Create custom service for lm_sensors
