@@ -888,6 +888,13 @@ ufw allow out 443/tcp comment "HTTPS updates"
 # Allow NTP time synchronization (critical for logs and TLS)
 ufw allow out 123/udp comment "NTP time sync"
 
+# Allow DHCP lease renewal (the public address is DHCP-assigned; with default-deny
+# outgoing the unicast renewals to the DHCP server are blocked)
+PUB_IF=$(ip route show default | awk '{print $5; exit}')
+if [ -n "$PUB_IF" ]; then
+    ufw allow out on "$PUB_IF" proto udp from any port 68 to any port 67 comment "DHCP lease renewal"
+fi
+
 # Enable NTP synchronization
 systemctl enable --now systemd-timesyncd 2>/dev/null || true
 
@@ -3862,16 +3869,16 @@ fi
 cat > /etc/rsyslog.d/bastion-logging.conf << EOF
 # Bastion Host Enhanced Logging Configuration
 
-# Log all authentication events separately
-auth,authpriv.*                         /var/log/auth.log
+# auth,authpriv.* already goes to /var/log/auth.log via /etc/rsyslog.conf;
+# a second rule here would write every auth line twice (and halve the
+# effective fail2ban maxretry).
 
-# Log all SSH events to separate file
-if \$programname == 'sshd' then /var/log/ssh.log
-& stop
+# Copy SSH events to a separate file (Debian 13 logs sessions as sshd-session).
+# No "& stop": the lines must still reach auth.log for logcheck/Logwatch.
+if \$programname startswith 'sshd' then /var/log/ssh.log
 
-# Log all sudo events
+# Copy sudo events to a separate file (no "& stop", same reason)
 if \$programname == 'sudo' then /var/log/sudo.log
-& stop
 
 # Log all audit events
 if \$programname == 'auditd' then /var/log/audit/audit.log
