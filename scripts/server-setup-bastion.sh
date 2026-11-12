@@ -3305,6 +3305,10 @@ cat > /etc/audit/rules.d/bastion-audit.rules << EOF
 ## First rule - delete all existing rules
 -D
 
+## Continue past a failing rule (e.g. a watch on a path missing on this host)
+## instead of aborting the whole load; auditd would otherwise not start at all
+-i
+
 ## Buffer size - moderate for bastion host
 -b 8192
 

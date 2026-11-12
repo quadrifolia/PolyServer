@@ -4,6 +4,10 @@
 ## First rule - delete all
 -D
 
+## Continue past a failing rule (e.g. a watch on a path missing on this host)
+## instead of aborting the whole load; auditd would otherwise not start at all
+-i
+
 ## Increase the buffers to survive stress events
 ## Adjust buffer size based on system activity
 -b 8192

@@ -3022,6 +3022,10 @@ cat > /etc/audit/rules.d/audit.rules << 'EOF'
 ## First rule - delete all
 -D
 
+## Continue past a failing rule (e.g. a watch on a path missing on this host)
+## instead of aborting the whole load; auditd would otherwise not start at all
+-i
+
 ## Increase the buffers to survive stress events
 ## Adjust buffer size based on system activity
 -b 8192
@@ -3052,6 +3056,10 @@ cat > /tmp/audit.rules.full << 'FULLRULES'
 
 ## First rule - delete all
 -D
+
+## Continue past a failing rule (e.g. a watch on a path missing on this host)
+## instead of aborting the whole load; auditd would otherwise not start at all
+-i
 
 ## Increase the buffers to survive stress events
 ## Adjust buffer size based on system activity
@@ -3162,8 +3170,9 @@ cat > /tmp/audit.rules.full << 'FULLRULES'
 -a always,exit -F arch=b32 -S setuid -S setgid -F exit=0 -k privilege_escalation
 
 ## Detect unauthorized attempts to access restricted directories
--a always,exit -F dir=/root -F perm=r -F auid>=1000 -F key=unauthorized_access
--a always,exit -F dir=/etc/ssl/private -F perm=r -F auid>=1000 -F key=unauthorized_access
+## (auid!=unset: daemons and timers such as AIDE have auid 4294967295, which is >= 1000)
+-a always,exit -F dir=/root -F perm=r -F auid>=1000 -F auid!=unset -F key=unauthorized_access
+-a always,exit -F dir=/etc/ssl/private -F perm=r -F auid>=1000 -F auid!=unset -F key=unauthorized_access
 
 ## Detect changes to backup scripts
 -w /mnt/backup/backups -p wa -k backup_changes
@@ -8674,9 +8683,27 @@ if [ -f /tmp/audit.rules.full ]; then
         fi
     done < <(grep '^-w ' /etc/audit/rules.d/audit.rules)
 
-    # Reload audit rules
-    augenrules --load || log_message "⚠️  Some audit rules may have failed to load (non-critical)"
+    # Reload audit rules. With "-i" in the rules auditctl keeps going past a
+    # bad line and still exits 0, so check its output for errors instead.
+    AUDIT_LOAD_OUT=$(augenrules --load 2>&1)
+    AUDIT_LOAD_ERRORS=$(echo "$AUDIT_LOAD_OUT" | grep -i 'error')
+    if [ -n "$AUDIT_LOAD_ERRORS" ]; then
+        log_message "⚠️  Some audit rules failed to load (the others are active):"
+        echo "$AUDIT_LOAD_ERRORS" | while read -r line; do log_message "   $line"; done
+    fi
     docker_systemctl restart auditd || log_message "⚠️  Auditd restart failed (non-critical)"
+
+    # Verify auditd is really running with rules loaded
+    if [ "$DOCKER_MODE" = "false" ] && command -v auditctl >/dev/null 2>&1; then
+        AUDIT_STATUS=$(auditctl -s 2>/dev/null)
+        AUDIT_PID=$(echo "$AUDIT_STATUS" | awk '$1 == "pid" {print $2}')
+        AUDIT_RULES=$(auditctl -l 2>/dev/null | grep -vc '^No rules')
+        if echo "$AUDIT_STATUS" | grep -q '^enabled 1' && [ -n "$AUDIT_PID" ] && [ "$AUDIT_PID" != "0" ]; then
+            log_message "✅ auditd running (pid $AUDIT_PID) with $AUDIT_RULES rules loaded"
+        else
+            log_message "❌ auditd is NOT running or not enabled - check: systemctl status auditd audit-rules; auditctl -s"
+        fi
+    fi
 
     log_message "✅ Full audit rules deployed"
     rm -f /tmp/audit.rules.full
