@@ -2340,8 +2340,11 @@ EOF
         
         chmod +x /usr/local/bin/log-sensors
         
-        # Add sensor logging to cron (every 10 minutes)
-        echo "*/10 * * * * root /usr/local/bin/log-sensors" >> /etc/crontab
+        # Sensor logging every 10 minutes. Own cron.d file: re-running the setup must
+        # not append a duplicate line to /etc/crontab (older versions did); remove it.
+        sed -i '\#/usr/local/bin/log-sensors$#d' /etc/crontab
+        echo "*/10 * * * * root /usr/local/bin/log-sensors" > /etc/cron.d/log-sensors
+        chmod 644 /etc/cron.d/log-sensors
         
         # Update logwatch configuration to include sensors
         if [ -f /etc/logwatch/conf/logwatch.conf ]; then
@@ -6294,19 +6297,18 @@ if [ -f /var/run/reboot-required ]; then
     # Send wall message to all logged in users
     echo "SYSTEM NOTICE: Unattended upgrade requires reboot. System will reboot at 04:00 AM." | wall
     
-    # Log to syslog
+    # Log to syslog (no mail: a planned reboot is not an alert; Logwatch shows it)
     logger -p daemon.warning "Bastion host scheduled for automatic reboot due to unattended upgrade"
-    
-    # Send email notification
-    echo "Bastion host \$(hostname) is scheduled for automatic reboot at 04:00 AM due to security updates requiring reboot." | \
-        mail -s "\$(hostname) NOTICE: Scheduled Reboot Tonight" root
 fi
 EOF
-    
+
     chmod +x /usr/local/bin/unattended-reboot-warning.sh
-    
-    # Add to daily cron to warn users
-    echo "0 20 * * * root /usr/local/bin/unattended-reboot-warning.sh" >> /etc/crontab
+
+    # Daily at 20:00. Own cron.d file: re-running the setup must not append a
+    # duplicate line to /etc/crontab (older versions did); remove that old line.
+    sed -i '\#/usr/local/bin/unattended-reboot-warning.sh$#d' /etc/crontab
+    echo "0 20 * * * root /usr/local/bin/unattended-reboot-warning.sh" > /etc/cron.d/unattended-reboot-warning
+    chmod 644 /etc/cron.d/unattended-reboot-warning
     
     echo "✅ Unattended reboot warning system configured"
 fi
