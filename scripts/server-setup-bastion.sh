@@ -1366,6 +1366,10 @@ if [ "$INSTALL_MALDET" = true ]; then
             return 0  # Don't exit the entire script, just return from this section
         fi
 
+        # install.sh enables maldet.service (inotify monitor mode). Monitor mode is
+        # never configured here - only scheduled scans - so the unit only fails at boot.
+        systemctl disable --now maldet.service 2>/dev/null || true
+
         # Create symlink for easy access
         ln -sf /usr/local/maldetect/maldet /usr/local/bin/maldet
 

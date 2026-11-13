@@ -2371,6 +2371,10 @@ MALDET_DIR=$(tar -tzf maldetect-current.tar.gz 2>/dev/null | head -1 | cut -f1 -
 cd "$MALDET_DIR"
 ./install.sh
 
+# install.sh enables maldet.service (inotify monitor mode). Monitor mode is never
+# configured here - scans run from the timer - so the unit only fails at boot.
+docker_systemctl disable --now maldet.service 2>/dev/null || true
+
 # Configure maldet with secure settings
 cat > /usr/local/maldetect/conf.maldet << EOC
 # Linux Malware Detect v1.6.x
