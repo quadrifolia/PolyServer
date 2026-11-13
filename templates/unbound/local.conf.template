@@ -31,7 +31,9 @@ server:
     auto-trust-anchor-file: "/var/lib/unbound/root.key"
     val-clean-additional: yes
     val-permissive-mode: no
-    trust-anchor-signaling: yes
+    # No RFC 8145 keytag queries: each one logs "info: generate keytag query _ta-..."
+    # (hourly logcheck mails). Validation is unaffected (anchor file + permissive no).
+    trust-anchor-signaling: no
     root-hints: "/usr/share/dns/root.hints"
     
     # Aggressive NSEC for better performance with DNSSEC
