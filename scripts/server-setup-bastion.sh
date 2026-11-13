@@ -3344,7 +3344,10 @@ cat > /etc/audit/rules.d/bastion-audit.rules << EOF
 -a always,exit -F arch=b64 -S execve -F auid>=1000 -F auid!=unset -k user_commands
 
 ## === Privilege Escalation Syscalls (64-bit only, no b32 for compatibility) ===
--a always,exit -F arch=b64 -S setuid -S setgid -S setresuid -S setresgid -k privilege_escalation
+## Only calls made in a user's login session (sudo, su, anything a user started).
+## Without the auid filter, daemons dropping privileges (atop, netdata's ndsudo)
+## produced ~50k events a day and buried the user activity.
+-a always,exit -F arch=b64 -S setuid -S setgid -S setresuid -S setresgid -F auid>=1000 -F auid!=unset -k privilege_escalation
 
 ## === Kernel Module Loading ===
 -w /sbin/insmod -p x -k module_insertion
