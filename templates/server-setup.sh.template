@@ -7925,8 +7925,10 @@ MARIADB_SEC_EOF
                     MYSQL_ROOT_PASSWORD=$(openssl rand -base64 32)
 
                     mysql <<MYSQL_SECURE_EOF
--- Set root password
-ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_ROOT_PASSWORD}';
+-- Set root password, but keep unix_socket auth: Debian's debian-start (run on every
+-- MariaDB start: mariadb-upgrade, table checks) logs in as root via
+-- /etc/mysql/debian.cnf without a password and fails with "Access denied" otherwise.
+ALTER USER 'root'@'localhost' IDENTIFIED VIA unix_socket OR mysql_native_password USING PASSWORD('${MYSQL_ROOT_PASSWORD}');
 
 -- Remove anonymous users
 DELETE FROM mysql.user WHERE User='';
