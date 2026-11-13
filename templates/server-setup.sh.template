@@ -1292,8 +1292,11 @@ EOF
         
         chmod +x /usr/local/bin/log-sensors
         
-        # Add sensor logging to cron (every 10 minutes)
-        echo "*/10 * * * * root /usr/local/bin/log-sensors" >> /etc/crontab
+        # Sensor logging every 10 minutes. Own cron.d file: re-running the setup must
+        # not append a duplicate line to /etc/crontab (older versions did); remove it.
+        sed -i '\#/usr/local/bin/log-sensors$#d' /etc/crontab
+        echo "*/10 * * * * root /usr/local/bin/log-sensors" > /etc/cron.d/log-sensors
+        chmod 644 /etc/cron.d/log-sensors
         
         # Update logwatch configuration to include sensors
         if [ -f /etc/logwatch/conf/logwatch.conf ]; then
@@ -2319,12 +2322,14 @@ docker_systemctl disable --now clamav-freshclam.timer 2>/dev/null || true
 # Create cron job for nightly virus definition updates at 3 AM
 cat > /etc/cron.d/clamav-freshclam << 'EOF'
 # ClamAV freshclam - nightly virus definition updates at 3 AM
-# Runs quietly and restarts daemon after update to avoid business hour disruptions
+# No clamd restart: NotifyClamd in freshclam.conf makes clamd reload the new
+# databases. freshclam exits 0 (updated) or 1 (already up to date); only
+# higher exit codes are real failures.
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
 # Run freshclam at 3 AM daily
-0 3 * * * root /usr/bin/freshclam --quiet && systemctl restart clamav-daemon || logger -t freshclam "Failed to update virus definitions"
+0 3 * * * root /usr/bin/freshclam --quiet; rc=$?; [ "$rc" -le 1 ] || logger -t freshclam "Failed to update virus definitions (exit $rc)"
 EOF
 
 chmod 644 /etc/cron.d/clamav-freshclam
@@ -2365,6 +2370,10 @@ tar -xzf maldetect-current.tar.gz
 MALDET_DIR=$(tar -tzf maldetect-current.tar.gz 2>/dev/null | head -1 | cut -f1 -d"/" || true)
 cd "$MALDET_DIR"
 ./install.sh
+
+# install.sh enables maldet.service (inotify monitor mode). Monitor mode is never
+# configured here - scans run from the timer - so the unit only fails at boot.
+docker_systemctl disable --now maldet.service 2>/dev/null || true
 
 # Configure maldet with secure settings
 cat > /usr/local/maldetect/conf.maldet << EOC
@@ -2907,17 +2916,19 @@ EOF
 !/var/lib/netdata
 !/var/spool/postfix/(private|public|dev)
 
-# Constantly changing logs (log tampering is covered by auditd)
-!/var/log/suricata
-!/var/log/journal
-!/var/log/atop
-!/var/log/nginx
-!/var/log/mysql
-!/var/log/aide
-!/var/log/auth.log
-!/var/log/syslog
-!/var/log/kern.log
-!/var/log/daemon.log
+# Logs change and rotate constantly by design; log tampering is covered by the
+# auditd watch "-w /var/log -p wa -k log_tampering". (Excluding only single log
+# files left every rotation - veeam, mail.log.N.gz, sensors, backup.log, ... -
+# in the daily AIDE mail.)
+!/var/log
+
+# Timestamp and state files rewritten every day by timers, apt and the scanners
+# (mostly mtime-only changes, no content change)
+!/var/lib/systemd/timers
+!/var/lib/apt/periodic
+!/var/lib/polyserver/chkrootkit
+!/var/lib/nginx/body
+!/swapfile
 
 # Container, database, antivirus and backup data
 !/var/lib/docker
@@ -2935,9 +2946,14 @@ EOF
 !/media
 
 # Data that changes on every signature update, scan or build
-# (maldet's program files and the trivy binary stay monitored)
+# (maldet's program files, conf.maldet and the trivy binary stay monitored;
+# VERSION, ignore_* and internals/* are rewritten by the daily maldet update)
 !/root/\.cache
-!/usr/local/maldetect/(sigs|sigs\.old|sess|tmp|logs|quarantine|pub)
+!/usr/local/maldetect/(sigs|sigs\.old|sess|tmp|logs|quarantine|pub|VERSION|ignore_[a-z_]+|internals/VERSION\.hash|internals/hexfifo)
+
+# Veeam agent rewrites its config and auth tokens daily (no content change)
+!/etc/veeamma/config\.cfg
+!/root/\.veeam
 !/usr/local/maldetect\.bk[0-9]+
 !/home/[^/]+/\.docker/buildx
 
@@ -3022,6 +3038,10 @@ cat > /etc/audit/rules.d/audit.rules << 'EOF'
 ## First rule - delete all
 -D
 
+## Continue past a failing rule (e.g. a watch on a path missing on this host)
+## instead of aborting the whole load; auditd would otherwise not start at all
+-i
+
 ## Increase the buffers to survive stress events
 ## Adjust buffer size based on system activity
 -b 8192
@@ -3052,6 +3072,10 @@ cat > /tmp/audit.rules.full << 'FULLRULES'
 
 ## First rule - delete all
 -D
+
+## Continue past a failing rule (e.g. a watch on a path missing on this host)
+## instead of aborting the whole load; auditd would otherwise not start at all
+-i
 
 ## Increase the buffers to survive stress events
 ## Adjust buffer size based on system activity
@@ -3157,13 +3181,15 @@ cat > /tmp/audit.rules.full << 'FULLRULES'
 ## Monitor Docker socket for access
 -w /var/run/docker.sock -p rwa -k docker_socket_access
 
-## Monitor for privilege escalation
--a always,exit -F arch=b64 -S setuid -S setgid -F exit=0 -k privilege_escalation
--a always,exit -F arch=b32 -S setuid -S setgid -F exit=0 -k privilege_escalation
+## Monitor for privilege escalation (only in user login sessions: without the auid
+## filter, daemons dropping privileges - atop, netdata's ndsudo - flood the log)
+-a always,exit -F arch=b64 -S setuid -S setgid -F exit=0 -F auid>=1000 -F auid!=unset -k privilege_escalation
+-a always,exit -F arch=b32 -S setuid -S setgid -F exit=0 -F auid>=1000 -F auid!=unset -k privilege_escalation
 
 ## Detect unauthorized attempts to access restricted directories
--a always,exit -F dir=/root -F perm=r -F auid>=1000 -F key=unauthorized_access
--a always,exit -F dir=/etc/ssl/private -F perm=r -F auid>=1000 -F key=unauthorized_access
+## (auid!=unset: daemons and timers such as AIDE have auid 4294967295, which is >= 1000)
+-a always,exit -F dir=/root -F perm=r -F auid>=1000 -F auid!=unset -F key=unauthorized_access
+-a always,exit -F dir=/etc/ssl/private -F perm=r -F auid>=1000 -F auid!=unset -F key=unauthorized_access
 
 ## Detect changes to backup scripts
 -w /mnt/backup/backups -p wa -k backup_changes
@@ -3217,68 +3243,71 @@ echo "" >> $REPORT_FILE
 echo "Uptime: $(uptime)" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
+# --input-logs on every ausearch: run from cron, ausearch would otherwise read
+# its (empty) stdin instead of /var/log/audit and report nothing.
+
 # General Summary Report
 echo "GENERAL SUMMARY" >> $REPORT_FILE
 echo "===============" >> $REPORT_FILE
-ausearch --start today --end now 2>/dev/null | aureport --summary -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs --start today --end now 2>/dev/null | aureport --summary -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Authentication Report
 echo "AUTHENTICATION EVENTS" >> $REPORT_FILE
 echo "====================" >> $REPORT_FILE
-ausearch --start today --end now 2>/dev/null | aureport --auth --summary -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs --start today --end now 2>/dev/null | aureport --auth --summary -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # User Modification Events
 echo "USER MODIFICATION EVENTS" >> $REPORT_FILE
 echo "=======================" >> $REPORT_FILE
-ausearch -k user_modify --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs -kuser_modify --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Executable Summary
 echo "EXECUTABLE SUMMARY" >> $REPORT_FILE
 echo "=================" >> $REPORT_FILE
-ausearch --start today --end now 2>/dev/null | aureport --executable --summary -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs --start today --end now 2>/dev/null | aureport --executable --summary -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Suspicious Command Executions
 echo "SUSPICIOUS COMMAND EXECUTIONS" >> $REPORT_FILE
 echo "============================" >> $REPORT_FILE
-ausearch -k data_exfiltration --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs -kdata_exfiltration --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # File Modification Events
 echo "CONFIG FILE MODIFICATION EVENTS" >> $REPORT_FILE
 echo "=============================" >> $REPORT_FILE
-ausearch -k sshd_config_modifications --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
-ausearch -k nginx_config --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
-ausearch -k docker_config --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
-ausearch -k application_config_changes --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
-ausearch -k security_tool_config --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
+ausearch --input-logs -ksshd_config_modifications --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs -knginx_config --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
+ausearch --input-logs -kdocker_config --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
+ausearch --input-logs -kapplication_config_changes --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
+ausearch --input-logs -ksecurity_tool_config --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
 echo "" >> $REPORT_FILE
 
 # Privilege Escalation
 echo "PRIVILEGE ESCALATION EVENTS" >> $REPORT_FILE
 echo "=========================" >> $REPORT_FILE
-ausearch -k privilege_escalation --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs -kprivilege_escalation --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Unauthorized Access Attempts
 echo "UNAUTHORIZED ACCESS ATTEMPTS" >> $REPORT_FILE
 echo "==========================" >> $REPORT_FILE
-ausearch -k unauthorized_access --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs -kunauthorized_access --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Binary Modifications
 echo "BINARY MODIFICATION EVENTS" >> $REPORT_FILE
 echo "=========================" >> $REPORT_FILE
-ausearch -k binary_modifications --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs -kbinary_modifications --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Docker Socket Access
 echo "DOCKER SOCKET ACCESS" >> $REPORT_FILE
 echo "===================" >> $REPORT_FILE
-ausearch -k docker_socket_access --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs -kdocker_socket_access --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Audit System Status
@@ -4149,8 +4178,17 @@ if [ "$INSTALL_DOCKER" = "true" ] && command -v docker >/dev/null 2>&1; then
 # /var/log). Vulnerability findings are reported in full (no secret material);
 # secret findings are reported as metadata only (type/file/line) so an admin
 # knows what to rotate and where to look, without the credential leaving the image.
+#
+# Mails only when something new turns up (see the end of the script); the full
+# report is written to $REPORT_DIR every day.
 
+# Nothing to scan without Docker
+command -v docker >/dev/null 2>&1 || exit 0
+
+export LC_ALL=C   # stable sort order for comm
 REPORT_DIR="/var/log/security/trivy"
+STATE_DIR="/var/lib/trivy-scan"
+STATE_FILE="${STATE_DIR}/findings"
 DATE=$(date +%Y-%m-%d)
 MAIL_RECIPIENT="${LOGWATCH_EMAIL:-root}"
 HOSTNAME=$(hostname)
@@ -4158,8 +4196,9 @@ TRIVYLOG="${REPORT_DIR}/trivy-${DATE}.log"
 REPORT_TMPL="${REPORT_DIR}/.report.tmpl"
 
 # Create report directory if it doesn't exist (restrict — reports may name sensitive paths)
-mkdir -p $REPORT_DIR
-chmod 750 $REPORT_DIR
+mkdir -p $REPORT_DIR $STATE_DIR
+chmod 750 $REPORT_DIR $STATE_DIR
+KEYS=$(mktemp)
 
 # Compact, mobile-friendly report template (one line per finding, no wide tables).
 # Trivy's default table output uses box-drawing chars and wide columns that mail clients
@@ -4183,6 +4222,8 @@ cat > "$REPORT_TMPL" << 'TMPL'
 {{ end }}{{- end }}
 TMPL
 
+trap 'rm -f "$REPORT_TMPL" "$KEYS"' EXIT
+
 # Update Trivy vulnerability database
 /usr/local/bin/trivy image --download-db-only > /dev/null 2>&1
 
@@ -4199,26 +4240,64 @@ if [ -f "$SKIP_FILES_CONF" ]; then
     done < "$SKIP_FILES_CONF"
 fi
 
+# Running images, each scanned once. A failing docker ps must not look like
+# "no findings", or the next successful run would re-mail everything as new.
+RUNNING=$(docker ps --format '{{.Image}}') || { echo "docker ps failed" >&2; exit 1; }
+IMAGES=$(printf '%s\n' "$RUNNING" | sort -u)
+
 # Start log file
 echo "===== Container Vulnerability Scan Report: $DATE =====" > $TRIVYLOG
 echo "Only findings with an available fix are listed (--ignore-unfixed)." >> $TRIVYLOG
 [ -n "$SKIPPED" ] && echo "Skipped files ($SKIP_FILES_CONF):$SKIPPED" >> $TRIVYLOG
 
-# Scan running containers (single scan per image, compact template output)
-CONTAINERS=$(docker ps --format "{{.Image}}")
-for IMAGE in $CONTAINERS; do
+# One key per finding: "<image without tag> <vulnerability ID> <package>". The tag is
+# dropped so a redeploy (new version, blue/green) does not turn old findings into new ones.
+for IMAGE in $IMAGES; do
+    [ -n "$IMAGE" ] || continue
+    REPO=$(printf '%s' "$IMAGE" | sed -E 's/@sha256:.*$//; s/:[^:/]+$//')
     echo "" >> $TRIVYLOG
-    /usr/local/bin/trivy image --no-progress --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed "${SKIP_ARGS[@]}" --format template --template "@$REPORT_TMPL" "$IMAGE" >> $TRIVYLOG 2>/dev/null
+    echo "##### $IMAGE" >> $TRIVYLOG
+    OUT=$(/usr/local/bin/trivy image --no-progress --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed "${SKIP_ARGS[@]}" --format template --template "@$REPORT_TMPL" "$IMAGE" 2>/dev/null)
+    RC=$?
+    if [ $RC -ne 0 ]; then
+        echo "[SCAN FAILED] trivy exit code $RC" >> $TRIVYLOG
+        echo "$REPO SCAN-FAILED -" >> "$KEYS"
+        continue
+    fi
+    printf '%s\n' "$OUT" >> $TRIVYLOG
+    # Vulnerability lines only; secret lines (after the SECRETS marker) carry no CVE ID
+    printf '%s\n' "$OUT" | awk -v r="$REPO" '
+        /^=====/ { s = 0 }
+        /SECRETS DETECTED/ { s = 1 }
+        !s && /^\[(HIGH|CRITICAL)\] / { print r, $2, $4 }' >> "$KEYS"
 done
-
-# Remove the template and restrict the report (defense in depth)
-rm -f "$REPORT_TMPL"
+sort -u -o "$KEYS" "$KEYS"
 chmod 640 $TRIVYLOG
 
-# Email report if findings present
-if grep -q -E "\[(HIGH|CRITICAL)\]" $TRIVYLOG; then
-    cat $TRIVYLOG | mail -s "⚠️ CONTAINER VULNERABILITIES: Found on $HOSTNAME" $MAIL_RECIPIENT
+# Mail only when something needs attention: a finding (or failed scan) that was not in the
+# last run, or any secret. Findings that stay or disappear do not trigger a mail.
+touch "$STATE_FILE"
+NEW=$(comm -23 "$KEYS" "$STATE_FILE")
+SECRETS=no
+grep -q 'SECRETS DETECTED' $TRIVYLOG && SECRETS=yes
+if [ -n "$NEW" ] || [ "$SECRETS" = yes ]; then
+    if [ "$SECRETS" = yes ]; then
+        SUBJECT="⚠️ CONTAINER SECRETS found on $HOSTNAME"
+    else
+        SUBJECT="⚠️ CONTAINER VULNERABILITIES: $(printf '%s\n' "$NEW" | wc -l) new on $HOSTNAME"
+    fi
+    {
+        if [ -n "$NEW" ]; then
+            echo "New since the last run (image, ID, package):"
+            printf '%s\n' "$NEW" | sed 's/^/  /'
+            echo ""
+        fi
+        cat $TRIVYLOG
+    } | cat -s | mail -s "$SUBJECT" $MAIL_RECIPIENT || exit 1
 fi
+# Only reached when no mail was needed or the mail went out; otherwise the
+# findings stay "new" and are mailed again on the next run.
+cp "$KEYS" "$STATE_FILE"
 
 # Cleanup old reports
 find $REPORT_DIR -name "trivy-*.log" -mtime +30 -delete
@@ -4307,14 +4386,15 @@ Output = mail
 MailTo = ${LOGWATCH_EMAIL:-root}
 Format = html
 Range = yesterday
-Detail = High
-Show_Empty_Sections = yes
+Detail = Med
+Show_Empty_Sections = no
 
 # Disable the default Service = All to avoid conflicts
 Service =
 
-# Use specific services instead of All to avoid configuration conflicts
-Service = zz-sys         # System Configuration
+# Use specific services instead of All to avoid configuration conflicts.
+# Not listed on purpose (static output or duplicates, ~15 KB/day each):
+# zz-sys (hardware summary), zz-network (ip addr dump), sendmail (postfix covers it)
 Service = sshd           # SSH login attempts and success/fail
 Service = secure         # PAM messages, login denials
 Service = sudo           # Use of sudo, privilege escalations
@@ -4326,10 +4406,8 @@ Service = dpkg           # Package installs/removals (Debian/Ubuntu)
 Service = systemd        # System boot/service issues
 Service = kernel         # Kernel messages (OOM, panics, etc.)
 Service = postfix        # Mail logs (if you use local mail for cron/system)
-Service = sendmail       # Might be triggered by postfix wrapper
 Service = iptables       # Firewall logs (if you log dropped packets)
 Service = zz-lm_sensors  # Hardware Sensors
-Service = zz-network     # Network Interface
 Service = zz-disk_space  # Disk usage overview
 Service = clamav         # Virus scan results
 Service = clam-update    # Virus scan updates
@@ -4347,7 +4425,29 @@ Logfile =
 Logfile = none
 *JournalCtl = "--unit='postfix' --unit='postfix@-'"
 *RemoveHeaders = Yes
-Detail = High
+EOF
+
+# Filter routine automation out of the sudo and secure-log sections.
+# CAUTION: a local service file that contains any "*" command REPLACES all
+# "*" commands of /usr/share/logwatch/default.conf/services/<name>.conf, so
+# the default ones (*OnlyService, *RemoveHeaders) must be repeated here.
+# - veeam-usr-vspc-agent: Veeam backup agent, ~1,500 sudo lines/day (~175 KB of each report)
+# - internal-sftp: file transfers by the deploy user (also filtered in logcheck)
+cat > /etc/logwatch/conf/services/sudo.conf << 'EOF'
+*OnlyService = sudo
+*RemoveHeaders
+*Remove = veeam-usr-vspc-agent
+EOF
+# (the packaged secure.conf has no "*" commands, nothing to repeat)
+cat > /etc/logwatch/conf/services/secure.conf << 'EOF'
+*Remove = veeam-usr-vspc-agent
+*Remove = internal-sftp
+EOF
+# Kernel: "other kernel messages" are listed from detail 5 on, which dumps
+# the whole boot log after every reboot. Warnings, errors and OOM kills are
+# always shown.
+cat > /etc/logwatch/conf/services/kernel.conf << 'EOF'
+Detail = 4
 EOF
 
 # Create custom sendmail/postfix logwatch script for server-specific analysis
@@ -4513,7 +4613,7 @@ if (@critical_events) {
 }
 
 # Recommendations for servers
-if ($security_events{"Unauthorized Relay Attempts"} > 0) {
+if (($security_events{"Unauthorized Relay Attempts"} // 0) > 0) {
     print "⚠️  SECURITY RECOMMENDATIONS:\n";
     print "-" x 32 . "\n";
     print "• Review relay restrictions in postfix configuration\n";
@@ -4543,7 +4643,7 @@ rm -f /etc/cron.daily/00logwatch
 cat > /etc/cron.d/logwatch << EOF
 # Daily logwatch execution for server
 # Run at 6:00 AM daily to analyze previous day's logs
-0 6 * * * root /usr/sbin/logwatch --output mail --format html --range yesterday --detail high
+0 6 * * * root /usr/sbin/logwatch --output mail --format html --range yesterday --detail med
 EOF
 
 # Create custom service for lm_sensors
@@ -5383,7 +5483,13 @@ if systemctl is-active --quiet systemd-resolved; then
 DNS=127.0.0.1
 FallbackDNS=8.8.8.8 1.1.1.1
 DNSSEC=yes
-DNSOverTLS=opportunistic
+# No DoT on this hop: unbound on 127.0.0.1 has no TLS listener and does the DoT
+# upstream itself (forward-dot.conf). "opportunistic" made resolved retry TLS,
+# fail and log feature-set downgrades all day.
+DNSOverTLS=no
+# Not needed on a server; LLMNR also sends multicast queries that UFW blocks
+LLMNR=no
+MulticastDNS=no
 Cache=yes
 EOF
   systemctl restart systemd-resolved
@@ -6554,6 +6660,8 @@ if command -v aa-status >/dev/null 2>&1; then
   /proc/*/mounts r,
   /proc/*/stat r,
   /proc/sys/crypto/fips_enabled r,
+  # sshd lowers its own OOM score at startup (OOMScoreAdjust / oom_score_adj)
+  owner @{PROC}/@{pid}/oom_score_adj rw,
 
   /run/sshd.pid w,
   /run/systemd/sessions/* rw,
@@ -6572,12 +6680,15 @@ if command -v aa-status >/dev/null 2>&1; then
   /var/log/wtmp rw,
 
   # Site-specific additions and overrides. See local/README for details.
-  #include <local/usr.sbin.sshd>
+  # ("if exists": a missing local file must not make the whole profile, and
+  # with it apparmor.service, fail to load)
+  include if exists <local/usr.sbin.sshd>
 }
 EOF
 
-    # Create nginx AppArmor profile for web servers
-    if [ "$DEPLOYMENT_MODE" != "docker" ]; then
+    # Create nginx AppArmor profile for web servers - only where nginx is
+    # installed on the host; a profile for a missing binary is pointless.
+    if [ "$DEPLOYMENT_MODE" != "docker" ] && [ -x /usr/sbin/nginx ]; then
         cat > /etc/apparmor.d/usr.sbin.nginx << 'EOF'
 #include <tunables/global>
 
@@ -6606,11 +6717,14 @@ EOF
   /usr/share/nginx/** r,
 
   # Site-specific additions and overrides. See local/README for details.
-  #include <local/usr.sbin.nginx>
+  include if exists <local/usr.sbin.nginx>
 }
 EOF
-        apparmor_parser -r /etc/apparmor.d/usr.sbin.nginx 2>/dev/null || echo "Nginx AppArmor profile created"
-        echo "✅ Nginx AppArmor profile created"
+        if apparmor_parser -r /etc/apparmor.d/usr.sbin.nginx; then
+            echo "✅ Nginx AppArmor profile created and loaded"
+        else
+            echo "⚠️ Nginx AppArmor profile failed to load - check: apparmor_parser -r /etc/apparmor.d/usr.sbin.nginx"
+        fi
     fi
     
     # Load and enforce the SSH profile
@@ -6625,8 +6739,11 @@ EOF
 # Format: standard AppArmor rules
 EOF
     
-    apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd 2>/dev/null || echo "AppArmor SSH profile created (will be active after sshd restart)"
-    echo "✅ AppArmor SSH profile created and loaded"
+    if apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd; then
+        echo "✅ AppArmor SSH profile created and loaded"
+    else
+        echo "⚠️ AppArmor SSH profile failed to load - check: apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd"
+    fi
 else
     echo "⚠️ AppArmor not available or not installed"
 fi
@@ -7046,19 +7163,18 @@ if [ -f /var/run/reboot-required ]; then
     # Send wall message to all logged in users
     echo "SYSTEM NOTICE: Unattended upgrade requires reboot. System will reboot at 04:00 AM." | wall
     
-    # Log to syslog
+    # Log to syslog (no mail: a planned reboot is not an alert; Logwatch shows it)
     logger -p daemon.warning "Server scheduled for automatic reboot due to unattended upgrade"
-    
-    # Send email notification
-    echo "Server $(hostname) is scheduled for automatic reboot at 04:00 AM due to security updates requiring reboot." | \
-        mail -s "SERVER NOTICE: Scheduled Reboot Tonight" {{LOGWATCH_EMAIL}}
 fi
 EOF
 
 chmod +x /usr/local/bin/unattended-reboot-warning.sh
 
-# Add to daily cron to warn users
-echo "0 20 * * * root /usr/local/bin/unattended-reboot-warning.sh" >> /etc/crontab
+# Daily at 20:00. Own cron.d file: re-running the setup must not append a
+# duplicate line to /etc/crontab (older versions did); remove that old line.
+sed -i '\#/usr/local/bin/unattended-reboot-warning.sh$#d' /etc/crontab
+echo "0 20 * * * root /usr/local/bin/unattended-reboot-warning.sh" > /etc/cron.d/unattended-reboot-warning
+chmod 644 /etc/cron.d/unattended-reboot-warning
 
 echo "✅ Unattended reboot warning system configured"
 
@@ -7833,8 +7949,10 @@ MARIADB_SEC_EOF
                     MYSQL_ROOT_PASSWORD=$(openssl rand -base64 32)
 
                     mysql <<MYSQL_SECURE_EOF
--- Set root password
-ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_ROOT_PASSWORD}';
+-- Set root password, but keep unix_socket auth: Debian's debian-start (run on every
+-- MariaDB start: mariadb-upgrade, table checks) logs in as root via
+-- /etc/mysql/debian.cnf without a password and fails with "Access denied" otherwise.
+ALTER USER 'root'@'localhost' IDENTIFIED VIA unix_socket OR mysql_native_password USING PASSWORD('${MYSQL_ROOT_PASSWORD}');
 
 -- Remove anonymous users
 DELETE FROM mysql.user WHERE User='';
@@ -8291,15 +8409,24 @@ PGPASS_EOF
                     cat > /usr/local/bin/postgresql-backup << 'PGSQL_BACKUP_EOF'
 #!/bin/bash
 # PostgreSQL backup script
+#
+# Runs from /etc/cron.daily: anything on stdout/stderr becomes a cron mail, so
+# routine lines go to the log file only and only errors are printed (err).
 
 set -Eeuo pipefail
 
 BACKUP_DIR="/var/backups/postgresql"
 DATE=$(date +%Y%m%d_%H%M%S)
 LOG_FILE="/var/log/postgresql-backup.log"
+FAILED=0
 
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+err() {
+    log "$1"
+    echo "postgresql-backup: $1" >&2
 }
 
 # Check if PostgreSQL is running
@@ -8316,8 +8443,12 @@ fi
 
 log "Starting PostgreSQL backup..."
 
-# Get list of databases
-DATABASES=$(sudo -u postgres psql -t -c "SELECT datname FROM pg_database WHERE datistemplate = false AND datname != 'postgres';" | grep -v '^$' || true)
+# Get list of databases (-A: no padding, so no empty-line filter is needed). A psql
+# failure must not look like "no databases" - report it and stop.
+if ! DATABASES=$(sudo -u postgres psql -Atq -c "SELECT datname FROM pg_database WHERE datistemplate = false AND datname != 'postgres';" 2>&1); then
+    err "❌ Could not list databases: $DATABASES"
+    exit 1
+fi
 
 # Check if there are databases to backup
 if [ -z "$DATABASES" ]; then
@@ -8325,14 +8456,15 @@ if [ -z "$DATABASES" ]; then
     exit 0
 fi
 
-# Backup each database
+# Backup each database (pipefail: a pg_dump failure fails the pipeline, not just gzip)
 for DB in $DATABASES; do
     BACKUP_FILE="${BACKUP_DIR}/${DB}_${DATE}.sql.gz"
     if sudo -u postgres pg_dump "$DB" | gzip > "$BACKUP_FILE"; then
-        log "✅ Backup completed: $BACKUP_FILE"
-        log "   Size: $(du -h "$BACKUP_FILE" | cut -f1)"
+        log "✅ Backup completed: $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1))"
     else
-        log "❌ Backup failed for database: $DB"
+        err "❌ Backup failed for database: $DB"
+        rm -f "$BACKUP_FILE"
+        FAILED=1
     fi
 done
 
@@ -8340,6 +8472,10 @@ done
 find "$BACKUP_DIR" -name "*.sql.gz" -mtime +7 -delete
 log "Old backups cleaned (keeping 7 days)"
 
+if [ "$FAILED" -ne 0 ]; then
+    err "Backup finished with errors"
+    exit 1
+fi
 log "Backup completed successfully"
 PGSQL_BACKUP_EOF
 
@@ -8653,9 +8789,27 @@ if [ -f /tmp/audit.rules.full ]; then
         fi
     done < <(grep '^-w ' /etc/audit/rules.d/audit.rules)
 
-    # Reload audit rules
-    augenrules --load || log_message "⚠️  Some audit rules may have failed to load (non-critical)"
+    # Reload audit rules. With "-i" in the rules auditctl keeps going past a
+    # bad line and still exits 0, so check its output for errors instead.
+    AUDIT_LOAD_OUT=$(augenrules --load 2>&1)
+    AUDIT_LOAD_ERRORS=$(echo "$AUDIT_LOAD_OUT" | grep -i 'error')
+    if [ -n "$AUDIT_LOAD_ERRORS" ]; then
+        log_message "⚠️  Some audit rules failed to load (the others are active):"
+        echo "$AUDIT_LOAD_ERRORS" | while read -r line; do log_message "   $line"; done
+    fi
     docker_systemctl restart auditd || log_message "⚠️  Auditd restart failed (non-critical)"
+
+    # Verify auditd is really running with rules loaded
+    if [ "$DOCKER_MODE" = "false" ] && command -v auditctl >/dev/null 2>&1; then
+        AUDIT_STATUS=$(auditctl -s 2>/dev/null)
+        AUDIT_PID=$(echo "$AUDIT_STATUS" | awk '$1 == "pid" {print $2}')
+        AUDIT_RULES=$(auditctl -l 2>/dev/null | grep -vc '^No rules')
+        if echo "$AUDIT_STATUS" | grep -q '^enabled 1' && [ -n "$AUDIT_PID" ] && [ "$AUDIT_PID" != "0" ]; then
+            log_message "✅ auditd running (pid $AUDIT_PID) with $AUDIT_RULES rules loaded"
+        else
+            log_message "❌ auditd is NOT running or not enabled - check: systemctl status auditd audit-rules; auditctl -s"
+        fi
+    fi
 
     log_message "✅ Full audit rules deployed"
     rm -f /tmp/audit.rules.full

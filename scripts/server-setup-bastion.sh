@@ -888,6 +888,13 @@ ufw allow out 443/tcp comment "HTTPS updates"
 # Allow NTP time synchronization (critical for logs and TLS)
 ufw allow out 123/udp comment "NTP time sync"
 
+# Allow DHCP lease renewal (the public address is DHCP-assigned; with default-deny
+# outgoing the unicast renewals to the DHCP server are blocked)
+PUB_IF=$(ip route show default | awk '{print $5; exit}')
+if [ -n "$PUB_IF" ]; then
+    ufw allow out on "$PUB_IF" proto udp from any port 68 to any port 67 comment "DHCP lease renewal"
+fi
+
 # Enable NTP synchronization
 systemctl enable --now systemd-timesyncd 2>/dev/null || true
 
@@ -1359,6 +1366,10 @@ if [ "$INSTALL_MALDET" = true ]; then
             return 0  # Don't exit the entire script, just return from this section
         fi
 
+        # install.sh enables maldet.service (inotify monitor mode). Monitor mode is
+        # never configured here - only scheduled scans - so the unit only fails at boot.
+        systemctl disable --now maldet.service 2>/dev/null || true
+
         # Create symlink for easy access
         ln -sf /usr/local/maldetect/maldet /usr/local/bin/maldet
 
@@ -1705,6 +1716,19 @@ EOF
         echo "⚠️ Unbound DNS disabled due to configuration issues"
         echo "   System will use default DNS resolver"
     fi
+fi
+
+# systemd-resolved: no LLMNR/mDNS on a bastion. LLMNR sends multicast queries
+# (udp 5355) that the default-deny outbound UFW policy blocks and logs.
+if systemctl is-active --quiet systemd-resolved; then
+    mkdir -p /etc/systemd/resolved.conf.d
+    cat > /etc/systemd/resolved.conf.d/no-llmnr.conf << 'EOF'
+[Resolve]
+LLMNR=no
+MulticastDNS=no
+EOF
+    systemctl restart systemd-resolved
+    echo "✅ systemd-resolved: LLMNR and mDNS disabled"
 fi
 
 # Cleanup
@@ -2320,8 +2344,11 @@ EOF
         
         chmod +x /usr/local/bin/log-sensors
         
-        # Add sensor logging to cron (every 10 minutes)
-        echo "*/10 * * * * root /usr/local/bin/log-sensors" >> /etc/crontab
+        # Sensor logging every 10 minutes. Own cron.d file: re-running the setup must
+        # not append a duplicate line to /etc/crontab (older versions did); remove it.
+        sed -i '\#/usr/local/bin/log-sensors$#d' /etc/crontab
+        echo "*/10 * * * * root /usr/local/bin/log-sensors" > /etc/cron.d/log-sensors
+        chmod 644 /etc/cron.d/log-sensors
         
         # Update logwatch configuration to include sensors
         if [ -f /etc/logwatch/conf/logwatch.conf ]; then
@@ -3173,6 +3200,12 @@ cat > /etc/aide/aide.conf.d/99-bastion-exclusions << 'EOF'
 !/var/backups
 !/var/spool/postfix/(private|public|dev)
 
+# Timestamp and state files rewritten every day by timers, apt and the scanners
+# (mostly mtime-only changes, no content change)
+!/var/lib/systemd/timers
+!/var/lib/apt/periodic
+!/var/lib/polyserver/chkrootkit
+
 # Network and removable mounts
 !/mnt
 !/media
@@ -3298,6 +3331,10 @@ cat > /etc/audit/rules.d/bastion-audit.rules << EOF
 ## First rule - delete all existing rules
 -D
 
+## Continue past a failing rule (e.g. a watch on a path missing on this host)
+## instead of aborting the whole load; auditd would otherwise not start at all
+-i
+
 ## Buffer size - moderate for bastion host
 -b 8192
 
@@ -3333,7 +3370,10 @@ cat > /etc/audit/rules.d/bastion-audit.rules << EOF
 -a always,exit -F arch=b64 -S execve -F auid>=1000 -F auid!=unset -k user_commands
 
 ## === Privilege Escalation Syscalls (64-bit only, no b32 for compatibility) ===
--a always,exit -F arch=b64 -S setuid -S setgid -S setresuid -S setresgid -k privilege_escalation
+## Only calls made in a user's login session (sudo, su, anything a user started).
+## Without the auid filter, daemons dropping privileges (atop, netdata's ndsudo)
+## produced ~50k events a day and buried the user activity.
+-a always,exit -F arch=b64 -S setuid -S setgid -S setresuid -S setresgid -F auid>=1000 -F auid!=unset -k privilege_escalation
 
 ## === Kernel Module Loading ===
 -w /sbin/insmod -p x -k module_insertion
@@ -3862,16 +3902,16 @@ fi
 cat > /etc/rsyslog.d/bastion-logging.conf << EOF
 # Bastion Host Enhanced Logging Configuration
 
-# Log all authentication events separately
-auth,authpriv.*                         /var/log/auth.log
+# auth,authpriv.* already goes to /var/log/auth.log via /etc/rsyslog.conf;
+# a second rule here would write every auth line twice (and halve the
+# effective fail2ban maxretry).
 
-# Log all SSH events to separate file
-if \$programname == 'sshd' then /var/log/ssh.log
-& stop
+# Copy SSH events to a separate file (Debian 13 logs sessions as sshd-session).
+# No "& stop": the lines must still reach auth.log for logcheck/Logwatch.
+if \$programname startswith 'sshd' then /var/log/ssh.log
 
-# Log all sudo events
+# Copy sudo events to a separate file (no "& stop", same reason)
 if \$programname == 'sudo' then /var/log/sudo.log
-& stop
 
 # Log all audit events
 if \$programname == 'auditd' then /var/log/audit/audit.log
@@ -4418,14 +4458,15 @@ Output = mail
 MailTo = $LOGWATCH_EMAIL
 Format = html
 Range = yesterday
-Detail = High
-Show_Empty_Sections = yes
+Detail = Med
+Show_Empty_Sections = no
 
 # Disable the default Service = All to avoid conflicts
-Service = 
+Service =
 
-# Use specific services for bastion monitoring
-Service = zz-sys         # System Configuration
+# Use specific services for bastion monitoring.
+# Not listed on purpose (static output or duplicates): zz-sys (hardware
+# summary), zz-network (ip addr dump), zz-lm_sensors, sendmail (postfix covers it)
 Service = sshd           # SSH login attempts and success/fail
 Service = secure         # PAM messages, login denials
 Service = sudo           # Use of sudo, privilege escalations
@@ -4437,10 +4478,7 @@ Service = dpkg           # Package installs/removals (Debian/Ubuntu)
 Service = systemd        # System boot/service issues
 Service = kernel         # Kernel messages (OOM, panics, etc.)
 Service = postfix        # Mail logs (if you use local mail for cron/system)
-Service = sendmail       # Might be triggered by postfix wrapper
 Service = iptables       # Firewall logs (if you log dropped packets)
-Service = zz-lm_sensors  # Hardware Sensors
-Service = zz-network     # Network Interface
 Service = zz-disk_space  # Disk usage overview
 Service = clamav         # Virus scan results
 Service = clam-update    # Virus scan updates
@@ -4458,7 +4496,27 @@ Logfile =
 Logfile = none
 *JournalCtl = "--unit='postfix' --unit='postfix@-'"
 *RemoveHeaders = Yes
-Detail = High
+EOF
+
+# Filter routine noise. Pre-auth timeouts are scanners on the public port and
+# already handled by fail2ban; internal-sftp is file transfers.
+# CAUTION: a local service file that contains any "*" command REPLACES all
+# "*" commands of /usr/share/logwatch/default.conf/services/<name>.conf, so
+# the default ones (*OnlyService, *RemoveHeaders) must be repeated here.
+cat > /etc/logwatch/conf/services/sshd.conf << 'EOF'
+*OnlyService = (sshd|sshd-session)
+*RemoveHeaders
+*Remove = Timeout before authentication
+EOF
+# (the packaged secure.conf has no "*" commands, nothing to repeat)
+cat > /etc/logwatch/conf/services/secure.conf << 'EOF'
+*Remove = internal-sftp
+EOF
+# Kernel: "other kernel messages" are listed from detail 5 on, which dumps
+# the whole boot log after every reboot. Warnings, errors and OOM kills are
+# always shown.
+cat > /etc/logwatch/conf/services/kernel.conf << 'EOF'
+Detail = 4
 EOF
 
 # Create custom sendmail/postfix logwatch script for bastion-specific analysis
@@ -4654,7 +4712,7 @@ rm -f /etc/cron.daily/00logwatch
 cat > /etc/cron.d/logwatch << EOF
 # Daily logwatch execution for bastion host
 # Run at 6:00 AM daily to analyze previous day's logs
-0 6 * * * root /usr/sbin/logwatch --output mail --format html --range yesterday --detail high
+0 6 * * * root /usr/sbin/logwatch --output mail --format html --range yesterday --detail med
 EOF
 
 # Create logwatch test script for troubleshooting
@@ -4736,10 +4794,10 @@ fi
 echo ""
 
 echo "6. Testing full logwatch email (for yesterday):"
-echo "Running: logwatch --output mail --format html --range yesterday --detail high"
+echo "Running: logwatch --output mail --format html --range yesterday --detail med"
 echo "This will send an actual email if mail is configured..."
 read -p "Press Enter to continue or Ctrl+C to cancel: "
-logwatch --output mail --format html --range yesterday --detail high
+logwatch --output mail --format html --range yesterday --detail med
 echo "✅ Logwatch email command executed"
 echo ""
 
@@ -4810,7 +4868,7 @@ if [ \$DISK_USAGE -gt 80 ]; then
 fi
 
 # Check for new audit events
-AUDIT_ALERTS=\$(ausearch -ts recent -m avc,user_auth,user_acct,user_mgmt,user_chauthtok,user_role_change,role_assign,role_remove 2>/dev/null | wc -l)
+AUDIT_ALERTS=\$(ausearch --input-logs -ts recent -m avc,user_auth,user_acct,user_mgmt,user_chauthtok,user_role_change,role_assign,role_remove 2>/dev/null | wc -l)
 if [ \$AUDIT_ALERTS -gt 0 ]; then
     log_message "INFO: \$AUDIT_ALERTS new audit events in the last hour"
 fi
@@ -4879,26 +4937,53 @@ else
 fi
 echo "" >> \$REPORT_FILE
 
-echo "FIREWALL STATUS & STATISTICS" >> \$REPORT_FILE
-echo "============================" >> \$REPORT_FILE
-ufw status numbered >> \$REPORT_FILE 2>/dev/null || echo "UFW status unavailable" >> \$REPORT_FILE
+echo "FIREWALL RULES" >> \$REPORT_FILE
+echo "==============" >> \$REPORT_FILE
+# Full rule dump only when the rules changed since the last mailed report.
+# Compared without rule numbers and without fail2ban's temporary bans,
+# which change daily and would otherwise trigger the dump every day.
+UFW_STATE_DIR=/var/lib/bastion-report
+UFW_LAST="\$UFW_STATE_DIR/ufw-status.last"
+mkdir -p "\$UFW_STATE_DIR"
+UFW_NUMBERED=\$(ufw status numbered 2>/dev/null)
+ufw status 2>/dev/null | grep -v 'by Fail2Ban' > "\$UFW_LAST.new"
+F2B_RULES=\$(echo "\$UFW_NUMBERED" | grep -c 'by Fail2Ban')
+if [ -z "\$UFW_NUMBERED" ]; then
+    echo "UFW status unavailable" >> \$REPORT_FILE
+    rm -f "\$UFW_LAST.new"
+elif [ -f "\$UFW_LAST" ] && cmp -s "\$UFW_LAST" "\$UFW_LAST.new"; then
+    echo "\$(head -1 "\$UFW_LAST.new"), rules unchanged since last report (\$(echo "\$UFW_NUMBERED" | grep -c '^\[') rules, \$F2B_RULES of them fail2ban bans)" >> \$REPORT_FILE
+    rm -f "\$UFW_LAST.new"
+else
+    if [ -f "\$UFW_LAST" ]; then
+        echo "⚠️  Rules CHANGED since last report ('<' removed, '>' added):" >> \$REPORT_FILE
+        diff "\$UFW_LAST" "\$UFW_LAST.new" | grep '^[<>]' >> \$REPORT_FILE
+        echo "" >> \$REPORT_FILE
+    fi
+    echo "\$UFW_NUMBERED" >> \$REPORT_FILE
+    # \$UFW_LAST.new is promoted after the mail was sent (see end of script)
+fi
 echo "" >> \$REPORT_FILE
 
 echo "UFW BLOCKED CONNECTIONS (Yesterday)" >> \$REPORT_FILE
 echo "====================================" >> \$REPORT_FILE
 # Generate UFW block statistics from rotated kern.log
 # Yesterday's kern.log is in .log.1 after midnight rotation
-UFW_BLOCKS=\$(grep "UFW BLOCK" /var/log/kern.log.1 2>/dev/null | wc -l)
-echo "Total blocked connections: \$UFW_BLOCKS" >> \$REPORT_FILE
+# Inbound only: outbound blocks (IN= empty) are this host's own traffic
+inbound_blocks() { grep "UFW BLOCK" /var/log/kern.log.1 2>/dev/null | grep -v " IN= "; }
+UFW_BLOCKS=\$(inbound_blocks | wc -l)
+UFW_OUT_BLOCKS=\$(grep "UFW BLOCK" /var/log/kern.log.1 2>/dev/null | grep -c " IN= ")
+echo "Total blocked inbound connections: \$UFW_BLOCKS" >> \$REPORT_FILE
+echo "Blocked outbound connections from this host: \$UFW_OUT_BLOCKS" >> \$REPORT_FILE
 if [ \$UFW_BLOCKS -gt 0 ]; then
     echo "" >> \$REPORT_FILE
     echo "Top 10 blocked source IPs:" >> \$REPORT_FILE
-    grep "UFW BLOCK" /var/log/kern.log.1 2>/dev/null | \
-        grep -o "SRC=[0-9.]*" | cut -d= -f2 | sort | uniq -c | sort -nr | head -10 | \
+    inbound_blocks | \
+        grep -o "SRC=[^ ]*" | cut -d= -f2 | sort | uniq -c | sort -nr | head -10 | \
         awk '{printf "  %s attempts from %s\\n", \$1, \$2}' >> \$REPORT_FILE 2>/dev/null || true
     echo "" >> \$REPORT_FILE
     echo "Top 10 blocked destination ports (with service identification):" >> \$REPORT_FILE
-    grep "UFW BLOCK" /var/log/kern.log.1 2>/dev/null | \
+    inbound_blocks | \
         grep -o "DPT=[0-9]*" | cut -d= -f2 | sort | uniq -c | sort -nr | head -10 | \
         while read count port; do
             case "\$port" in
@@ -4912,6 +4997,9 @@ if [ \$UFW_BLOCKS -gt 0 ]; then
                 5060) service="SIP";;
                 5432) service="PostgreSQL";;
                 5555) service="Android Debug";;
+                5355) service="LLMNR";;
+                5353) service="mDNS";;
+                67|68) service="DHCP";;
                 8000|8080|8081|8088|8443|8728|8888) service="HTTP-alt/Web";;
                 9100) service="Printer/JetDirect";;
                 *) service="Unknown";;
@@ -4948,48 +5036,49 @@ echo "" >> \$REPORT_FILE
 echo "AUDIT SUMMARY" >> \$REPORT_FILE
 echo "=============" >> \$REPORT_FILE
 echo "" >> \$REPORT_FILE
-# Use proper date format for ausearch: MM/DD/YYYY HH:MM:SS (time required!)
-# Get yesterday's date range (00:00:00 to 23:59:59)
-YESTERDAY_START=\$(date -d "yesterday" "+%m/%d/%Y 00:00:00")
-YESTERDAY_END=\$(date -d "yesterday" "+%m/%d/%Y 23:59:59")
-
-# Check if auditd is running
+# Range yesterday 00:00:00 up to today 00:00:00. Date and time must be two
+# separate arguments, the date in the locale's %x format (the old code passed
+# "MM/DD/YYYY HH:MM:SS" as ONE argument, which ausearch rejects, so this
+# section was always empty). "-te today" alone would mean "now".
+AUDIT_RANGE=(-ts "\$(date -d yesterday +%x)" 00:00:00 -te "\$(date +%x)" 00:00:00)
+AUDIT_OK=false
 if ! systemctl is-active --quiet auditd; then
     echo "⚠️  auditd service is not running - no audit data available" >> \$REPORT_FILE
 elif ! command -v ausearch >/dev/null 2>&1 || ! command -v aureport >/dev/null 2>&1; then
     echo "⚠️  Audit tools not installed" >> \$REPORT_FILE
 else
-    # Try to get audit summary with better error handling
-    AUDIT_TEMP=\$(mktemp)
-    if ausearch --start "\$YESTERDAY_START" --end "\$YESTERDAY_END" > "\$AUDIT_TEMP" 2>/dev/null && [ -s "\$AUDIT_TEMP" ]; then
-        aureport --summary -i < "\$AUDIT_TEMP" >> \$REPORT_FILE 2>/dev/null || {
-            echo "Audit events found but report generation failed" >> \$REPORT_FILE
-            echo "Event count: \$(wc -l < "\$AUDIT_TEMP")" >> \$REPORT_FILE
-        }
+    AUDIT_OK=true
+    # --input-logs: from cron, aureport/ausearch would read the empty stdin
+    # instead of /var/log/audit and report 0 events
+    AUDIT_SUMMARY=\$(aureport --input-logs --summary -i "\${AUDIT_RANGE[@]}" 2>&1)
+    if [ -n "\$AUDIT_SUMMARY" ]; then
+        echo "\$AUDIT_SUMMARY" >> \$REPORT_FILE
     else
-        echo "No audit events found for yesterday (\$YESTERDAY_START to \$YESTERDAY_END)" >> \$REPORT_FILE
-        echo "Note: Auditd may have been recently installed or logs rotated" >> \$REPORT_FILE
+        echo "No audit events found for yesterday" >> \$REPORT_FILE
     fi
-    rm -f "\$AUDIT_TEMP"
 fi
 echo "" >> \$REPORT_FILE
 
 echo "CRITICAL SECURITY EVENTS" >> \$REPORT_FILE
 echo "========================" >> \$REPORT_FILE
-if systemctl is-active --quiet auditd && command -v ausearch >/dev/null 2>&1; then
-    EVENTS_FOUND=0
+if [ "\$AUDIT_OK" = true ]; then
+    # Test the captured output, not the exit code of a pipe (tail always succeeds)
+    PRIV_EXES=\$(ausearch --input-logs -k privilege_escalation "\${AUDIT_RANGE[@]}" --raw 2>/dev/null | aureport -x --summary -i 2>/dev/null | grep -E '^[[:space:]]*[0-9]+ ')
+    USER_CMDS=\$(ausearch --input-logs -k user_commands "\${AUDIT_RANGE[@]}" --raw 2>/dev/null | aureport -x -i 2>/dev/null | grep -E '^[0-9]+\. ' | tail -20)
 
-    # Check for privilege escalation events
-    if ausearch -k privilege_escalation --start "\$YESTERDAY_START" --end "\$YESTERDAY_END" >> \$REPORT_FILE 2>/dev/null; then
-        EVENTS_FOUND=1
+    if [ -n "\$PRIV_EXES" ]; then
+        echo "setuid/setgid calls (key privilege_escalation) by executable:" >> \$REPORT_FILE
+        echo "  count  executable" >> \$REPORT_FILE
+        echo "\$PRIV_EXES" | head -15 >> \$REPORT_FILE
+        echo "" >> \$REPORT_FILE
     fi
-
-    # Check for user command events (last 20)
-    if ausearch -k user_commands --start "\$YESTERDAY_START" --end "\$YESTERDAY_END" 2>/dev/null | tail -20 >> \$REPORT_FILE; then
-        EVENTS_FOUND=1
+    if [ -n "\$USER_CMDS" ]; then
+        echo "Last 20 commands by logged-in users (key user_commands):" >> \$REPORT_FILE
+        echo "  #. date time exe term host auid event" >> \$REPORT_FILE
+        echo "\$USER_CMDS" >> \$REPORT_FILE
+        echo "" >> \$REPORT_FILE
     fi
-
-    if [ \$EVENTS_FOUND -eq 0 ]; then
+    if [ -z "\$PRIV_EXES" ] && [ -z "\$USER_CMDS" ]; then
         echo "No critical security events found for yesterday" >> \$REPORT_FILE
     fi
 else
@@ -4997,8 +5086,12 @@ else
 fi
 echo "" >> \$REPORT_FILE
 
-# Email the report
-cat \$REPORT_FILE | mail -s "📊 BASTION [\$HOSTNAME]: Daily Security Report" root
+# Email the report; remember the firewall rules only if the mail went out,
+# so a rule change is reported again when the mail fails
+if mail -s "📊 BASTION [\$HOSTNAME]: Daily Security Report" root < \$REPORT_FILE; then
+    [ -f "\$UFW_LAST.new" ] && mv -f "\$UFW_LAST.new" "\$UFW_LAST"
+fi
+rm -f "\$UFW_LAST.new"
 
 # Cleanup
 rm -f \$REPORT_FILE
@@ -6216,19 +6309,18 @@ if [ -f /var/run/reboot-required ]; then
     # Send wall message to all logged in users
     echo "SYSTEM NOTICE: Unattended upgrade requires reboot. System will reboot at 04:00 AM." | wall
     
-    # Log to syslog
+    # Log to syslog (no mail: a planned reboot is not an alert; Logwatch shows it)
     logger -p daemon.warning "Bastion host scheduled for automatic reboot due to unattended upgrade"
-    
-    # Send email notification
-    echo "Bastion host \$(hostname) is scheduled for automatic reboot at 04:00 AM due to security updates requiring reboot." | \
-        mail -s "\$(hostname) NOTICE: Scheduled Reboot Tonight" root
 fi
 EOF
-    
+
     chmod +x /usr/local/bin/unattended-reboot-warning.sh
-    
-    # Add to daily cron to warn users
-    echo "0 20 * * * root /usr/local/bin/unattended-reboot-warning.sh" >> /etc/crontab
+
+    # Daily at 20:00. Own cron.d file: re-running the setup must not append a
+    # duplicate line to /etc/crontab (older versions did); remove that old line.
+    sed -i '\#/usr/local/bin/unattended-reboot-warning.sh$#d' /etc/crontab
+    echo "0 20 * * * root /usr/local/bin/unattended-reboot-warning.sh" > /etc/cron.d/unattended-reboot-warning
+    chmod 644 /etc/cron.d/unattended-reboot-warning
     
     echo "✅ Unattended reboot warning system configured"
 fi

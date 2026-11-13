@@ -4,6 +4,10 @@
 ## First rule - delete all
 -D
 
+## Continue past a failing rule (e.g. a watch on a path missing on this host)
+## instead of aborting the whole load; auditd would otherwise not start at all
+-i
+
 ## Increase the buffers to survive stress events
 ## Adjust buffer size based on system activity
 -b 8192
@@ -108,9 +112,10 @@
 ## Monitor Docker socket for access
 -w /var/run/docker.sock -p rwa -k docker_socket_access
 
-## Monitor for privilege escalation
--a always,exit -F arch=b64 -S setuid -S setgid -F exit=0 -k privilege_escalation
--a always,exit -F arch=b32 -S setuid -S setgid -F exit=0 -k privilege_escalation
+## Monitor for privilege escalation (only in user login sessions: without the auid
+## filter, daemons dropping privileges - atop, netdata's ndsudo - flood the log)
+-a always,exit -F arch=b64 -S setuid -S setgid -F exit=0 -F auid>=1000 -F auid!=unset -k privilege_escalation
+-a always,exit -F arch=b32 -S setuid -S setgid -F exit=0 -F auid>=1000 -F auid!=unset -k privilege_escalation
 
 ## Detect unauthorized attempts to access restricted directories
 ## (auid!=unset: daemons and timers such as AIDE have auid 4294967295, which is >= 1000)
