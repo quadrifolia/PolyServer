@@ -2916,17 +2916,19 @@ EOF
 !/var/lib/netdata
 !/var/spool/postfix/(private|public|dev)
 
-# Constantly changing logs (log tampering is covered by auditd)
-!/var/log/suricata
-!/var/log/journal
-!/var/log/atop
-!/var/log/nginx
-!/var/log/mysql
-!/var/log/aide
-!/var/log/auth.log
-!/var/log/syslog
-!/var/log/kern.log
-!/var/log/daemon.log
+# Logs change and rotate constantly by design; log tampering is covered by the
+# auditd watch "-w /var/log -p wa -k log_tampering". (Excluding only single log
+# files left every rotation - veeam, mail.log.N.gz, sensors, backup.log, ... -
+# in the daily AIDE mail.)
+!/var/log
+
+# Timestamp and state files rewritten every day by timers, apt and the scanners
+# (mostly mtime-only changes, no content change)
+!/var/lib/systemd/timers
+!/var/lib/apt/periodic
+!/var/lib/polyserver/chkrootkit
+!/var/lib/nginx/body
+!/swapfile
 
 # Container, database, antivirus and backup data
 !/var/lib/docker
@@ -2944,9 +2946,14 @@ EOF
 !/media
 
 # Data that changes on every signature update, scan or build
-# (maldet's program files and the trivy binary stay monitored)
+# (maldet's program files, conf.maldet and the trivy binary stay monitored;
+# VERSION, ignore_* and internals/* are rewritten by the daily maldet update)
 !/root/\.cache
-!/usr/local/maldetect/(sigs|sigs\.old|sess|tmp|logs|quarantine|pub)
+!/usr/local/maldetect/(sigs|sigs\.old|sess|tmp|logs|quarantine|pub|VERSION|ignore_[a-z_]+|internals/VERSION\.hash|internals/hexfifo)
+
+# Veeam agent rewrites its config and auth tokens daily (no content change)
+!/etc/veeamma/config\.cfg
+!/root/\.veeam
 !/usr/local/maldetect\.bk[0-9]+
 !/home/[^/]+/\.docker/buildx
 

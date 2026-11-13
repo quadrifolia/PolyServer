@@ -3200,6 +3200,12 @@ cat > /etc/aide/aide.conf.d/99-bastion-exclusions << 'EOF'
 !/var/backups
 !/var/spool/postfix/(private|public|dev)
 
+# Timestamp and state files rewritten every day by timers, apt and the scanners
+# (mostly mtime-only changes, no content change)
+!/var/lib/systemd/timers
+!/var/lib/apt/periodic
+!/var/lib/polyserver/chkrootkit
+
 # Network and removable mounts
 !/mnt
 !/media
