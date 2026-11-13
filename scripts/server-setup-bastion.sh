@@ -1714,6 +1714,19 @@ EOF
     fi
 fi
 
+# systemd-resolved: no LLMNR/mDNS on a bastion. LLMNR sends multicast queries
+# (udp 5355) that the default-deny outbound UFW policy blocks and logs.
+if systemctl is-active --quiet systemd-resolved; then
+    mkdir -p /etc/systemd/resolved.conf.d
+    cat > /etc/systemd/resolved.conf.d/no-llmnr.conf << 'EOF'
+[Resolve]
+LLMNR=no
+MulticastDNS=no
+EOF
+    systemctl restart systemd-resolved
+    echo "✅ systemd-resolved: LLMNR and mDNS disabled"
+fi
+
 # Cleanup
 rm -f /tmp/unbound-check.log
 

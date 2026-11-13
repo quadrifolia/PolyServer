@@ -5466,7 +5466,13 @@ if systemctl is-active --quiet systemd-resolved; then
 DNS=127.0.0.1
 FallbackDNS=8.8.8.8 1.1.1.1
 DNSSEC=yes
-DNSOverTLS=opportunistic
+# No DoT on this hop: unbound on 127.0.0.1 has no TLS listener and does the DoT
+# upstream itself (forward-dot.conf). "opportunistic" made resolved retry TLS,
+# fail and log feature-set downgrades all day.
+DNSOverTLS=no
+# Not needed on a server; LLMNR also sends multicast queries that UFW blocks
+LLMNR=no
+MulticastDNS=no
 Cache=yes
 EOF
   systemctl restart systemd-resolved
