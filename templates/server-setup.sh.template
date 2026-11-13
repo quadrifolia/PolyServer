@@ -8371,15 +8371,24 @@ PGPASS_EOF
                     cat > /usr/local/bin/postgresql-backup << 'PGSQL_BACKUP_EOF'
 #!/bin/bash
 # PostgreSQL backup script
+#
+# Runs from /etc/cron.daily: anything on stdout/stderr becomes a cron mail, so
+# routine lines go to the log file only and only errors are printed (err).
 
 set -Eeuo pipefail
 
 BACKUP_DIR="/var/backups/postgresql"
 DATE=$(date +%Y%m%d_%H%M%S)
 LOG_FILE="/var/log/postgresql-backup.log"
+FAILED=0
 
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+err() {
+    log "$1"
+    echo "postgresql-backup: $1" >&2
 }
 
 # Check if PostgreSQL is running
@@ -8396,8 +8405,12 @@ fi
 
 log "Starting PostgreSQL backup..."
 
-# Get list of databases
-DATABASES=$(sudo -u postgres psql -t -c "SELECT datname FROM pg_database WHERE datistemplate = false AND datname != 'postgres';" | grep -v '^$' || true)
+# Get list of databases (-A: no padding, so no empty-line filter is needed). A psql
+# failure must not look like "no databases" - report it and stop.
+if ! DATABASES=$(sudo -u postgres psql -Atq -c "SELECT datname FROM pg_database WHERE datistemplate = false AND datname != 'postgres';" 2>&1); then
+    err "❌ Could not list databases: $DATABASES"
+    exit 1
+fi
 
 # Check if there are databases to backup
 if [ -z "$DATABASES" ]; then
@@ -8405,14 +8418,15 @@ if [ -z "$DATABASES" ]; then
     exit 0
 fi
 
-# Backup each database
+# Backup each database (pipefail: a pg_dump failure fails the pipeline, not just gzip)
 for DB in $DATABASES; do
     BACKUP_FILE="${BACKUP_DIR}/${DB}_${DATE}.sql.gz"
     if sudo -u postgres pg_dump "$DB" | gzip > "$BACKUP_FILE"; then
-        log "✅ Backup completed: $BACKUP_FILE"
-        log "   Size: $(du -h "$BACKUP_FILE" | cut -f1)"
+        log "✅ Backup completed: $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1))"
     else
-        log "❌ Backup failed for database: $DB"
+        err "❌ Backup failed for database: $DB"
+        rm -f "$BACKUP_FILE"
+        FAILED=1
     fi
 done
 
@@ -8420,6 +8434,10 @@ done
 find "$BACKUP_DIR" -name "*.sql.gz" -mtime +7 -delete
 log "Old backups cleaned (keeping 7 days)"
 
+if [ "$FAILED" -ne 0 ]; then
+    err "Backup finished with errors"
+    exit 1
+fi
 log "Backup completed successfully"
 PGSQL_BACKUP_EOF
 
