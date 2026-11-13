@@ -6635,6 +6635,8 @@ if command -v aa-status >/dev/null 2>&1; then
   /proc/*/mounts r,
   /proc/*/stat r,
   /proc/sys/crypto/fips_enabled r,
+  # sshd lowers its own OOM score at startup (OOMScoreAdjust / oom_score_adj)
+  owner @{PROC}/@{pid}/oom_score_adj rw,
 
   /run/sshd.pid w,
   /run/systemd/sessions/* rw,
@@ -6653,12 +6655,15 @@ if command -v aa-status >/dev/null 2>&1; then
   /var/log/wtmp rw,
 
   # Site-specific additions and overrides. See local/README for details.
-  #include <local/usr.sbin.sshd>
+  # ("if exists": a missing local file must not make the whole profile, and
+  # with it apparmor.service, fail to load)
+  include if exists <local/usr.sbin.sshd>
 }
 EOF
 
-    # Create nginx AppArmor profile for web servers
-    if [ "$DEPLOYMENT_MODE" != "docker" ]; then
+    # Create nginx AppArmor profile for web servers - only where nginx is
+    # installed on the host; a profile for a missing binary is pointless.
+    if [ "$DEPLOYMENT_MODE" != "docker" ] && [ -x /usr/sbin/nginx ]; then
         cat > /etc/apparmor.d/usr.sbin.nginx << 'EOF'
 #include <tunables/global>
 
@@ -6687,11 +6692,14 @@ EOF
   /usr/share/nginx/** r,
 
   # Site-specific additions and overrides. See local/README for details.
-  #include <local/usr.sbin.nginx>
+  include if exists <local/usr.sbin.nginx>
 }
 EOF
-        apparmor_parser -r /etc/apparmor.d/usr.sbin.nginx 2>/dev/null || echo "Nginx AppArmor profile created"
-        echo "✅ Nginx AppArmor profile created"
+        if apparmor_parser -r /etc/apparmor.d/usr.sbin.nginx; then
+            echo "✅ Nginx AppArmor profile created and loaded"
+        else
+            echo "⚠️ Nginx AppArmor profile failed to load - check: apparmor_parser -r /etc/apparmor.d/usr.sbin.nginx"
+        fi
     fi
     
     # Load and enforce the SSH profile
@@ -6706,8 +6714,11 @@ EOF
 # Format: standard AppArmor rules
 EOF
     
-    apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd 2>/dev/null || echo "AppArmor SSH profile created (will be active after sshd restart)"
-    echo "✅ AppArmor SSH profile created and loaded"
+    if apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd; then
+        echo "✅ AppArmor SSH profile created and loaded"
+    else
+        echo "⚠️ AppArmor SSH profile failed to load - check: apparmor_parser -r /etc/apparmor.d/usr.sbin.sshd"
+    fi
 else
     echo "⚠️ AppArmor not available or not installed"
 fi
