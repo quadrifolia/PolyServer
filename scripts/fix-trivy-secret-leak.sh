@@ -11,7 +11,9 @@
 #   - emits a compact, mobile-friendly report (one line per finding, no wide tables),
 #   - reports vulnerabilities in full (no secret material), and
 #   - reports secret findings as METADATA ONLY (type/file/line) — the credential
-#     value is never emailed or written to /var/log.
+#     value is never emailed or written to /var/log, and
+#   - mails only new fixable findings, failed scans or secrets (state in
+#     /var/lib/trivy-scan/findings); the same copy as in server-setup.sh.template.
 #
 # Safe to run repeatedly (idempotent). Backs up the existing cron job first.
 #
@@ -72,8 +74,17 @@ cat > "$CRON_FILE" << 'EOF'
 # /var/log). Vulnerability findings are reported in full (no secret material);
 # secret findings are reported as metadata only (type/file/line) so an admin
 # knows what to rotate and where to look, without the credential leaving the image.
+#
+# Mails only when something new turns up (see the end of the script); the full
+# report is written to $REPORT_DIR every day.
 
+# Nothing to scan without Docker
+command -v docker >/dev/null 2>&1 || exit 0
+
+export LC_ALL=C   # stable sort order for comm
 REPORT_DIR="/var/log/security/trivy"
+STATE_DIR="/var/lib/trivy-scan"
+STATE_FILE="${STATE_DIR}/findings"
 DATE=$(date +%Y-%m-%d)
 MAIL_RECIPIENT="${LOGWATCH_EMAIL:-root}"
 HOSTNAME=$(hostname)
@@ -81,8 +92,9 @@ TRIVYLOG="${REPORT_DIR}/trivy-${DATE}.log"
 REPORT_TMPL="${REPORT_DIR}/.report.tmpl"
 
 # Create report directory if it doesn't exist (restrict — reports may name sensitive paths)
-mkdir -p $REPORT_DIR
-chmod 750 $REPORT_DIR
+mkdir -p $REPORT_DIR $STATE_DIR
+chmod 750 $REPORT_DIR $STATE_DIR
+KEYS=$(mktemp)
 
 # Compact, mobile-friendly report template (one line per finding, no wide tables).
 # Trivy's default table output uses box-drawing chars and wide columns that mail clients
@@ -106,27 +118,82 @@ cat > "$REPORT_TMPL" << 'TMPL'
 {{ end }}{{- end }}
 TMPL
 
+trap 'rm -f "$REPORT_TMPL" "$KEYS"' EXIT
+
 # Update Trivy vulnerability database
 /usr/local/bin/trivy image --download-db-only > /dev/null 2>&1
 
+# Optional per-server list of files to skip, one path inside the image per line
+# (e.g. a credential file the application needs and that is already known).
+SKIP_FILES_CONF="/etc/polyserver/trivy-skip-files"
+SKIP_ARGS=()
+SKIPPED=""
+if [ -f "$SKIP_FILES_CONF" ]; then
+    while IFS= read -r f; do
+        case "$f" in ''|\#*) continue ;; esac
+        SKIP_ARGS+=(--skip-files "$f")
+        SKIPPED="$SKIPPED $f"
+    done < "$SKIP_FILES_CONF"
+fi
+
+# Running images, each scanned once. A failing docker ps must not look like
+# "no findings", or the next successful run would re-mail everything as new.
+RUNNING=$(docker ps --format '{{.Image}}') || { echo "docker ps failed" >&2; exit 1; }
+IMAGES=$(printf '%s\n' "$RUNNING" | sort -u)
+
 # Start log file
 echo "===== Container Vulnerability Scan Report: $DATE =====" > $TRIVYLOG
+echo "Only findings with an available fix are listed (--ignore-unfixed)." >> $TRIVYLOG
+[ -n "$SKIPPED" ] && echo "Skipped files ($SKIP_FILES_CONF):$SKIPPED" >> $TRIVYLOG
 
-# Scan running containers (single scan per image, compact template output)
-CONTAINERS=$(docker ps --format "{{.Image}}")
-for IMAGE in $CONTAINERS; do
+# One key per finding: "<image without tag> <vulnerability ID> <package>". The tag is
+# dropped so a redeploy (new version, blue/green) does not turn old findings into new ones.
+for IMAGE in $IMAGES; do
+    [ -n "$IMAGE" ] || continue
+    REPO=$(printf '%s' "$IMAGE" | sed -E 's/@sha256:.*$//; s/:[^:/]+$//')
     echo "" >> $TRIVYLOG
-    /usr/local/bin/trivy image --no-progress --scanners vuln,secret --severity HIGH,CRITICAL --format template --template "@$REPORT_TMPL" "$IMAGE" >> $TRIVYLOG 2>/dev/null
+    echo "##### $IMAGE" >> $TRIVYLOG
+    OUT=$(/usr/local/bin/trivy image --no-progress --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed "${SKIP_ARGS[@]}" --format template --template "@$REPORT_TMPL" "$IMAGE" 2>/dev/null)
+    RC=$?
+    if [ $RC -ne 0 ]; then
+        echo "[SCAN FAILED] trivy exit code $RC" >> $TRIVYLOG
+        echo "$REPO SCAN-FAILED -" >> "$KEYS"
+        continue
+    fi
+    printf '%s\n' "$OUT" >> $TRIVYLOG
+    # Vulnerability lines only; secret lines (after the SECRETS marker) carry no CVE ID
+    printf '%s\n' "$OUT" | awk -v r="$REPO" '
+        /^=====/ { s = 0 }
+        /SECRETS DETECTED/ { s = 1 }
+        !s && /^\[(HIGH|CRITICAL)\] / { print r, $2, $4 }' >> "$KEYS"
 done
-
-# Remove the template and restrict the report (defense in depth)
-rm -f "$REPORT_TMPL"
+sort -u -o "$KEYS" "$KEYS"
 chmod 640 $TRIVYLOG
 
-# Email report if findings present
-if grep -q -E "\[(HIGH|CRITICAL)\]" $TRIVYLOG; then
-    cat $TRIVYLOG | mail -s "⚠️ CONTAINER VULNERABILITIES: Found on $HOSTNAME" $MAIL_RECIPIENT
+# Mail only when something needs attention: a finding (or failed scan) that was not in the
+# last run, or any secret. Findings that stay or disappear do not trigger a mail.
+touch "$STATE_FILE"
+NEW=$(comm -23 "$KEYS" "$STATE_FILE")
+SECRETS=no
+grep -q 'SECRETS DETECTED' $TRIVYLOG && SECRETS=yes
+if [ -n "$NEW" ] || [ "$SECRETS" = yes ]; then
+    if [ "$SECRETS" = yes ]; then
+        SUBJECT="⚠️ CONTAINER SECRETS found on $HOSTNAME"
+    else
+        SUBJECT="⚠️ CONTAINER VULNERABILITIES: $(printf '%s\n' "$NEW" | wc -l) new on $HOSTNAME"
+    fi
+    {
+        if [ -n "$NEW" ]; then
+            echo "New since the last run (image, ID, package):"
+            printf '%s\n' "$NEW" | sed 's/^/  /'
+            echo ""
+        fi
+        cat $TRIVYLOG
+    } | cat -s | mail -s "$SUBJECT" $MAIL_RECIPIENT || exit 1
 fi
+# Only reached when no mail was needed or the mail went out; otherwise the
+# findings stay "new" and are mailed again on the next run.
+cp "$KEYS" "$STATE_FILE"
 
 # Cleanup old reports
 find $REPORT_DIR -name "trivy-*.log" -mtime +30 -delete
