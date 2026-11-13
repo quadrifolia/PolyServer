@@ -3236,68 +3236,71 @@ echo "" >> $REPORT_FILE
 echo "Uptime: $(uptime)" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
+# --input-logs on every ausearch: run from cron, ausearch would otherwise read
+# its (empty) stdin instead of /var/log/audit and report nothing.
+
 # General Summary Report
 echo "GENERAL SUMMARY" >> $REPORT_FILE
 echo "===============" >> $REPORT_FILE
-ausearch --start today --end now 2>/dev/null | aureport --summary -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs --start today --end now 2>/dev/null | aureport --summary -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Authentication Report
 echo "AUTHENTICATION EVENTS" >> $REPORT_FILE
 echo "====================" >> $REPORT_FILE
-ausearch --start today --end now 2>/dev/null | aureport --auth --summary -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs --start today --end now 2>/dev/null | aureport --auth --summary -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # User Modification Events
 echo "USER MODIFICATION EVENTS" >> $REPORT_FILE
 echo "=======================" >> $REPORT_FILE
-ausearch -k user_modify --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs -kuser_modify --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Executable Summary
 echo "EXECUTABLE SUMMARY" >> $REPORT_FILE
 echo "=================" >> $REPORT_FILE
-ausearch --start today --end now 2>/dev/null | aureport --executable --summary -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs --start today --end now 2>/dev/null | aureport --executable --summary -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Suspicious Command Executions
 echo "SUSPICIOUS COMMAND EXECUTIONS" >> $REPORT_FILE
 echo "============================" >> $REPORT_FILE
-ausearch -k data_exfiltration --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs -kdata_exfiltration --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # File Modification Events
 echo "CONFIG FILE MODIFICATION EVENTS" >> $REPORT_FILE
 echo "=============================" >> $REPORT_FILE
-ausearch -k sshd_config_modifications --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
-ausearch -k nginx_config --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
-ausearch -k docker_config --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
-ausearch -k application_config_changes --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
-ausearch -k security_tool_config --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
+ausearch --input-logs -ksshd_config_modifications --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs -knginx_config --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
+ausearch --input-logs -kdocker_config --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
+ausearch --input-logs -kapplication_config_changes --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
+ausearch --input-logs -ksecurity_tool_config --start today --end now -i 2>/dev/null >> $REPORT_FILE || true
 echo "" >> $REPORT_FILE
 
 # Privilege Escalation
 echo "PRIVILEGE ESCALATION EVENTS" >> $REPORT_FILE
 echo "=========================" >> $REPORT_FILE
-ausearch -k privilege_escalation --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs -kprivilege_escalation --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Unauthorized Access Attempts
 echo "UNAUTHORIZED ACCESS ATTEMPTS" >> $REPORT_FILE
 echo "==========================" >> $REPORT_FILE
-ausearch -k unauthorized_access --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs -kunauthorized_access --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Binary Modifications
 echo "BINARY MODIFICATION EVENTS" >> $REPORT_FILE
 echo "=========================" >> $REPORT_FILE
-ausearch -k binary_modifications --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs -kbinary_modifications --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Docker Socket Access
 echo "DOCKER SOCKET ACCESS" >> $REPORT_FILE
 echo "===================" >> $REPORT_FILE
-ausearch -k docker_socket_access --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
+ausearch --input-logs -kdocker_socket_access --start today --end now -i 2>/dev/null >> $REPORT_FILE || echo "No events" >> $REPORT_FILE
 echo "" >> $REPORT_FILE
 
 # Audit System Status

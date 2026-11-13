@@ -4862,7 +4862,7 @@ if [ \$DISK_USAGE -gt 80 ]; then
 fi
 
 # Check for new audit events
-AUDIT_ALERTS=\$(ausearch -ts recent -m avc,user_auth,user_acct,user_mgmt,user_chauthtok,user_role_change,role_assign,role_remove 2>/dev/null | wc -l)
+AUDIT_ALERTS=\$(ausearch --input-logs -ts recent -m avc,user_auth,user_acct,user_mgmt,user_chauthtok,user_role_change,role_assign,role_remove 2>/dev/null | wc -l)
 if [ \$AUDIT_ALERTS -gt 0 ]; then
     log_message "INFO: \$AUDIT_ALERTS new audit events in the last hour"
 fi
@@ -5042,7 +5042,9 @@ elif ! command -v ausearch >/dev/null 2>&1 || ! command -v aureport >/dev/null 2
     echo "⚠️  Audit tools not installed" >> \$REPORT_FILE
 else
     AUDIT_OK=true
-    AUDIT_SUMMARY=\$(aureport --summary -i "\${AUDIT_RANGE[@]}" 2>&1)
+    # --input-logs: from cron, aureport/ausearch would read the empty stdin
+    # instead of /var/log/audit and report 0 events
+    AUDIT_SUMMARY=\$(aureport --input-logs --summary -i "\${AUDIT_RANGE[@]}" 2>&1)
     if [ -n "\$AUDIT_SUMMARY" ]; then
         echo "\$AUDIT_SUMMARY" >> \$REPORT_FILE
     else
@@ -5055,8 +5057,8 @@ echo "CRITICAL SECURITY EVENTS" >> \$REPORT_FILE
 echo "========================" >> \$REPORT_FILE
 if [ "\$AUDIT_OK" = true ]; then
     # Test the captured output, not the exit code of a pipe (tail always succeeds)
-    PRIV_EXES=\$(ausearch -k privilege_escalation "\${AUDIT_RANGE[@]}" --raw 2>/dev/null | aureport -x --summary -i 2>/dev/null | grep -E '^[[:space:]]*[0-9]+ ')
-    USER_CMDS=\$(ausearch -k user_commands "\${AUDIT_RANGE[@]}" --raw 2>/dev/null | aureport -x -i 2>/dev/null | grep -E '^[0-9]+\. ' | tail -20)
+    PRIV_EXES=\$(ausearch --input-logs -k privilege_escalation "\${AUDIT_RANGE[@]}" --raw 2>/dev/null | aureport -x --summary -i 2>/dev/null | grep -E '^[[:space:]]*[0-9]+ ')
+    USER_CMDS=\$(ausearch --input-logs -k user_commands "\${AUDIT_RANGE[@]}" --raw 2>/dev/null | aureport -x -i 2>/dev/null | grep -E '^[0-9]+\. ' | tail -20)
 
     if [ -n "\$PRIV_EXES" ]; then
         echo "setuid/setgid calls (key privilege_escalation) by executable:" >> \$REPORT_FILE
