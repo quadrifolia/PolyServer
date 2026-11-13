@@ -2319,12 +2319,14 @@ docker_systemctl disable --now clamav-freshclam.timer 2>/dev/null || true
 # Create cron job for nightly virus definition updates at 3 AM
 cat > /etc/cron.d/clamav-freshclam << 'EOF'
 # ClamAV freshclam - nightly virus definition updates at 3 AM
-# Runs quietly and restarts daemon after update to avoid business hour disruptions
+# No clamd restart: NotifyClamd in freshclam.conf makes clamd reload the new
+# databases. freshclam exits 0 (updated) or 1 (already up to date); only
+# higher exit codes are real failures.
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
 # Run freshclam at 3 AM daily
-0 3 * * * root /usr/bin/freshclam --quiet && systemctl restart clamav-daemon || logger -t freshclam "Failed to update virus definitions"
+0 3 * * * root /usr/bin/freshclam --quiet; rc=$?; [ "$rc" -le 1 ] || logger -t freshclam "Failed to update virus definitions (exit $rc)"
 EOF
 
 chmod 644 /etc/cron.d/clamav-freshclam
