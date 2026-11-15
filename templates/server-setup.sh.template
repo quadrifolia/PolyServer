@@ -2927,6 +2927,7 @@ EOF
 !/var/lib/systemd/timers
 !/var/lib/apt/periodic
 !/var/lib/polyserver/chkrootkit
+!/var/lib/trivy-scan
 !/var/lib/nginx/body
 !/swapfile
 
