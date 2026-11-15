@@ -4145,8 +4145,11 @@ cat > /etc/logrotate.d/suricata << 'EOF'
     missingok
     notifempty
     create 0640 root adm
+    sharedscripts
     postrotate
-        /bin/kill -USR2 $(cat /var/run/suricata.pid 2>/dev/null) 2>/dev/null || systemctl reload suricata 2>/dev/null || true
+        # HUP makes Suricata reopen its log files. (USR2 only reloads the rules,
+        # so Suricata kept writing into the rotated eve.json.1 until a restart.)
+        /bin/kill -HUP $(cat /run/suricata.pid 2>/dev/null) 2>/dev/null || true
     endscript
 }
 EOF
