@@ -61,7 +61,7 @@ ionice -c 3 -p $$ >/dev/null 2>&1
 # Start log file
 echo "===== Container Vulnerability Scan Report: $DATE =====" > $TRIVYLOG
 echo "Hostname: $HOSTNAME" >> $TRIVYLOG
-echo "Scanning for severity: $SEVERITY" >> $TRIVYLOG
+echo "Scanning for severity: $SEVERITY (only findings with an available fix, --ignore-unfixed)" >> $TRIVYLOG
 echo "==========================================================" >> $TRIVYLOG
 echo "" >> $TRIVYLOG
 
@@ -124,7 +124,7 @@ for CONTAINER in "${CONTAINERS[@]}"; do
     
     # Single scan (vuln + secret) rendered through the compact template. Secrets are
     # emitted as metadata only — the credential value is never written out.
-    SCAN_RESULT=$(timeout 600 nice -n 19 ionice -c 3 trivy image --no-progress --scanners vuln,secret --severity $SEVERITY --format template --template "@$REPORT_TMPL" --timeout 8m $IMAGE_ID 2>/dev/null)
+    SCAN_RESULT=$(timeout 600 nice -n 19 ionice -c 3 trivy image --no-progress --scanners vuln,secret --severity $SEVERITY --ignore-unfixed --format template --template "@$REPORT_TMPL" --timeout 8m $IMAGE_ID 2>/dev/null)
     SCAN_EXIT_CODE=$?
 
     if [ $SCAN_EXIT_CODE -eq 124 ]; then

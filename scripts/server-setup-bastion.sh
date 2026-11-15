@@ -3913,9 +3913,9 @@ if \$programname startswith 'sshd' then /var/log/ssh.log
 # Copy sudo events to a separate file (no "& stop", same reason)
 if \$programname == 'sudo' then /var/log/sudo.log
 
-# Log all audit events
-if \$programname == 'auditd' then /var/log/audit/audit.log
-& stop
+# No rule for programname auditd: audit events go to /var/log/audit/audit.log
+# via auditd itself. Writing auditd's syslog lines (startup messages) into that
+# file mixed two formats in it, which ausearch/aureport cannot parse.
 
 # Log network events
 if \$programname == 'NetworkManager' or \$programname == 'dhclient' then /var/log/network.log
