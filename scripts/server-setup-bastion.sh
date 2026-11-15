@@ -6340,27 +6340,48 @@ if [ "$INSTALL_SURICATA" = true ]; then
             echo "⚠️ Not running as root - cannot create Suricata cron job"
             echo "   Job would be created at: /etc/cron.weekly/suricata-update"
         else
-            cat > /etc/cron.weekly/suricata-update << EOF
+            # Rules suricata-update writes disabled. The dcerpc parser is off in
+            # suricata.yaml, so ET rules with dcerpc.* keywords cannot load; "suricata -T"
+            # then fails and suricata-update keeps the old rules (seen from 2026-10-18 on).
+            cat > /etc/suricata/disable.conf << 'EOF'
+# Rules suricata-update writes disabled (re: = regex on the rule text).
+# The dcerpc parser is off in suricata.yaml, so rules with dcerpc.* keywords
+# cannot load; "suricata -T" then fails and suricata-update keeps the old rules.
+re:dcerpc\.
+EOF
+
+            cat > /etc/cron.weekly/suricata-update << 'EOF'
 #!/bin/bash
-# Weekly Suricata rules update for bastion host
+# Weekly Suricata rules update for bastion host. Silent on success: suricata-update's
+# output (thousands of info and "unknown var" lines) goes to the log only. On
+# failure a short summary is printed, which cron mails.
+LOG=/var/log/suricata/suricata-update.log
+RUN=$(mktemp) || exit 1
+trap 'rm -f "$RUN"' EXIT
 
-# Update rule sources
-/usr/bin/suricata-update update-sources
+/usr/bin/suricata-update update-sources > "$RUN" 2>&1 &&
+    /usr/bin/suricata-update --disable-conf /etc/suricata/disable.conf >> "$RUN" 2>&1
+rc=$?
+{ echo "=== $(date '+%F %T') exit $rc"; cat "$RUN"; } >> "$LOG"
 
-# Update rules
-/usr/bin/suricata-update
-
-# Test configuration
-if suricata -T -c /etc/suricata/suricata.yaml; then
-    # Restart Suricata if config is valid
-    systemctl reload suricata || systemctl restart suricata
-    logger -p daemon.info "Suricata rules updated successfully"
-else
-    # Notify of configuration error
-    echo "Suricata configuration test failed after rules update on \$(hostname)" | \
-        mail -s "BASTION ERROR: Suricata Rules Update Failed" root
-    logger -p daemon.error "Suricata rules update failed - configuration test error"
+if [ "$rc" -ne 0 ]; then
+    # suricata-update tests the new rules with "suricata -T" and restores the
+    # previous rules if the test fails; the running Suricata is not touched.
+    echo "Suricata rules update failed on $(hostname) (exit $rc); previous rules kept."
+    echo "Errors (full output in $LOG):"
+    grep -E '<Error>|Error:' "$RUN" | tail -n 20 | cut -c1-300
+    logger -p daemon.error -t suricata-update "Rules update failed (exit $rc)"
+    exit 1
 fi
+
+# Restart, not reload: the unit's reload runs suricatasc, which needs the
+# unix-command socket (not enabled), so "systemctl reload" always fails.
+if ! systemctl restart suricata; then
+    echo "Suricata failed to restart after the rules update on $(hostname)."
+    systemctl status suricata --no-pager -n 20
+    exit 1
+fi
+logger -p daemon.info -t suricata-update "Suricata rules updated"
 EOF
 
             chmod +x /etc/cron.weekly/suricata-update
