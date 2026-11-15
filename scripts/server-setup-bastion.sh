@@ -6078,6 +6078,19 @@ if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; the
         echo "❌ Netdata installation verification failed"
         INSTALL_NETDATA="false"
     fi
+
+    # The netdata-repo package writes netdata.sources with http:// URIs, but the
+    # bastion's UFW blocks outbound TCP/80, so apt updates of the netdata repo fail
+    # (and show up as daily outbound UFW blocks). The file is not a conffile, so a
+    # plain edit is overwritten by the next netdata-repo update: divert the
+    # package's copy out of sources.list.d and use an https copy.
+    if grep -qs 'http://repository.netdata.cloud' /etc/apt/sources.list.d/netdata.sources; then
+        dpkg-divert --local --rename --divert /etc/apt/netdata.sources.dpkg-dist \
+            --add /etc/apt/sources.list.d/netdata.sources
+        sed 's#http://repository\.netdata\.cloud#https://repository.netdata.cloud#' \
+            /etc/apt/netdata.sources.dpkg-dist > /etc/apt/sources.list.d/netdata.sources
+        chmod 644 /etc/apt/sources.list.d/netdata.sources
+    fi
 fi
 
 if [[ "$INSTALL_NETDATA" =~ ^[Yy]$ ]] || [[ "$INSTALL_NETDATA" == "true" ]]; then
