@@ -5113,7 +5113,11 @@ echo "========================" >> \$REPORT_FILE
 if [ "\$AUDIT_OK" = true ]; then
     # Test the captured output, not the exit code of a pipe (tail always succeeds)
     PRIV_EXES=\$(ausearch --input-logs -k privilege_escalation "\${AUDIT_RANGE[@]}" --raw 2>/dev/null | aureport -x --summary -i 2>/dev/null | grep -E '^[[:space:]]*[0-9]+ ')
-    USER_CMDS=\$(ausearch --input-logs -k user_commands "\${AUDIT_RANGE[@]}" --raw 2>/dev/null | aureport -x -i 2>/dev/null | grep -E '^[0-9]+\. ' | tail -20)
+    # Leave out the login-message scripts (pam_motd runs /etc/update-motd.d via
+    # dash/env/run-parts/uname) of sessions without a terminal, e.g. ProxyJump
+    # connections through the bastion: about 10 lines per session, no information.
+    # Columns: 1 "#." 2 date 3 time 4 exe 5 term 6 host 7 auid 8 event
+    USER_CMDS=\$(ausearch --input-logs -k user_commands "\${AUDIT_RANGE[@]}" --raw 2>/dev/null | aureport -x -i 2>/dev/null | awk '\$1 ~ /^[0-9]+\.\$/ && !(\$5 == "(none)" && \$4 ~ /^\/usr\/bin\/(dash|env|run-parts|uname)\$/)' | tail -20)
 
     if [ -n "\$PRIV_EXES" ]; then
         echo "setuid/setgid calls (key privilege_escalation) by executable:" >> \$REPORT_FILE
@@ -5122,7 +5126,7 @@ if [ "\$AUDIT_OK" = true ]; then
         echo "" >> \$REPORT_FILE
     fi
     if [ -n "\$USER_CMDS" ]; then
-        echo "Last 20 commands by logged-in users (key user_commands):" >> \$REPORT_FILE
+        echo "Last 20 commands by logged-in users (key user_commands; login-message scripts of sessions without a terminal left out):" >> \$REPORT_FILE
         echo "  #. date time exe term host auid event" >> \$REPORT_FILE
         echo "\$USER_CMDS" >> \$REPORT_FILE
         echo "" >> \$REPORT_FILE
