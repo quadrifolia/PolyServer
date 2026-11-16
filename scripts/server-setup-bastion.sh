@@ -4988,8 +4988,10 @@ echo "====================" >> \$REPORT_FILE
 YESTERDAY_DATE=\$(date -d yesterday '+%b %e')
 YESTERDAY_AUTH=\$(cat /var/log/auth.log.1 /var/log/auth.log 2>/dev/null | grep "^\$YESTERDAY_DATE ")
 SUCCESSFUL_LOGINS=\$(echo "\$YESTERDAY_AUTH" | grep -cE "sshd(-session)?\[[0-9]+\]: Accepted (publickey|password)")
-# Key-only server: failures show up as invalid users and failed key/password attempts
-FAILED_LOGINS=\$(echo "\$YESTERDAY_AUTH" | grep -cE "sshd(-session)?\[[0-9]+\]: (Failed (password|publickey)|Invalid user)")
+# Key-only server: failures show up as invalid users and failed key/password attempts.
+# One connection can log "Invalid user" plus one "Failed ..." line per key tried,
+# so count distinct sshd PIDs (= failed connections), not lines.
+FAILED_LOGINS=\$(echo "\$YESTERDAY_AUTH" | grep -E "sshd(-session)?\[[0-9]+\]: (Failed (password|publickey)|Invalid user)" | grep -oE "sshd(-session)?\[[0-9]+\]" | sort -u | wc -l)
 ACTIVE_SESSIONS=\$(who | wc -l)
 echo "Successful logins yesterday: \$SUCCESSFUL_LOGINS" >> \$REPORT_FILE
 echo "Failed login attempts yesterday: \$FAILED_LOGINS" >> \$REPORT_FILE
