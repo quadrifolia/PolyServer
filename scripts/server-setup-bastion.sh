@@ -3736,6 +3736,10 @@ EOF
 # Override ExecStart to specify the correct network interface
 ExecStart=
 ExecStart=/usr/bin/suricata -D --af-packet=$INTERFACE -c /etc/suricata/suricata.yaml --pidfile /run/suricata.pid
+# The packaged ExecStop runs "suricatasc -c shutdown", which needs the unix-command
+# socket (not enabled), so every stop/restart logged a failed control process.
+# Without ExecStop systemd sends SIGTERM, on which Suricata shuts down cleanly.
+ExecStop=
 
 # Resource limits for bastion host (more conservative than production)
 CPUQuota=30%
@@ -4425,8 +4429,12 @@ cat >> /etc/logcheck/ignore.d.server/bastion-ignore << EOF
 ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Allowed origins are:.*$
 ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ unattended-upgrade: Initial (blacklist|whitelist):.*$
 
-# Kernel performance tuning messages (informational)
-^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ kernel: \[[0-9.]+\] perf: interrupt took too long.*lowering kernel\.perf_event_max_sample_rate to [0-9]+$
+# Kernel performance tuning messages (informational; both timestamp formats)
+^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ kernel: (\[ *[0-9.]+\] )?perf: interrupt took too long.*lowering kernel\.perf_event_max_sample_rate to [0-9]+$
+
+# systemd --user sessions opened/closed for SSH logins (the logins themselves
+# are in sshd's lines and in the daily report)
+^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ \((systemd|sd-pam)\)(\[[0-9]+\])?: pam_unix\(systemd-user:session\): session (opened|closed) for user [._[:alnum:]-]+(\(uid=[0-9]+\))?( by .*)?$
 
 # mdadm monitoring oneshot service (reports historical boot events, not real-time failures)
 ^\w{3} [ :0-9]{11} [._[:alnum:]-]+ sh\[[0-9]+\]: mdadm: DeviceDisappeared event detected on md device /dev/md
@@ -4489,6 +4497,15 @@ cat > /etc/logcheck/ignore.d.server/polyserver-routine << 'EOF'
 
 # ClamAV reload message not covered by the clamd rule in application-server-ignore
 ^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ clamd(\[[0-9]+\])?: .* -> Detection using image fuzzy hash enabled\.$
+
+# Weekly Suricata restart after the rules update: Suricata 7 start banner, NIC
+# promiscuous mode (with driver and PCI address prefix) and our own success line
+^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ suricata(\[[0-9]+\])?: (Notice: suricata: This is Suricata version [0-9.]+ RELEASE running in SYSTEM mode|Info: cpu: CPUs/cores online: [0-9]+|Info: suricata: Setting engine mode to IDS mode by default|Info: app-layer-parser: Protocol detection and parser disabled for [a-z0-9]+ protocol\.)$
+^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ kernel: (\[ *[0-9.]+\] )?[a-z0-9_]+ [0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-9] [a-z0-9]+: (entered|left) promiscuous mode$
+^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ suricata-update(\[[0-9]+\])?: Suricata rules updated$
+
+# Weekly fstrim.timer
+^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ fstrim(\[[0-9]+\])?: /[^ ]*: [0-9.]+ [KMGT]?i?B \([0-9]+ bytes\) trimmed on /dev/[^ ]+$
 EOF
 chmod 644 /etc/logcheck/ignore.d.server/polyserver-routine
 
@@ -4964,12 +4981,15 @@ echo "" >> \$REPORT_FILE
 
 echo "SSH ACTIVITY SUMMARY" >> \$REPORT_FILE
 echo "====================" >> \$REPORT_FILE
-# Match both publickey and password authentication
-# Note: Logs rotate at midnight, so yesterday's data is in .log.1
+# Match both publickey and password authentication.
+# auth.log rotates shortly after midnight, so yesterday's lines are in .log.1
+# and (lines written before the rotation ran) in the current file; read both.
 # Use %e for day with leading space instead of zero (Dec  2 not Dec 02)
 YESTERDAY_DATE=\$(date -d yesterday '+%b %e')
-SUCCESSFUL_LOGINS=\$(grep "\$YESTERDAY_DATE" /var/log/auth.log.1 2>/dev/null | grep -E "Accepted (publickey|password)" | wc -l)
-FAILED_LOGINS=\$(grep "\$YESTERDAY_DATE" /var/log/auth.log.1 2>/dev/null | grep -E "Failed (password|publickey)" | wc -l)
+YESTERDAY_AUTH=\$(cat /var/log/auth.log.1 /var/log/auth.log 2>/dev/null | grep "^\$YESTERDAY_DATE ")
+SUCCESSFUL_LOGINS=\$(echo "\$YESTERDAY_AUTH" | grep -cE "sshd(-session)?\[[0-9]+\]: Accepted (publickey|password)")
+# Key-only server: failures show up as invalid users and failed key/password attempts
+FAILED_LOGINS=\$(echo "\$YESTERDAY_AUTH" | grep -cE "sshd(-session)?\[[0-9]+\]: (Failed (password|publickey)|Invalid user)")
 ACTIVE_SESSIONS=\$(who | wc -l)
 echo "Successful logins yesterday: \$SUCCESSFUL_LOGINS" >> \$REPORT_FILE
 echo "Failed login attempts yesterday: \$FAILED_LOGINS" >> \$REPORT_FILE
@@ -4978,7 +4998,7 @@ echo "" >> \$REPORT_FILE
 
 echo "RECENT SUCCESSFUL LOGINS" >> \$REPORT_FILE
 echo "========================" >> \$REPORT_FILE
-LOGINS_FOUND=\$(grep "\$YESTERDAY_DATE" /var/log/auth.log.1 2>/dev/null | grep -E "Accepted (publickey|password)" | tail -10)
+LOGINS_FOUND=\$(echo "\$YESTERDAY_AUTH" | grep -E "sshd(-session)?\[[0-9]+\]: Accepted (publickey|password)" | tail -10)
 if [ -n "\$LOGINS_FOUND" ]; then
     echo "\$LOGINS_FOUND" >> \$REPORT_FILE
 else
@@ -5952,13 +5972,19 @@ EOF
 chmod +x /etc/cron.hourly/disk-space-protection
 
 # Add emergency space management configuration to logrotate
-# Create a separate config file instead of modifying main logrotate.conf
-cat > /etc/logrotate.d/emergency-space-management << EOF
+# Create a separate config file instead of modifying main logrotate.conf.
+# The "zz-" prefix matters: with ignoreduplicates the first config that names a
+# log owns it, and logrotate reads /etc/logrotate.d in alphabetical order. Under
+# the old name "emergency-space-management" the glob claimed auth.log, kern.log,
+# ufw.log, fail2ban.log, ... before rsyslog/ufw/fail2ban, so those rotated only
+# above 100M (seen 2026-11-16: auth.log not rotated since 12 Nov).
+rm -f /etc/logrotate.d/emergency-space-management
+cat > /etc/logrotate.d/zz-emergency-space-management << EOF
 # Emergency space management for bastion hosts
 # Force rotation of unconfigured logs larger than 100M
 # Note: Only matches top-level /var/log/*.log; logs that already have their own
-# config (alternatives.log, dpkg.log, ...) are skipped via the global
-# ignoreduplicates in /etc/logrotate.conf (set below)
+# config (alternatives.log, dpkg.log, auth.log, ...) are skipped via the global
+# ignoreduplicates in /etc/logrotate.conf (set below). Keep this file last.
 /var/log/*.log {
     size 100M
     rotate 1
