@@ -3012,6 +3012,9 @@ EOF
 # VERSION, ignore_* and internals/* are rewritten by the daily maldet update)
 !/root/\.cache
 !/usr/local/maldetect/(sigs|sigs\.old|sess|tmp|logs|quarantine|pub|VERSION|ignore_[a-z_]+|internals/VERSION\.hash|internals/hexfifo)
+# The directory itself: rewriting the ignore_* files changes its mtime/ctime every
+# day. VarDir (Debian group) keeps owner, mode, link count and inode monitored.
+/usr/local/maldetect$ d VarDir
 
 # Veeam agent rewrites its config and auth tokens daily (no content change)
 !/etc/veeamma/config\.cfg
@@ -3027,9 +3030,13 @@ EOF
 # Per-user shell caches (oh-my-zsh code itself stays monitored: it runs on every login)
 !/home/[^/]+/\.oh-my-zsh/(cache|log)
 !/home/[^/]+/\.zcompdump.*
+# git internals rewritten by the oh-my-zsh auto-update (~200 entries every two
+# weeks); the updated code files, .git/config, HEAD and hooks stay monitored
+!/home/[^/]+/\.oh-my-zsh/\.git/(objects|logs|refs|FETCH_HEAD|ORIG_HEAD|index)
 
 # Shell history and per-user shell caches
 !/root/\.oh-my-zsh/(cache|log)
+!/root/\.oh-my-zsh/\.git/(objects|logs|refs|FETCH_HEAD|ORIG_HEAD|index)
 !/root/\.zcompdump.*
 !/root/\.(bash|zsh)_history
 !/home/[^/]+/\.(bash|zsh)_history
