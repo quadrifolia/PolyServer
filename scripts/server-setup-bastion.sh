@@ -3206,12 +3206,19 @@ cat > /etc/aide/aide.conf.d/99-bastion-exclusions << 'EOF'
 !/var/lib/apt/periodic
 !/var/lib/polyserver/chkrootkit
 
+# fail2ban bans via UFW (banaction = ufw) rewrite these every day. Rule changes
+# stay visible: the daily report diffs "ufw status numbered" (incl. ban count).
+!/etc/ufw/user6?\.rules
+
 # Network and removable mounts
 !/mnt
 !/media
 
 # Shell history and per-user shell caches (oh-my-zsh code itself stays monitored)
 !/root/\.oh-my-zsh/(cache|log)
+# git internals rewritten by the oh-my-zsh auto-update; the updated code files,
+# .git/config, HEAD and hooks stay monitored
+!/(root|home/[^/]+)/\.oh-my-zsh/\.git/(objects|logs|refs|FETCH_HEAD|ORIG_HEAD|index)
 !/root/\.zcompdump.*
 !/root/\.(bash|zsh)_history
 !/home/[^/]+/\.(bash|zsh)_history
