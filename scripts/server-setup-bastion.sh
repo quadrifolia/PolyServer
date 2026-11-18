@@ -3208,7 +3208,7 @@ cat > /etc/aide/aide.conf.d/99-bastion-exclusions << 'EOF'
 
 # fail2ban bans via UFW (banaction = ufw) rewrite these every day. Rule changes
 # stay visible: the daily report diffs "ufw status numbered" (incl. ban count).
-!/etc/ufw/user6?\.rules
+!/etc/ufw/user6?\.rules$
 
 # Network and removable mounts
 !/mnt

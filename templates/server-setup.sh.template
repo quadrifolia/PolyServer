@@ -2986,6 +2986,9 @@ EOF
 !/var/lib/apt/periodic
 !/var/lib/polyserver/chkrootkit
 !/var/lib/trivy-scan
+# State files of extra logrotate runs with their own -s file (e.g. the NAS logs on
+# polypublisher-1), treated like Debian's rule for /var/lib/logrotate/status
+/var/lib/logrotate/status-[^/]+$ f VarFile
 !/var/lib/nginx/body
 !/swapfile
 
