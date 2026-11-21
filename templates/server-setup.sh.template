@@ -6088,6 +6088,15 @@ docker_systemctl restart systemd-journald
 echo "✅ Systemd journal rate limiting configured"
 
 echo "===== 11.3 Adding kernel security parameters ====="
+# Docker needs IPv4 forwarding for published container ports. Docker sets it
+# at runtime, but every re-run of systemd-sysctl (e.g. a systemd upgrade)
+# re-applies this file, so it must say 1 on Docker hosts. Docker sets the
+# iptables FORWARD policy to DROP, so only its own port mappings are forwarded.
+if [ "${INSTALL_DOCKER,,}" = "true" ]; then
+    IPV4_FORWARD=1
+else
+    IPV4_FORWARD=0
+fi
 # Set secure kernel parameters including auto-reboot on panic
 cat > /etc/sysctl.d/99-server-security.conf << EOF
 # Server Security Kernel Parameters
@@ -6099,7 +6108,7 @@ fs.file-max = 2097152
 vm.max_map_count = 262144
 
 # Network security
-net.ipv4.ip_forward = 0
+net.ipv4.ip_forward = ${IPV4_FORWARD}
 net.ipv4.conf.all.send_redirects = 0
 net.ipv4.conf.default.send_redirects = 0
 net.ipv4.conf.all.accept_redirects = 0
