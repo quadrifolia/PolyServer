@@ -2806,6 +2806,14 @@ OnCalendar=
 OnCalendar=*-*-* 03:15:00 UTC
 RandomizedDelaySec=10min
 EOF
+# Package lists refreshed right before that run (same drop-in as in the template)
+mkdir -p /etc/systemd/system/apt-daily.timer.d
+cat > /etc/systemd/system/apt-daily.timer.d/polyserver-time.conf << 'EOF'
+[Timer]
+OnCalendar=
+OnCalendar=*-*-* 02:45:00 UTC
+RandomizedDelaySec=15min
+EOF
 systemctl daemon-reload 2>/dev/null || true
 
 # Another apt run (unattended-upgrades, a manual apt) can hold the dpkg lock while
@@ -4517,13 +4525,22 @@ cat > /etc/logcheck/ignore.d.server/polyserver-routine << 'EOF'
 ^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ unattended-upgrade(\[[0-9]+\])?: (Enabled logging to syslog via daemon facility|Checking if system is running on battery is skipped.*|Checking if connection is metered is skipped.*|Starting unattended upgrades script|Allowed origins are:.*|Initial (blacklist|whitelist).*|Writing dpkg log to .*|Packages that (will be upgraded|were successfully auto-removed|are kept back):.*|All upgrades installed|No packages found that can be upgraded unattended.*)$
 
 # systemd routine; "OK" is printed by fail2ban.service's ExecReload (weekly logrotate
-# reload); auditd rotates audit.log when it reaches max_log_file
-^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ systemd(\[[0-9]+\])?: mdcheck_(start|continue)\.service - .* was skipped because of an unmet condition check .*$
+# reload); auditd rotates audit.log when it reaches max_log_file. The mdcheck skip
+# line has a shorter form since systemd 257.13.
+^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ systemd(\[[0-9]+\])?: mdcheck_(start|continue)\.service - .*( was skipped because of an| skipped,) unmet condition check .*$
+^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ systemd(\[[0-9]+\])?: (Reload requested from client PID [0-9]+ .*|Reloading\.\.\.|Reloading finished in [0-9]+ ms\.)$
 ^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ systemd(\[[0-9]+\])?: rsyslog\.service: Sent signal SIGHUP to main process [0-9]+ \(rsyslogd\) on client request\.$
 ^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ systemd(\[[0-9]+\])?: (Reloading|Reloaded) fail2ban\.service( - .*)?$
 ^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ fail2ban-client(\[[0-9]+\])?: OK$
 ^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ auditd(\[[0-9]+\])?: Audit daemon rotating log files$
 ^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ systemd-tmpfiles(\[[0-9]+\])?: /usr/lib/tmpfiles\.d/legacy\.conf:[0-9]+: Duplicate line for path "/run/lock", ignoring\.$
+
+# systemd re-executes itself when unattended-upgrades installs a new libc or systemd;
+# networkd restarts and reconfigures the NICs
+^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ systemd(\[[0-9]+\])?: Reexecution requested from client PID [0-9]+ \('systemctl'\) \(unit apt-daily-upgrade\.service\)\.\.\.$
+^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ systemd(\[[0-9]+\])?: (Reexecuting\.|Received SIGRTMIN\+25 from PID 1 \(systemd\)\.|user@[0-9]+\.service: Sent signal SIGRTMIN\+25 to main process [0-9]+ \(systemd\) on client request\.)$
+^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ systemd(\[[0-9]+\])?: netplan-ovs-cleanup\.service - .* skipped, unmet condition check ConditionFileIsExecutable=/usr/bin/ovs-vsctl$
+^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ systemd-networkd(\[[0-9]+\])?: [a-z0-9]+: (Configuring with /run/systemd/network/10-netplan-[a-z0-9]+\.network\.|DHCPv4 address [0-9./]+, gateway [0-9.]+ acquired from [0-9.]+)$
 
 # Backup mounts (NFS backup share mounted around the nightly backup)
 ^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ systemd(\[[0-9]+\])?: (Mounting|Mounted|Unmounting|Unmounted) mnt-[^ ]+\.mount - /mnt/[^ ]+$
