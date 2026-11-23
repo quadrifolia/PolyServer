@@ -99,6 +99,10 @@ DEPLOYMENT_MODE="{{DEPLOYMENT_MODE}}"     # Deployment mode (docker/baremetal)
 : "${INSTALL_RKHUNTER:={{INSTALL_RKHUNTER}}}"        # Install rootkit detection tools (low resource usage)
 : "${INSTALL_SURICATA:={{INSTALL_SURICATA}}}"        # Install Suricata IDS (medium resource usage)
 
+# Automatic reboot after unattended upgrades (HH:MM, UTC). Set per server in the
+# env file to stagger reboots (e.g. backends 04:00, app server 04:20; bastion 04:40).
+: "${AUTO_REBOOT_TIME:=04:00}"
+
 # SMTP Configuration from defaults.env
 SMTP_ENABLED="{{SMTP_ENABLED}}"
 SMTP_SERVER="{{SMTP_SERVER}}"
@@ -2007,9 +2011,9 @@ Unattended-Upgrade::Origins-Pattern {
     "origin=Debian,codename=\${distro_codename}-updates";
 };
 
-// Automatically reboot if required (at 4 AM, see also 51unattended-upgrades-server)
+// Automatically reboot if required (UTC, AUTO_REBOOT_TIME; see also 51unattended-upgrades-server)
 Unattended-Upgrade::Automatic-Reboot "true";
-Unattended-Upgrade::Automatic-Reboot-Time "04:00";
+Unattended-Upgrade::Automatic-Reboot-Time "${AUTO_REBOOT_TIME}";
 
 // Send email to admin if there are problems
 Unattended-Upgrade::Mail "${LOGWATCH_EMAIL:-root}";
@@ -2774,6 +2778,11 @@ ${LC_P}fail2ban\.actions${LC_PID}: .* (Ban|Unban) [0-9.]+$
 
 # MariaDB/MySQL routine operations
 ${LC_P}mysqld${LC_PID}: .* \[Note\] .*
+# debian-start runs at every MariaDB start, the postinst at every package upgrade;
+# warnings (e.g. root accounts without password) stay visible
+${LC_P}/etc/mysql/debian-start${LC_PID}: (Upgrading MariaDB tables if necessary|Checking for insecure root accounts)\.$
+${LC_P}/etc/mysql/debian-start${LC_PID}: Triggering myisam-recover for all MyISAM tables and aria-recover for all Aria tables$
+${LC_P}mariadb-server\.postinst${LC_PID}: (mysql\.user table already exists!|Run mariadb-upgrade, not mariadb-install-db)$
 
 # SFTP file transfers by the deploy user (blue/green deploys from the bastion).
 # open/set/close lines carry no user or IP, so they are limited to the deploy
@@ -7271,13 +7280,13 @@ fi
 
 # Unattended Reboot Warning System
 echo "Configuring unattended reboot warning system..."
-cat > /etc/apt/apt.conf.d/51unattended-upgrades-server << 'EOF'
+cat > /etc/apt/apt.conf.d/51unattended-upgrades-server << EOF
 // Enhanced server configuration for unattended upgrades
 Unattended-Upgrade::Automatic-Reboot "true";
 // Reboot even with users logged in: on a headless server a stray SSH/tmux session
 // would otherwise postpone a kernel reboot indefinitely (users are warned at 20:00)
 Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
-Unattended-Upgrade::Automatic-Reboot-Time "04:00";
+Unattended-Upgrade::Automatic-Reboot-Time "${AUTO_REBOOT_TIME}";
 
 // Warning system before reboot
 Unattended-Upgrade::SyslogEnable "true";
@@ -7285,14 +7294,14 @@ Unattended-Upgrade::SyslogFacility "daemon";
 EOF
 
 # Create pre-reboot warning script
-cat > /usr/local/bin/unattended-reboot-warning.sh << 'EOF'
+cat > /usr/local/bin/unattended-reboot-warning.sh << EOF
 #!/bin/bash
 # Pre-reboot warning for unattended upgrades
 
 # Check if reboot is required
 if [ -f /var/run/reboot-required ]; then
     # Send wall message to all logged in users
-    echo "SYSTEM NOTICE: Unattended upgrade requires reboot. System will reboot at 04:00 AM." | wall
+    echo "SYSTEM NOTICE: Unattended upgrade requires reboot. System will reboot at ${AUTO_REBOOT_TIME} UTC." | wall
     
     # Log to syslog (no mail: a planned reboot is not an alert; Logwatch shows it)
     logger -p daemon.warning "Server scheduled for automatic reboot due to unattended upgrade"

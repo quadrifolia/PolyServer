@@ -2797,7 +2797,7 @@ APT::Periodic::AutocleanInterval "7";
 EOF
 
 # Unattended upgrades at night instead of Debian's 06:00 + up to 60 min. 03:15 UTC,
-# before the automatic reboot slot (04:00); same drop-in as in
+# before the automatic reboot slot (04:40 on the bastion); same drop-in as in
 # templates/server-setup.sh.template.
 mkdir -p /etc/systemd/system/apt-daily-upgrade.timer.d
 cat > /etc/systemd/system/apt-daily-upgrade.timer.d/polyserver-time.conf << 'EOF'
@@ -2850,9 +2850,11 @@ Unattended-Upgrade::Origins-Pattern {
     "origin=Debian,codename=\${distro_codename}-updates";
 };
 
-// Automatically reboot if required (at 4 AM, see also 51unattended-upgrades-bastion)
+// Automatically reboot if required (04:40 UTC, see also 51unattended-upgrades-bastion).
+// Last in the night: the backend servers reboot at 04:00 and the app server at
+// 04:20, so the bastion stays reachable while they come back up.
 Unattended-Upgrade::Automatic-Reboot "true";
-Unattended-Upgrade::Automatic-Reboot-Time "04:00";
+Unattended-Upgrade::Automatic-Reboot-Time "04:40";
 
 // Send email to admin if there are problems
 Unattended-Upgrade::Mail "$LOGWATCH_EMAIL";
@@ -6556,7 +6558,7 @@ Unattended-Upgrade::Automatic-Reboot "true";
 // Reboot even with users logged in: on a bastion an idle SSH session would otherwise
 // postpone a kernel reboot indefinitely (users are warned at 20:00)
 Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
-Unattended-Upgrade::Automatic-Reboot-Time "04:00";
+Unattended-Upgrade::Automatic-Reboot-Time "04:40";
 
 // Warning system before reboot
 Unattended-Upgrade::SyslogEnable "true";
@@ -6576,7 +6578,7 @@ else
 # Check if reboot is required
 if [ -f /var/run/reboot-required ]; then
     # Send wall message to all logged in users
-    echo "SYSTEM NOTICE: Unattended upgrade requires reboot. System will reboot at 04:00 AM." | wall
+    echo "SYSTEM NOTICE: Unattended upgrade requires reboot. System will reboot at 04:40 UTC." | wall
     
     # Log to syslog (no mail: a planned reboot is not an alert; Logwatch shows it)
     logger -p daemon.warning "Bastion host scheduled for automatic reboot due to unattended upgrade"
