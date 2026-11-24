@@ -5289,6 +5289,9 @@ HOST=$(hostname)
 
 [ -r "$CONF" ] || exit 0
 mkdir -p "$STATE_DIR" || exit 1
+# One run at a time: the lock is held through check/send/write until exit
+exec 9>"$STATE_DIR/.lock"
+flock -n 9 || exit 0   # previous run still busy: skip this round
 
 send_mail() { # subject, body on stdin
     if [ "$DRY_RUN" = 1 ]; then
