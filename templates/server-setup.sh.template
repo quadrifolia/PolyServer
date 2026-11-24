@@ -2784,6 +2784,9 @@ ${LC_P}/etc/mysql/debian-start${LC_PID}: (Upgrading MariaDB tables if necessary|
 ${LC_P}/etc/mysql/debian-start${LC_PID}: Triggering myisam-recover for all MyISAM tables and aria-recover for all Aria tables$
 ${LC_P}mariadb-server\.postinst${LC_PID}: (mysql\.user table already exists!|Run mariadb-upgrade, not mariadb-install-db)$
 
+# NFS client modules loading on the first NAS automount after a boot
+${LC_P}kernel: (netfs: FS-Cache loaded|Key type (dns_resolver|id_resolver|id_legacy) registered|NFS: Registering the id_resolver key type)$
+
 # SFTP file transfers by the deploy user (blue/green deploys from the bastion).
 # open/set/close lines carry no user or IP, so they are limited to the deploy
 # paths: writes anywhere else (e.g. ~/.ssh) stay visible.
