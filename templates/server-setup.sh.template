@@ -708,6 +708,20 @@ log_message "===== 0.1. Calculating optimization parameters ====="
 calculate_optimization_parameters
 
 # ========= Basic server hardening =========
+# Host timezone UTC: all schedules in this setup are UTC (apt timers, backups,
+# Automatic-Reboot-Time, which unattended-upgrades reads as local time). TIMEZONE
+# in the env file is only for PHP, PostgreSQL and the application.
+log_message "===== 0.2. Setting host timezone to UTC ====="
+timedatectl set-timezone Etc/UTC 2>/dev/null || ln -sf /usr/share/zoneinfo/Etc/UTC /etc/localtime
+
+# No APT pinning for the security packages. The former
+# /etc/apt/preferences.d/security-packages ("Pin: version *", priority 1001) made
+# apt take the highest version from any source, including trixie-backports
+# (openssh 10.3 instead of the stable update), and a priority above 1000 permits
+# downgrades. apt's default priorities already prevent downgrades. Removed before
+# the first upgrade, so a re-run on an old server does not upgrade with the pin.
+rm -f /etc/apt/preferences.d/security-packages
+
 log_message "===== 1. Updating system packages ====="
 safe_apt_update && apt-get upgrade -y
 
@@ -6426,12 +6440,7 @@ fi
 echo "===== 14. Advanced Security Hardening ====="
 echo "Implementing comprehensive security enhancements..."
 
-# No APT pinning for the security packages. The former
-# /etc/apt/preferences.d/security-packages ("Pin: version *", priority 1001) made
-# apt take the highest version from any source, including trixie-backports
-# (openssh 10.3 instead of the stable update), and a priority above 1000 permits
-# downgrades. apt's default priorities already prevent downgrades.
-rm -f /etc/apt/preferences.d/security-packages
+# (The old security-packages APT pin is removed before the first upgrade, see step 1.)
 
 # Full Disk Encryption Detection
 echo "Checking for Full Disk Encryption (LUKS)..."

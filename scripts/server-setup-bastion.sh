@@ -507,6 +507,19 @@ wait_for_dpkg_lock
 # Configure dpkg properly before update
 dpkg --configure -a
 
+# Host timezone UTC: all schedules in this setup are UTC (apt timers,
+# Automatic-Reboot-Time, which unattended-upgrades reads as local time).
+timedatectl set-timezone Etc/UTC 2>/dev/null || ln -sf /usr/share/zoneinfo/Etc/UTC /etc/localtime
+
+# No APT pinning for the security packages. The former
+# /etc/apt/preferences.d/bastion-security ("Pin: release a=stable", priority 1001)
+# ranked the plain trixie version above trixie-security (a=stable-security, 500):
+# a security fix published before the next point release was not the candidate,
+# and with Allow-downgrade a newer security version could even be downgraded.
+# Removed before the first upgrade, so a re-run on an old host does not upgrade
+# with the pin.
+rm -f /etc/apt/preferences.d/bastion-security
+
 # Update package lists and upgrade system
 apt-get clean
 apt-get update || {
@@ -5291,6 +5304,11 @@ fmt_time() { date -u -d "@$1" '+%Y-%m-%d %H:%M:%S UTC'; }
 now=$(date +%s)
 down_names="" down_body=""
 up_names="" up_body=""
+# State of checks whose mail is still to be sent: written only after the mail
+# was accepted (*_sent), otherwise the old state stays (*_retry) and the next
+# run tries again.
+down_sf=() down_sent=() down_retry=()
+up_sf=() up_sent=() up_retry=()
 
 exec 3< "$CONF"
 while read -r name url expect mode _ <&3; do
@@ -5307,51 +5325,73 @@ while read -r name url expect mode _ <&3; do
             -H 'Sec-WebSocket-Version: 13' \
             -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
             "$url" 2> "$sf.err" < /dev/null)
+        rc=0
     else
+        # curl prints the status code even when the transfer fails afterwards
+        # (stalled or truncated body), so its exit code counts too.
         code=$(curl -sSL -o /dev/null --max-time 15 -w '%{http_code}' \
             "$url" 2> "$sf.err" < /dev/null)
+        rc=$?
     fi
+    result="HTTP $code"
+    [ "$rc" -ne 0 ] && result="$result (curl exit $rc)"
 
     fails=0 since=0 alerted=0
     [ -r "$sf" ] && read -r fails since alerted < "$sf"
 
-    if [ "$code" = "$expect" ]; then
+    if [ "$code" = "$expect" ] && [ "$rc" -eq 0 ]; then
         if [ "$alerted" = 1 ]; then
             up_names="$up_names $name"
-            up_body+="$name: back (HTTP $code)
+            up_body+="$name: back ($result)
   URL: $url
   Down since: $(fmt_time "$since"), about $(( (now - since) / 60 )) min
 
 "
+            up_sf+=("$sf") up_sent+=("0 0 0") up_retry+=("$fails $since 1")
+        else
+            echo "0 0 0" > "$sf"
         fi
-        echo "0 0 0" > "$sf"
     else
         [ "$fails" -eq 0 ] && since=$now
         fails=$((fails + 1))
         if [ "$fails" -ge "$FAILS_BEFORE_ALERT" ] && [ "$alerted" != 1 ]; then
-            alerted=1
             err=$(head -c 300 "$sf.err")
             down_names="$down_names $name"
-            down_body+="$name: HTTP $code, expected $expect
+            down_body+="$name: $result, expected HTTP $expect
   URL: $url
 ${err:+  Error: $err
 }  Failing since: $(fmt_time "$since") ($fails checks in a row)
 
 "
+            down_sf+=("$sf") down_sent+=("$fails $since 1") down_retry+=("$fails $since 0")
+        else
+            echo "$fails $since $alerted" > "$sf"
         fi
-        echo "$fails $since $alerted" > "$sf"
     fi
 done
 exec 3<&-
 
+status=0
 if [ -n "$down_names" ]; then
-    printf '%sChecked from %s every 5 minutes. You get one more mail when a check is back.\n' \
-        "$down_body" "$HOST" | send_mail "🚨 SITE DOWN:$down_names"
+    if printf '%sChecked from %s every 5 minutes. You get one more mail when a check is back.\n' \
+        "$down_body" "$HOST" | send_mail "🚨 SITE DOWN:$down_names"; then
+        for i in "${!down_sf[@]}"; do echo "${down_sent[$i]}" > "${down_sf[$i]}"; done
+    else
+        for i in "${!down_sf[@]}"; do echo "${down_retry[$i]}" > "${down_sf[$i]}"; done
+        echo "site-check: could not send the SITE DOWN mail for:$down_names (retry next run)" >&2
+        status=1
+    fi
 fi
 if [ -n "$up_names" ]; then
-    printf '%sChecked from %s.\n' "$up_body" "$HOST" | send_mail "✅ SITE UP:$up_names"
+    if printf '%sChecked from %s.\n' "$up_body" "$HOST" | send_mail "✅ SITE UP:$up_names"; then
+        for i in "${!up_sf[@]}"; do echo "${up_sent[$i]}" > "${up_sf[$i]}"; done
+    else
+        for i in "${!up_sf[@]}"; do echo "${up_retry[$i]}" > "${up_sf[$i]}"; done
+        echo "site-check: could not send the SITE UP mail for:$up_names (retry next run)" >&2
+        status=1
+    fi
 fi
-exit 0
+exit $status
 EOF
 chmod 755 /usr/local/bin/site-check
 
@@ -5847,12 +5887,7 @@ echo "✅ Unused filesystem modules blacklisted for security"
 
 echo "===== 14.5 Advanced security hardening ====="
 
-# No APT pinning for the security packages. The former
-# /etc/apt/preferences.d/bastion-security ("Pin: release a=stable", priority 1001)
-# ranked the plain trixie version above trixie-security (a=stable-security, 500):
-# a security fix published before the next point release was not the candidate,
-# and with Allow-downgrade a newer security version could even be downgraded.
-rm -f /etc/apt/preferences.d/bastion-security
+# (The old bastion-security APT pin is removed before the first upgrade, see step 1.)
 
 # Full Disk Encryption Detection
 echo "Checking for full disk encryption..."
