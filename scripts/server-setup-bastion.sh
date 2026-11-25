@@ -4490,6 +4490,8 @@ cat >> /etc/logcheck/ignore.d.server/bastion-ignore << EOF
 # ISO 8601 format (2025-11-30T15:00:30)
 ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sshd\[[0-9]+\]: (error: |Unable to negotiate with|Connection closed by|banner exchange:|drop connection|fatal: |Timeout before authentication|Received disconnect from|exited MaxStartups|beginning MaxStartups).*$
 ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ sshd-session\[[0-9]+\]: (error: |Unable to negotiate with|Connection closed by|banner exchange:|fatal: |Timeout before authentication|Received disconnect from).*$
+# Scanner sending a garbled handshake (151.245.151.x every few days); pre-auth only
+^(\w{3} [ :0-9]{11}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9:]+) [._[:alnum:]-]+ sshd-session\[[0-9]+\]: (padding error: need [0-9]+ block [0-9]+ mod [0-9]+|ssh_dispatch_run_fatal: Connection from [.:[:xdigit:]]+ port [0-9]+: message authentication code incorrect) \[preauth\]$
 
 # Kernel packet filtering messages
 ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+[+-][0-9]{4} [._[:alnum:]-]+ kernel: \[[0-9.]+\] af_packet: .*$
